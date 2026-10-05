@@ -139,19 +139,13 @@ interface TokenEndpointCall {
   readonly grantType: string | null;
 }
 
-// Route token-endpoint requests aimed at a *non-loopback* host (the
-// regional/attacker hosts a multi-site rebind test exercises) back to the
-// loopback test AS, recording the host + grant each one was sent to. The token
-// exchange/refresh runs through `oauth4webapi`, which calls the global `fetch`
-// at request time, so swapping `globalThis.fetch` lets the real
-// `oauth.complete` / refresh path drive the rebind decision while still hitting
-// a live authorization server. Loopback traffic (the authorize/login hops)
-// passes straight through untouched. Returns a restore function.
+// Route configured and regional token hosts to the live loopback authorization
+// server through ExecutorConfig.fetch, recording each outgoing token request.
 const routeTokenEndpointToLoopback = (
   server: { readonly issuerUrl: string },
   record: TokenEndpointCall[],
-): (() => void) => {
-  // oxlint-disable-next-line executor/no-raw-fetch -- test boundary: oauth4webapi reads the global `fetch` at call time, so doubling it is the only seam to observe the token exchange/refresh host.
+): typeof fetch => {
+  // oxlint-disable-next-line executor/no-raw-fetch -- test transport boundary.
   const originalFetch = globalThis.fetch;
   const loopback = new URL(server.issuerUrl);
   const patched: typeof fetch = async (input, init) => {
@@ -182,12 +176,7 @@ const routeTokenEndpointToLoopback = (
       ? originalFetch(new Request(rerouted.href, input))
       : originalFetch(rerouted.href, init);
   };
-  // oxlint-disable-next-line executor/no-raw-fetch -- test boundary: install the doubled fetch (see above).
-  globalThis.fetch = patched;
-  return () => {
-    // oxlint-disable-next-line executor/no-raw-fetch -- test boundary: restore the original fetch.
-    globalThis.fetch = originalFetch;
-  };
+  return patched;
 };
 
 describe("oauth.start / oauth.complete", () => {
@@ -2214,29 +2203,27 @@ describe("oauth token refresh in resolveConnectionValue", () => {
 // the org lives on, signalled by the callback's non-standard `domain`/`site`
 // param. The token endpoint host must rebind to that region for both the
 // initial exchange and later refreshes — but only when the callback host is a
-// trusted sibling subdomain, never an attacker-influenced arbitrary origin.
+// supported Datadog region, never an attacker-influenced arbitrary origin.
 describe("oauth.complete regional token-endpoint rebind (Datadog multi-site)", () => {
   // Configured (statically advertised) host: the leftmost label differs from
-  // the org's region, but they share the `datadoghq.test` parent.
-  const ADVERTISED_TOKEN_URL = "https://app.datadoghq.test/token";
+  // the org's region, but they share the `datadoghq.com` parent.
+  const ADVERTISED_TOKEN_URL = "https://app.datadoghq.com/token";
 
   it.effect(
-    "redeems + refreshes at the callback's sibling-subdomain region, never the advertised host",
+    "redeems + refreshes at the callback's supported region, never the advertised host",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
           const server = yield* serveOAuthTestServer({ scopes: ["read"] });
-          const { executor, config } = yield* makeTestWorkspaceHarness({ plugins });
-          yield* executor.acme.seed();
-
           // Reroute the https regional/advertised hosts back to the loopback test
           // AS so the real exchange/refresh path drives the rebind decision while
-          // hitting a live server. Restored when the test scope closes.
+          // hitting a live server through this executor's fetch transport.
           const tokenCalls: TokenEndpointCall[] = [];
-          yield* Effect.acquireRelease(
-            Effect.sync(() => routeTokenEndpointToLoopback(server, tokenCalls)),
-            (restore) => Effect.sync(restore),
-          );
+          const { executor, config } = yield* makeTestWorkspaceHarness({
+            plugins,
+            fetch: routeTokenEndpointToLoopback(server, tokenCalls),
+          });
+          yield* executor.acme.seed();
 
           // Authorize on the loopback AS (passthrough), but advertise the US1-style
           // token host the way Datadog's AS metadata does.
@@ -2269,19 +2256,19 @@ describe("oauth.complete regional token-endpoint rebind (Datadog multi-site)", (
           yield* executor.oauth.complete({
             state: started.state,
             code: callback.code,
-            callbackDomain: "us5.datadoghq.test",
+            callbackDomain: "us5.datadoghq.com",
           });
 
           // The code was redeemed at the regional host, not the advertised one.
           const exchangeCall = tokenCalls.find((c) => c.grantType === "authorization_code");
-          expect(exchangeCall?.host).toBe("us5.datadoghq.test");
+          expect(exchangeCall?.host).toBe("us5.datadoghq.com");
 
           // The regional token endpoint is persisted on the connection so later
           // refreshes target the same region (the AS metadata still says US1).
           const row = yield* Effect.promise(() =>
             config.db.findFirst("connection", { where: (b) => b("name", "=", "main") }),
           );
-          expect(row?.oauth_token_url).toBe("https://us5.datadoghq.test/token");
+          expect(row?.oauth_token_url).toBe("https://us5.datadoghq.com/token");
 
           // Mint, then expire so the next resolve must refresh.
           const firstToken = (yield* executor.execute(
@@ -2304,72 +2291,146 @@ describe("oauth.complete regional token-endpoint rebind (Datadog multi-site)", (
 
           // The refresh hit the persisted region too …
           const refreshCall = tokenCalls.find((c) => c.grantType === "refresh_token");
-          expect(refreshCall?.host).toBe("us5.datadoghq.test");
+          expect(refreshCall?.host).toBe("us5.datadoghq.com");
           // … and the statically advertised host was never contacted.
-          expect(tokenCalls.some((c) => c.host === "app.datadoghq.test")).toBe(false);
+          expect(tokenCalls.some((c) => c.host === "app.datadoghq.com")).toBe(false);
         }),
       ),
   );
 
-  it.effect("ignores a non-sibling callback domain — exchange stays on the advertised host", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const server = yield* serveOAuthTestServer({ scopes: ["read"] });
-        const { executor, config } = yield* makeTestWorkspaceHarness({ plugins });
-        yield* executor.acme.seed();
+  for (const [tokenUrl, callbackDomain] of [
+    [ADVERTISED_TOKEN_URL, "evil.example.test"],
+    ["https://provider.co.uk/token", "attacker.co.uk"],
+    ["https://auth.example.test/token", "untrusted.example.test"],
+    [ADVERTISED_TOKEN_URL, "unlisted.datadoghq.com"],
+    ["https://oauth2.googleapis.com/token", "untrusted.googleapis.com"],
+    [ADVERTISED_TOKEN_URL, "http://us5.datadoghq.com"],
+    [ADVERTISED_TOKEN_URL, "us5.datadoghq.com:8443"],
+    [ADVERTISED_TOKEN_URL, "https://user:password@us5.datadoghq.com"],
+    [ADVERTISED_TOKEN_URL, "us5.datadoghq.com/other-path"],
+    [ADVERTISED_TOKEN_URL, "us5.datadoghq.com?redirect=elsewhere"],
+  ]) {
+    it.effect(`keeps shared client credentials at ${tokenUrl} for callback ${callbackDomain}`, () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const server = yield* serveOAuthTestServer({ scopes: ["read"] });
+          const tokenCalls: TokenEndpointCall[] = [];
+          const { executor, config } = yield* makeTestWorkspaceHarness({
+            plugins,
+            fetch: routeTokenEndpointToLoopback(server, tokenCalls),
+          });
+          yield* executor.acme.seed();
 
-        const tokenCalls: TokenEndpointCall[] = [];
-        yield* Effect.acquireRelease(
-          Effect.sync(() => routeTokenEndpointToLoopback(server, tokenCalls)),
-          (restore) => Effect.sync(restore),
-        );
+          yield* executor.oauth.createClient({
+            owner: "org",
+            slug: CLIENT,
+            authorizationUrl: server.authorizationEndpoint,
+            tokenUrl,
+            grant: "authorization_code",
+            clientId: "test-client",
+            clientSecret: "test-secret",
+          });
 
-        yield* executor.oauth.createClient({
-          owner: "org",
-          slug: CLIENT,
-          authorizationUrl: server.authorizationEndpoint,
-          tokenUrl: ADVERTISED_TOKEN_URL,
-          grant: "authorization_code",
-          clientId: "test-client",
-          clientSecret: "test-secret",
-        });
+          const member = yield* Effect.acquireRelease(
+            createExecutor({ ...config, orgWrites: "denied" }),
+            (instance) => instance.close().pipe(Effect.orDie),
+          );
+          const started = yield* member.oauth.start({
+            owner: "user",
+            client: CLIENT,
+            clientOwner: "org",
+            name: ConnectionName.make("main"),
+            integration: INTEG,
+            template: TEMPLATE,
+          });
+          expect(started.status).toBe("redirect");
+          if (started.status !== "redirect") return;
+          const callback = yield* server.completeAuthorizationCodeFlow({
+            authorizationUrl: started.authorizationUrl,
+          });
 
-        const started = yield* executor.oauth.start({
-          owner: "org",
-          client: CLIENT,
-          clientOwner: "org",
-          name: ConnectionName.make("main"),
-          integration: INTEG,
-          template: TEMPLATE,
-        });
-        expect(started.status).toBe("redirect");
-        if (started.status !== "redirect") return;
-        const callback = yield* server.completeAuthorizationCodeFlow({
-          authorizationUrl: started.authorizationUrl,
-        });
+          yield* member.oauth.complete({
+            state: started.state,
+            code: callback.code,
+            callbackDomain,
+          });
 
-        // An attacker-influenced callback host that is NOT a sibling subdomain of
-        // the configured token host (`evil.example.test` vs `app.datadoghq.test`).
-        // The token request carries the client secret + code + PKCE verifier, so
-        // the rebind must refuse and fall back to the advertised host.
-        yield* executor.oauth.complete({
-          state: started.state,
-          code: callback.code,
-          callbackDomain: "evil.example.test",
-        });
+          const exchangeCall = tokenCalls.find((c) => c.grantType === "authorization_code");
+          expect(exchangeCall?.host).toBe(new URL(tokenUrl).host);
+          expect(tokenCalls.some((c) => c.host === callbackDomain)).toBe(false);
 
-        const exchangeCall = tokenCalls.find((c) => c.grantType === "authorization_code");
-        expect(exchangeCall?.host).toBe("app.datadoghq.test");
-        expect(tokenCalls.some((c) => c.host === "evil.example.test")).toBe(false);
+          // Nothing regional was persisted: refresh keeps using the configured host.
+          const row = yield* Effect.promise(() =>
+            config.db.findFirst("connection", { where: (b) => b("name", "=", "main") }),
+          );
+          expect(row?.oauth_token_url ?? null).toBeNull();
+        }),
+      ),
+    );
+  }
+});
 
-        // Nothing regional was persisted: refresh keeps using the configured host.
-        const row = yield* Effect.promise(() =>
-          config.db.findFirst("connection", { where: (b) => b("name", "=", "main") }),
-        );
-        expect(row?.oauth_token_url ?? null).toBeNull();
-      }),
-    ),
-  );
+describe("OAuth refresh token destination trust", () => {
+  for (const override of [
+    "https://attacker.co.uk/token",
+    "https://unlisted.datadoghq.com/token",
+    "https://us5.datadoghq.com/other-path",
+    "https://us5.datadoghq.com/token?redirect=elsewhere",
+    "https://us5.datadoghq.com:8443/token",
+    "https://user:password@us5.datadoghq.com/token",
+    "http://us5.datadoghq.com/token",
+  ]) {
+    it.effect(`requires reconnect without sending credentials to ${override}`, () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const server = yield* serveOAuthTestServer({ scopes: ["read"] });
+          const tokenCalls: TokenEndpointCall[] = [];
+          const { executor, config } = yield* makeTestWorkspaceHarness({
+            plugins,
+            fetch: routeTokenEndpointToLoopback(server, tokenCalls),
+          });
+          yield* executor.acme.seed();
+          yield* executor.oauth.createClient({
+            owner: "org",
+            slug: CLIENT,
+            authorizationUrl: server.authorizationEndpoint,
+            tokenUrl: "https://app.datadoghq.com/token",
+            grant: "authorization_code",
+            clientId: "test-client",
+            clientSecret: "test-secret",
+          });
+          const started = yield* executor.oauth.start({
+            owner: "org",
+            client: CLIENT,
+            clientOwner: "org",
+            name: ConnectionName.make("main"),
+            integration: INTEG,
+            template: TEMPLATE,
+          });
+          expect(started.status).toBe("redirect");
+          if (started.status !== "redirect") return;
+          const callback = yield* server.completeAuthorizationCodeFlow({
+            authorizationUrl: started.authorizationUrl,
+          });
+          yield* executor.oauth.complete({ state: started.state, code: callback.code });
+          yield* Effect.promise(() =>
+            config.db.updateMany("connection", {
+              where: (b) => b("name", "=", "main"),
+              set: { expires_at: Date.now() - 60_000, oauth_token_url: override },
+            }),
+          );
+          tokenCalls.length = 0;
+          yield* server.clearRequests;
+          const error = yield* Effect.flip(
+            executor.execute(ToolAddress.make("tools.acme.org.main.whoami"), {}),
+          );
+          expect(JSON.stringify(error)).toContain("no longer trusted");
+          expect(tokenCalls).toEqual([]);
+          expect(yield* server.requests).toEqual([]);
+        }),
+      ),
+    );
+  }
 });
 
 describe("missingGrantedOAuthScopes canonicalization", () => {

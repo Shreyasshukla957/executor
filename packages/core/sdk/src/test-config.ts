@@ -138,6 +138,7 @@ export type TestConfigOptions<TPlugins extends readonly AnyPlugin[] = readonly [
    *  `ExecutorConfig.orgWrites`). Defaults to allowed, like production hosts
    *  with no role model. */
   readonly orgWrites?: ExecutorConfig<TPlugins>["orgWrites"];
+  readonly fetch?: ExecutorConfig<TPlugins>["fetch"];
   readonly waitUntil?: ExecutorConfig<TPlugins>["waitUntil"];
 };
 
@@ -182,6 +183,7 @@ export const makeTestConfig = <const TPlugins extends readonly AnyPlugin[] = rea
     oauthCallbackStateOrgSlug: options?.oauthCallbackStateOrgSlug,
     firstPartyOAuthClients: options?.firstPartyOAuthClients,
     enterpriseManagedRollout: options?.enterpriseManagedRollout,
+    fetch: options?.fetch,
     waitUntil: options?.waitUntil,
   };
 };
