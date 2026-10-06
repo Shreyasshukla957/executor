@@ -49,6 +49,7 @@ executor apps commit --app <app-id> --files ./hello \
 executor apps deploy --app <app-id> --commit <new-commit>
 ```
 
+The commit prints the new revision; its `commit` is the next `--expected`.
 `--expected` is the commit your edits are based on. If someone else saved in
 between, the commit is rejected. Read the source again and reconcile before
 retrying. A commit alone does not change the running app.

@@ -28,7 +28,7 @@ import {
   telemetryBindings,
 } from "./infrastructure/telemetry.ts";
 
-import { sentryWorkerBuild } from "./infrastructure/sentry-build.ts";
+import { workerBuild } from "./infrastructure/worker-build.ts";
 
 /** A dedicated native Worker guarantees that every private HTML/JS/CSS request passes app authentication. */
 export default class AppPages extends Cloudflare.Worker<AppPages>()(
@@ -44,7 +44,7 @@ export default class AppPages extends Cloudflare.Worker<AppPages>()(
       return yield* Effect.die(new Error("App UI requires EXECUTOR_APP_UI_BASE_URL"));
     return {
       main: import.meta.url,
-      build: sentryWorkerBuild("app-pages"),
+      build: workerBuild("app-pages"),
       ...(yield* cloudObservability),
       env: {
         ...(yield* postHogBindings).env,

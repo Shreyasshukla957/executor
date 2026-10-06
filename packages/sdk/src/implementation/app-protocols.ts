@@ -43,17 +43,23 @@ export interface AppProtocol {
   readonly workflow: (execution: WorkflowExecution) => WorkflowExecution;
 }
 
-/** Protocol 7 is the host's current protocol, so its messages need no conversion. */
-const protocol7: AppProtocol = {
-  version: 7,
+/** Protocol 8 is the host's current protocol, so its messages need no conversion. */
+const protocol8: AppProtocol = {
+  version: 8,
   workerEntry: appBridge,
-  nodeEntry: nodeAppEntry(7),
+  nodeEntry: nodeAppEntry(8),
   invocation: (input) => JSON.stringify(input),
   request: (command) => command,
   refuse: () => undefined,
   response: (_command, body) => Effect.succeed(body),
   workflow: (execution) => execution,
 };
+
+/**
+ * Protocol 7 is protocol 8 without upstream failure detail. Its failures are protocol 8 failures
+ * that carry no thrown error fields, provider phase or service error, so every reply is unchanged.
+ */
+const protocol7: AppProtocol = { ...protocol8, version: 7, nodeEntry: nodeAppEntry(7) };
 
 /**
  * Protocol 6 is protocol 7 without credential hosts or field exposure. Its providers never declare
@@ -143,6 +149,7 @@ const protocols: ReadonlyMap<number, AppProtocol> = new Map(
     protocol5,
     protocol6,
     protocol7,
+    protocol8,
   ].map((protocol) => [protocol.version, protocol]),
 );
 

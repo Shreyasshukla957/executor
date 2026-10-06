@@ -31,7 +31,7 @@ layer(HostedLive, { excludeTestServices: true })("OAuth permissions", (it) => {
             {
               path: "index.ts",
               content: `import { defineApp, defineProvider, oauth2, router } from "apps";
-const service = defineProvider({name: "Permissions fixture", auth: {oauth: oauth2({discover: ${JSON.stringify(issuer.origin + "/mcp")}, scopes: ${JSON.stringify(scopes)}})}});
+const service = defineProvider({name: "Permissions fixture", hosts: ${JSON.stringify([new URL(issuer.origin).host])}, auth: {oauth: oauth2({discover: ${JSON.stringify(issuer.origin + "/mcp")}, scopes: ${JSON.stringify(scopes)}})}});
 export default defineApp({accounts: {service}}, async () => ({tools: router({})}));`,
             },
             appsManifest,
@@ -51,6 +51,20 @@ export default defineApp({accounts: {service}}, async () => ({tools: router({})}
         );
         yield* browser.use("Wait for advanced connection options", (page) =>
           page.getByText("Advanced", { exact: true }).waitFor({ state: "visible" }),
+        );
+        // Signing in enters no token, so one line says where the sign-in goes.
+        const notice = yield* browser.use("Read where the sign-in goes", (page) => {
+          const lines = page.getByRole("dialog").locator("[data-credential-access]");
+          return Promise.all([
+            lines.evaluateAll((all) =>
+              all.map((line) => line.getAttribute("data-credential-access")),
+            ),
+            lines.first().textContent(),
+          ]);
+        });
+        expect(notice[0]).toEqual(["hidden"]);
+        expect(notice[1]).toBe(
+          `Your Permissions fixture sign-in is only sent to ${new URL(issuer.origin).host}.`,
         );
         for (const viewport of [
           { width: 1440, height: 900 },

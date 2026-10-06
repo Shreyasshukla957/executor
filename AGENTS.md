@@ -177,6 +177,8 @@ scenarios on Linux instead of moving them to a Mac.
 
 - `check` runs `bun run check`: the format check, `oxlint`, the typecheck, the
   no-tests-outside-`e2e/` check and the e2e boundary check.
+  It also builds the public site and runs `bun run site:links`, which fails when
+  any marketing or docs page links to a path that would 404.
 - `select` runs [`e2e/ci-selection.ts`](e2e/ci-selection.ts) and gives each e2e job
   its `--test-name` pattern, or skips the job when none of its scenarios is selected.
   Its job patterns hold the exclusions and splits below.
@@ -188,8 +190,9 @@ scenarios on Linux instead of moving them to a Mac.
   in parallel with the functional jobs. This preserves the four concurrent writers,
   the catalog and listing latency bounds and the inventory case's 120-second limit without
   competing with the functional job's product servers.
-- `e2e-cloud` runs Cloud onboarding and delivered observability scenarios. It starts the local Cloud
-  Worker, a throwaway Postgres container and the service emulators, so it needs
+- `e2e-cloud` runs Cloud onboarding, delivered observability, bearer refusal and billing polling
+  scenarios; the refusal scenario writes stored rows into the runner-owned Postgres. It starts
+  the local Cloud Worker, a throwaway Postgres container and the service emulators, so it needs
   Docker but no credentials.
 
 Cloud scenarios verify

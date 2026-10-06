@@ -127,6 +127,16 @@ layer(HostedLive, { excludeTestServices: true })("Deferred server paths", (it) =
         const index = yield* published("index.json");
         expect(index.status).toBe(200);
         const { skills } = yield* Schema.decodeUnknownEffect(SkillIndex)(index.text);
+        // Every skill directory the host ships is published, with the entry skill beside the guides.
+        expect(skills.map((skill) => skill.name).sort()).toEqual([
+          "app-authoring",
+          "code-mode",
+          "executor",
+        ]);
+        expect(skills.find((skill) => skill.name === "executor")?.files.toSorted()).toEqual([
+          "SKILL.md",
+          "feedback.md",
+        ]);
         expect(skills.find((skill) => skill.name === "app-authoring")?.files).toContain("SKILL.md");
         for (const skill of skills)
           for (const path of skill.files) {
@@ -138,7 +148,10 @@ layer(HostedLive, { excludeTestServices: true })("Deferred server paths", (it) =
         expect((yield* published("app-authoring/SKILL.md")).text).toMatch(
           /^---\nname: app-authoring\n/,
         );
+        expect((yield* published("executor/SKILL.md")).text).toMatch(/^---\nname: executor\n/);
         expect((yield* published("app-authoring/missing.md")).status).toBe(404);
+        // Feedback guidance belongs to the entry skill, not the authoring guide.
+        expect((yield* published("app-authoring/feedback.md")).status).toBe(404);
       }),
     ),
   );

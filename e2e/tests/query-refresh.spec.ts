@@ -10,6 +10,7 @@ import { App } from "../support/contracts.ts";
 import { Evidence } from "../support/evidence.ts";
 import { holdQuery, refreshVisiblePage } from "../support/query-transition.ts";
 import { freeSeat } from "../support/seats.ts";
+import type { Route } from "playwright";
 import { scenarios } from "../test-plan.ts";
 import { appsManifest } from "../support/apps-release.ts";
 
@@ -57,12 +58,24 @@ layer(HostedLive, { excludeTestServices: true })("Dashboard refresh", (it) => {
         // The same focus refresh re-reads organization access. Its unchanged answer must not
         // restart the held member read and hide that read's failure.
         const accessPath = `/api/organizations/${actors.organization.id}/access`;
-        const access = yield* browser.use("Watch the organization access refresh", (page) =>
-          Promise.resolve({
-            read: page.waitForResponse(
-              (response) => new URL(response.url()).pathname === accessPath && response.ok(),
-            ),
-          }),
+        // The dashboard batches reads that start together. A read a test route matches leaves the
+        // batch as the page's own request, so routing the access read lets its response be seen.
+        const isAccess = (url: URL) => url.pathname === accessPath;
+        const passAccess = (route: Route) => route.fallback();
+        const access = yield* Effect.acquireRelease(
+          browser.use("Watch the organization access refresh", (page) =>
+            page.route(isAccess, passAccess).then(() => ({
+              read: page.waitForResponse(
+                (response) => isAccess(new URL(response.url())) && response.ok(),
+              ),
+            })),
+          ),
+          () =>
+            browser
+              .use("Stop watching the organization access refresh", (page) =>
+                page.unroute(isAccess, passAccess),
+              )
+              .pipe(Effect.orDie),
         );
         yield* refreshVisiblePage;
         yield* failed.requested;

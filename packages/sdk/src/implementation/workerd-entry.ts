@@ -530,11 +530,15 @@ export default {
     try {
       const handle = await env.RUNS.get(input.run);
       let state = await handle.status();
-      if (
-        input.operation === "terminate" &&
-        !["complete", "errored", "terminated"].includes(state.status)
-      ) {
-        await handle.terminate();
+      const finished = () => ["complete", "errored", "terminated"].includes(state.status);
+      if (input.operation === "terminate" && !finished()) {
+        try {
+          await handle.terminate();
+        } catch (error) {
+          // The run can finish after the status read; terminating a finished instance fails.
+          state = await handle.status();
+          if (!finished()) throw error;
+        }
         state = await handle.status();
       }
       return Response.json(state);

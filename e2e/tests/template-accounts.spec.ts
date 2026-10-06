@@ -7,6 +7,8 @@ import { Api, body } from "../support/api.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { App, Resource } from "../support/contracts.ts";
 import { authoredAppFiles } from "../support/authored-templates.ts";
+import { McpClient } from "../support/mcp-client.ts";
+import { outputContractProblems } from "../support/output-contract.ts";
 import { templateUpstream } from "../support/template-upstream.ts";
 import { scenarios } from "../test-plan.ts";
 
@@ -16,7 +18,25 @@ const Profile = Schema.Struct({
   accounts: Schema.Struct({ service: Schema.Array(Schema.String) }),
 });
 const Tools = Schema.Struct({
-  items: Schema.Array(Schema.Struct({ name: Schema.String, inputSchema: Schema.Json })),
+  items: Schema.Array(
+    Schema.Struct({
+      name: Schema.String,
+      inputSchema: Schema.Json,
+      outputSchema: Schema.optionalKey(Schema.Json),
+    }),
+  ),
+});
+/** What one MCP execution searched and returned for the profile's MCP tool. */
+const Searched = Schema.Struct({
+  structuredContent: Schema.Struct({
+    execution: Schema.Struct({
+      ok: Schema.Literal(true),
+      value: Schema.Struct({
+        items: Schema.Array(Schema.Struct({ path: Schema.String, signature: Schema.String })),
+        results: Schema.Array(Schema.Json),
+      }),
+    }),
+  }),
 });
 
 layer(HostedLive, { excludeTestServices: true })("Template accounts", (it) => {
@@ -103,6 +123,9 @@ layer(HostedLive, { excludeTestServices: true })("Template accounts", (it) => {
             expect(descriptions).toContain('"work"');
             expect(descriptions).toContain('"#/anyOf/0/properties/input/$defs/Value"');
             expect(descriptions).toContain('"#/anyOf/1/properties/input/$defs/Value"');
+            // Calls return the whole MCP result; the server's schema describes its structuredContent.
+            expect(descriptions).toContain('"#/anyOf/0/$defs/Account"');
+            expect(descriptions).toContain('"#/anyOf/1/$defs/Account"');
           }
           const call = (accountId: string, label: string) =>
             api.request(actors.owner, "POST", `${path}/tools/call`, {
@@ -126,6 +149,58 @@ layer(HostedLive, { excludeTestServices: true })("Template accounts", (it) => {
               expect(wrongSchema.status).toBeLessThan(500);
             }
           }
+          if (kind === "mcp") {
+            // The type an agent reads from tools.search must accept what the same calls return.
+            const key = yield* body(
+              Schema.Struct({ id: Schema.String, key: Schema.RedactedFromValue(Schema.String) }),
+              yield* api.request(actors.owner, "POST", "/api/auth/api-key/create", {
+                name: "Template account output types",
+              }),
+            );
+            yield* Effect.addFinalizer(() =>
+              api
+                .request(actors.owner, "POST", "/api/auth/api-key/delete", { keyId: key.id })
+                .pipe(Effect.orDie),
+            );
+            const client = yield* (yield* McpClient).connect(key.key, "template-account-outputs", {
+              organization: actors.organization.id,
+            });
+            const expression = `tools[${JSON.stringify(app.slug)}].profiles[${JSON.stringify(profile.id)}].${tool}`;
+            const searched = yield* client.use("Search and call the MCP tool", (client, signal) =>
+              client.callTool(
+                {
+                  name: "execute",
+                  arguments: {
+                    code: `const found = await tools.search({ namespace: ${JSON.stringify(app.slug)}, limit: 20 });
+const results = [];
+for (const [accountId, value] of ${JSON.stringify(accounts.map((id, index) => [id, ["work", "personal"][index]]))})
+  results.push(await ${expression}({ accountId, input: { value } }));
+return { items: found.items, results };`,
+                  },
+                },
+                undefined,
+                { signal },
+              ),
+            );
+            const { items, results } = (yield* Schema.decodeUnknownEffect(Searched)(searched))
+              .structuredContent.execution.value;
+            const signature = items.find(
+              (item) => item.path.includes(profile.id) && item.path.endsWith(".identity"),
+            )?.signature;
+            if (signature === undefined)
+              return yield* Effect.die(`Missing searched MCP tool: ${JSON.stringify(items)}`);
+            expect(results).toHaveLength(2);
+            for (const result of results)
+              expect(
+                outputContractProblems(
+                  signature,
+                  result,
+                  // Each account's schema is nested, so the account's type renders as unknown.
+                  "const account: unknown = value.isError ? undefined : value.structuredContent.account;",
+                ),
+                signature,
+              ).toEqual([]);
+          }
           const removed = accounts[0],
             retained = accounts[1];
           if (removed === undefined || retained === undefined)
@@ -146,7 +221,7 @@ layer(HostedLive, { excludeTestServices: true })("Template accounts", (it) => {
           const stillAvailable = yield* call(retained, "personal");
           expect(stillAvailable.status, JSON.stringify(stillAvailable.body)).toBe(200);
         }
-      }),
+      }).pipe(Effect.provide(McpClient.layer)),
     ),
   );
 });

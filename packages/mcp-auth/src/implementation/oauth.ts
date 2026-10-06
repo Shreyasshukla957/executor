@@ -24,6 +24,7 @@ import {
   GrantId,
   GrantPolicy,
   GrantTarget,
+  defaultResource,
   grantTarget,
   mcpOAuthResources,
   mcpResource,
@@ -80,6 +81,15 @@ const Registration = Schema.Struct({
   application_type: Schema.optionalKey(Schema.String),
   redirect_uris: Schema.Array(Schema.String),
 });
+/** Authorization parameters this plugin reads; every other parameter passes through unchanged. */
+const AuthorizeRequest = Schema.StructWithRest(
+  Schema.Struct({
+    scope: Schema.optionalKey(Schema.String),
+    resource: Schema.optionalKey(Schema.Unknown),
+    request_uri: Schema.optionalKey(Schema.Unknown),
+  }),
+  [Schema.Record(Schema.String, Schema.Unknown)],
+);
 const selected = defineRequestState<{ userId: string; id: GrantId } | null>(() => null);
 /** Preserve provider failures and translate storage outages without exposing tokens or SQL. */
 export const authCall = <A>(run: () => Promise<A>) =>
@@ -697,6 +707,29 @@ export const grantOAuthPlugins = (settings: GrantOAuthOptions) => {
               input.value.redirect_uris.every(loopback)
             )
               return { context: { body: { ...ctx.body, application_type: "native" } } };
+          }),
+        },
+        {
+          // Bind a request without `resource` before Better Auth signs and stores it, so consent,
+          // the authorization code and its tokens all carry the same single audience.
+          matcher: (ctx: { path?: string }) => ctx.path === "/oauth2/authorize",
+          handler: createAuthMiddleware(async (ctx) => {
+            const post = ctx.method === "POST";
+            const input = Schema.decodeUnknownOption(AuthorizeRequest)(post ? ctx.body : ctx.query);
+            if (
+              Option.isNone(input) ||
+              input.value.resource !== undefined ||
+              input.value.request_uri !== undefined
+            )
+              return;
+            const resource = defaultResource(origin, input.value.scope);
+            if (resource === undefined)
+              throw new APIError("BAD_REQUEST", {
+                error: "invalid_target",
+                error_description: "Name the Executor URL to authorize in the resource parameter.",
+              });
+            const named = { ...input.value, resource };
+            return { context: post ? { body: named } : { query: named } };
           }),
         },
         {

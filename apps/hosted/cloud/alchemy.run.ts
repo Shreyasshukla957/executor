@@ -12,6 +12,8 @@ import AppPages from "./src/app-ui.ts";
 import { cloudAppUiBase } from "./src/contracts/app-ui.ts";
 import ApiLive, { Api } from "./src/main.ts";
 import AppCompilerLive from "./src/compiler.ts";
+import DashboardLive from "./src/dashboard.ts";
+import FormatterLive from "./src/formatter.ts";
 import AppDataLive from "./src/app-data.ts";
 import ArtifactsCredentialsLive from "./src/artifacts-credentials.ts";
 import AppDomainControllerLive from "./src/app-domains.ts";
@@ -85,6 +87,8 @@ export default Alchemy.Stack(
       Layer.mergeAll(
         ApiLive,
         AppCompilerLive,
+        DashboardLive,
+        FormatterLive,
         AppDataLive,
         ArtifactsCredentialsLive,
         AppDomainControllerLive,

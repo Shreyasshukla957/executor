@@ -27,6 +27,11 @@ layer(TestLive, { excludeTestServices: true })("Last active organization", (it) 
         yield* browser.use("Name the second organization", (page) =>
           page.getByRole("dialog").getByLabel("Name", { exact: true }).fill("Second organization"),
         );
+        const suggestedHandle = yield* browser.use("The handle follows the name", (page) =>
+          page.getByRole("dialog").getByLabel("Handle", { exact: true }).inputValue(),
+        );
+        expect(suggestedHandle).toBe("second-organization");
+        yield* browser.checkpoint("Review the suggested organization handle");
         yield* browser.use("Set its handle", (page) =>
           page.getByRole("dialog").getByLabel("Handle", { exact: true }).fill(secondSlug),
         );

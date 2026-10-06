@@ -62,6 +62,21 @@ export const ConnectionSignIn = Schema.Union([
   Schema.Struct({ ...OAuthStartResult.members[1].fields, connection: AccountConnectionId }),
 ]);
 
+/** Secrets entered on the link's form. */
+export const ConnectionSubmission = Schema.Struct({
+  ...ConnectionGrant.fields,
+  method: Schema.NonEmptyString,
+  label: Schema.optional(Schema.NonEmptyString),
+  fields: AccountFieldsInput,
+});
+/** Provider consent started from the link's form, optionally with a user-supplied client. */
+export const ConnectionOAuthStart = Schema.Struct({
+  ...ConnectionGrant.fields,
+  method: Schema.NonEmptyString,
+  label: Schema.optional(Schema.NonEmptyString),
+  client: Schema.optional(OAuthClientInput),
+});
+
 const errors = [
   ...ProfileErrors,
   ConnectionLinkRejected,
@@ -103,12 +118,7 @@ export const AccountConnectApi = HttpApi.make("account-connect").add(
     )
     .add(
       HttpApiEndpoint.post("submit", "/account-connect/api/submit", {
-        payload: Schema.Struct({
-          ...ConnectionGrant.fields,
-          method: Schema.NonEmptyString,
-          label: Schema.optional(Schema.NonEmptyString),
-          fields: AccountFieldsInput,
-        }),
+        payload: ConnectionSubmission,
         success: Account,
         error: [...errors, AccountFieldsInvalid, AuthMethodInvalid],
       }),
@@ -122,12 +132,7 @@ export const AccountConnectApi = HttpApi.make("account-connect").add(
     )
     .add(
       HttpApiEndpoint.post("startOAuth", "/account-connect/api/oauth/start", {
-        payload: Schema.Struct({
-          ...ConnectionGrant.fields,
-          method: Schema.NonEmptyString,
-          label: Schema.optional(Schema.NonEmptyString),
-          client: Schema.optional(OAuthClientInput),
-        }),
+        payload: ConnectionOAuthStart,
         success: OAuthStartResult,
         error: [...errors, AuthMethodInvalid, OAuthClientUnavailable, OAuthSetupFailed],
       }),

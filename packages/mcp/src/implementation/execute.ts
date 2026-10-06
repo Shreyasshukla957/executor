@@ -5,6 +5,7 @@ import {
   Json,
   AppSlug,
   JsonObject,
+  routerFailure,
   ToolApprovalRequired,
   ToolListingTimedOut,
   type App,
@@ -409,7 +410,9 @@ function catalog(backend: McpBackend<Error>, progress: ExecutionProgress) {
               name: `${app.name} ${router.title ?? router.path}`,
               ...(target.kind === "profile" ? { profile: target.id } : {}),
               router: router.path,
-              reason: diagnostic(router.error),
+              reason: diagnostic(
+                routerFailure({ app: app.id, deployment: catalog.deployment }, router.error),
+              ),
             };
             failed.push(entry);
             namespaces.set(`${namespace}.${toolPath(router.path)}`, entry);

@@ -52,8 +52,11 @@ not invalidate subscriptions, and a database rollback cannot undo external
 effects. All callbacks use Promises; the framework runs Effect internally.
 
 Do not include an app ID or credentials in browser code. The host binds both
-identity and authentication. Keep asset URLs relative to the document's base;
-compiled imports and `ui/public/` files are retained with the deployment. Each
+identity and authentication. Compiled imports and `ui/public/` files are retained
+with the deployment. Import images and fonts from scripts or CSS. In `ui/index.html`,
+reference files with relative URLs. From script code, request `ui/public/` files
+by absolute path, such as `fetch("/data.json")`. The page has no `<base>`, so
+links, `#` fragments and history URLs resolve against the page itself. Each
 activation automatically reloads open pages. SSR, React Server Components and
 public sharing are not part of this version.
 

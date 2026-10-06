@@ -9,7 +9,6 @@ import { RequireOrganization } from "../contracts/organization.ts";
 import { explicitOrganizationAuth } from "./organization-auth.ts";
 import { mcpOAuthPlugins } from "./mcp-oauth.ts";
 import type { BetterAuthOptions } from "better-auth";
-import { organization } from "better-auth/plugins/organization";
 import { admin } from "better-auth/plugins/admin";
 import { Config, ErrorReporter, Effect, Layer, Schema } from "effect";
 import { HttpUrl } from "@executor-js/sdk/core";
@@ -61,7 +60,10 @@ export const authSettings = Config.all({
   ),
 );
 
-/** Shared session and protocol defaults; each host supplies its sign-in policy. */
+/**
+ * Shared session and protocol defaults; each host supplies its sign-in policy and its
+ * organization plugin, so no host builds an organization plugin it then discards.
+ */
 export const authOptions = (
   settings: Pick<Effect.Success<typeof authSettings>, "url" | "oauthRedirectUri">,
   ipAddressHeaders: string[],
@@ -74,13 +76,7 @@ export const authOptions = (
     emailAndPassword: { enabled: false },
     account: { encryptOAuthTokens: true },
     onAPIError: { errorURL: `${settings.url}/login` },
-    plugins: [
-      admin(),
-      explicitOrganizationAuth,
-      apiKeys,
-      organization({ disableOrganizationDeletion: true }),
-      ...mcpOAuthPlugins(settings.url),
-    ],
+    plugins: [admin(), explicitOrganizationAuth, apiKeys, ...mcpOAuthPlugins(settings.url)],
     hooks: { before: apiKeyManagement },
     // Session age gates nothing: the account Security page lists sessions however long ago this
     // browser signed in. Account deletion is disabled; enabling it needs its own confirmation.

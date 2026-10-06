@@ -1,5 +1,18 @@
-import { Schema } from "effect";
-import { DeploymentMetadata, SourceFilePath } from "@executor-js/sdk/core";
+import { Context, Schema, type Effect } from "effect";
+import { DeploymentMetadata, SourceFilePath, type SourceFile } from "@executor-js/sdk/core";
+
+/**
+ * Formats source text for display only; stored source is never rewritten. A file the formatter
+ * cannot parse keeps its original text. Each host chooses where formatting runs, because the
+ * parsers are large: see `localSourceFormatter` in `@executor-js/app-management/source-format`.
+ */
+export class SourceFormatter extends Context.Service<
+  SourceFormatter,
+  {
+    /** Every given file, in order, with display-formatted contents. */
+    readonly format: (files: ReadonlyArray<SourceFile>) => Effect.Effect<ReadonlyArray<SourceFile>>;
+  }
+>()("app-management/SourceFormatter") {}
 
 /** Bound parser work for one file; larger files remain readable as their original text. */
 export const sourceDisplayLimits = {

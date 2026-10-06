@@ -12,7 +12,10 @@
     "./in-process": "./src/implementation/in-process.ts",
     "./page": "./src/implementation/page.ts",
     "./document-api": "./src/contracts/document.ts",
-    "./complete-document": "./src/implementation/complete-document.tsx"
+    "./complete-document": "./src/implementation/complete-document.tsx",
+    "./batch": "./src/contracts/batch.ts",
+    "./batch-host": "./src/implementation/batch-host.ts",
+    "./batch-browser": "./src/implementation/batch-browser.ts"
   },
   "dependencies": {
     "@effect/atom-react": "https://pkg.pr.new/Effect-TS/effect/@effect/atom-react@c7d1ffff31a3e2ae0b0b0796b742bddeb797269d",

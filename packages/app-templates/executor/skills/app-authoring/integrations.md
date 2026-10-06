@@ -66,7 +66,8 @@ from `apps`. Each tool takes `{ accountId, input }`: the chosen account ID and t
 original upstream input. Same-name tools keep one name with an input schema for
 each account. Empty selections expose no tools.
 
-Pass headers derived from that callback's account.
+Pass that callback's `account` with headers derived from it. Headers are only
+accepted together with the account they belong to.
 OAuth uses `oauth2({ discover: "https://example.com/mcp" })`
 and `Authorization: "Bearer " + account.fields.access_token`.
 API-key methods use a `secrets` field and the header the server documents,
@@ -78,6 +79,9 @@ Streamable HTTP and legacy SSE are supported. Every discovery/call owns and
 closes its connection. Session-local workflows do not survive separate tool
 calls. Results retain MCP `content`, `structuredContent`, `isError`, and `_meta`;
 remote tool failures are results, while transport failures reject the call.
+A tool's output type describes that whole result, with the server's output schema
+under `structuredContent`, and every result is checked against it. Read typed
+fields from `result.structuredContent` after checking `result.isError`.
 Calls are never automatically retried. Upstream form elicitation automatically
 uses the running tool context; preserve that context when wrapping generated tools.
 Request and response metadata, including approval persistence choices, pass through.
@@ -94,11 +98,26 @@ keep several servers in one app, mount each under a key; tools become
 others:
 
 ```ts
+const bearer = (account) => ({ Authorization: "Bearer " + account.fields.access_token });
+
 tools: router({
-  linear: await mcpRouter({ url: "https://mcp.linear.app/mcp", headers, cache, signal }),
-  sentry: router(await mcpRouter({ url: "https://mcp.sentry.dev/mcp", headers, cache, signal }), {
-    description: "Errors and releases for the web app",
+  linear: await mcpRouter({
+    url: "https://mcp.linear.app/mcp",
+    account: accounts.linear,
+    headers: bearer(accounts.linear),
+    cache,
+    signal,
   }),
+  sentry: router(
+    await mcpRouter({
+      url: "https://mcp.sentry.dev/mcp",
+      account: accounts.sentry,
+      headers: bearer(accounts.sentry),
+      cache,
+      signal,
+    }),
+    { description: "Errors and releases for the web app" },
+  ),
 }),
 ```
 
@@ -133,7 +152,8 @@ the signal and the selected account. It downloads and compiles the definition
 inside the app, caching each revision; no extra dependency is needed. Pass the
 settings the definition cannot be trusted to decide:
 
-- `source`: `{ url }` for a public definition (up to 40 MB), or `{ document }`.
+- `source`: `{ url }` for a public definition (up to 40 MB), or `{ document }`:
+  Swagger 2.0 or OpenAPI 3.0, 3.1 or 3.2.
 - `allowedOrigin`: the one origin that may receive credentials. `baseUrl`
   overrides the definition's server.
 - `securitySchemes`: usually `components.securitySchemes` from the definition.
@@ -145,22 +165,34 @@ settings the definition cannot be trusted to decide:
   [accounts.md](accounts.md#oauth-sign-in), preferring `discover`.
 - Optional `fallbackSecurity` when the definition declares no security, and
   `patches` for mistakes in a definition you do not control.
+- Optional `pathPrefix`, such as `/projects/{project}`, when the definition's
+  paths omit leading segments. It goes between the server and every path; each
+  `{name}` becomes a required path parameter of every tool.
 - Optional `kinds`, keyed by operationId, when an operation's HTTP method
   misclassifies it as a query or mutation.
 
 Tools are grouped by the operation's first tag, or its first path segment:
 operationId `listProjects` tagged `projects` becomes
 `projects.listProjects`, and `accounts_connect` tagged `accounts`
-becomes `accounts.connect`. Discover the exact names with search.
+becomes `accounts.connect`. Without an operationId the name comes from the
+method and path, and operations that would share one add the path segments
+that differ: `GET /builds` and `GET /builds/{build_num}` become
+`builds.getBuilds` and `builds.getBuildsByBuildNum`. Discover the exact names
+with search.
 
 Operations the helper cannot represent, and operations whose security needs
-another method, are left out rather than failing the app. Public APIs need no
+another method, are left out rather than failing the app. Reading or calling a
+left-out operation's tool fails with why, such as the JSON Pointer of an
+invalid schema. When none can be imported, the router's error lists the
+operations left out and why, and the origins the operations use when none
+matches `allowedOrigin`. Public APIs need no
 account: call `liveOpenapiRouter` without `accountRouter` and with
 `methods: {}` and `oauth: []`. `openapiRouter` is the lower-level helper for
 normalized metadata. Use `contentType` to choose an alternate declared request
 media type. Binary request bodies and multipart binary fields take base64
-strings. Binary responses return `{ base64, contentType }`; text and NDJSON
-return text. Success responses have a 16 MiB / 30-second read bound. Live SSE
+strings. Binary responses return `{ base64, contentType }`; text and JSON
+sequences (NDJSON, JSON Lines, `json-seq`) return text. Success responses have
+a 16 MiB / 30-second read bound. Live SSE
 requires an authored subscription.
 
 OpenAPI apps return documented errors with an exact HTTP status, a required
@@ -185,7 +217,7 @@ inspect its state before retrying.
 ## GraphQL APIs
 
 Use `graphqlRouter` from `apps/graphql` with the endpoint, the selected
-account's headers, and optional cancellation signal. Declare `graphql`
+account and its headers, and optional cancellation signal. Declare `graphql`
 (currently `16.11.0`) in the app's dependencies. Authenticated apps use
 `provider.many()` and `accountRouter` as above; public endpoints need no
 account selection.
@@ -196,11 +228,13 @@ resolve from its own installation. A missing peer fails the deployment with
 the package to add. A declared `apps` version owns its framework dependencies;
 otherwise the host supplies them.
 
-MCP apps pass `ctx.cache.forAccount(account)` to `mcpRouter`. Public
-sources without account requirements can pass `ctx.cache`. The helper returns
-a dynamic router; it lists metadata without compiling every tool, and resolves
-one executable for each call. Cached identity includes the server URL, normalized
-headers and account ID. Defaults are five minutes fresh plus five minutes stale.
+Pass `cache: ctx.cache` to `mcpRouter`. With an account, the helper keeps the
+catalog in that account's cache scope, so a token renewal keeps it and a
+reconnected account starts fresh. The helper returns a dynamic router; it lists
+metadata without compiling every tool, and resolves one executable for each
+call. Cached identity is the server URL within that scope; headers and
+credentials never enter it. Defaults are five minutes fresh plus five minutes
+stale.
 
 Set `revalidate: true` on a specific `mcpRouter` call to await a new catalog
 at a logical connection or explicit refresh boundary. Do not set it on every
@@ -216,9 +250,9 @@ GraphQL apps use the same cache policy through `graphqlRouter`:
 ```ts
 await graphqlRouter({
   url,
-  headers,
-  accountId: account.id,
-  cache: ctx.cache.forAccount(account),
+  account,
+  headers: { Authorization: "Bearer " + account.fields.token },
+  cache: ctx.cache,
   signal: ctx.signal,
 });
 ```
@@ -227,8 +261,8 @@ The helper returns a dynamic router. One introspection request creates a
 revision of per-tool definitions. Listing reads those definitions; execution
 loads and compiles only the selected query or mutation, without reading the
 full introspection schema. The current account supplies execution credentials.
-Public apps can use `ctx.cache`. Omitting the cache keeps discovery local to the
-current evaluation. Keys include the URL, normalized headers and account ID.
+Public endpoints take no account or headers. Omitting the cache keeps discovery
+local to the current evaluation. Keys are the URL within the account's scope.
 
 `freshFor`, `staleFor`, and `revalidate: true` have the same meanings as MCP.
 GraphQL has no standard schema-change notification, so TTL or an explicit

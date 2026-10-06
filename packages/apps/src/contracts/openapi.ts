@@ -20,7 +20,8 @@ export type OpenapiErrorResponse = typeof OpenapiErrorResponse.Type;
 /** Resolved OpenAPI parameter shared by import validation and request construction. */
 export const OpenapiParameter = Schema.Struct({
   name: Schema.String,
-  in: Schema.Literals(["path", "query", "header", "cookie"]),
+  /** OpenAPI 3.2's `querystring` is the whole query string, serialized from one `content` value. */
+  in: Schema.Literals(["path", "query", "querystring", "header", "cookie"]),
   required: Schema.optionalKey(Schema.Boolean),
   schema: Schema.optionalKey(JsonObject),
   style: Schema.optionalKey(Schema.String),
@@ -49,7 +50,7 @@ export const OpenapiOperation = Schema.Struct({
   /** The document's operationId, when it declares one. `kinds` overrides are keyed by it. */
   operationId: Schema.optionalKey(Schema.String),
   description: Schema.String,
-  method: Schema.Literals(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]),
+  method: Schema.Literals(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "QUERY"]),
   path: Schema.String,
   baseUrl: HttpUrl,
   openapi: Schema.String,
@@ -70,6 +71,10 @@ export const OpenapiOperation = Schema.Struct({
   errorResponses: Schema.optionalKey(Schema.Array(OpenapiErrorResponse)),
 });
 export type OpenapiOperation = typeof OpenapiOperation.Type;
+
+/** Safe methods, whose operations are queries unless `kinds` says otherwise. QUERY is OpenAPI 3.2's. */
+export const isOpenapiReadMethod = (method: OpenapiOperation["method"]) =>
+  method === "GET" || method === "HEAD" || method === "OPTIONS" || method === "QUERY";
 
 /** Map a selected account field to one Swagger credential value. */
 export const CredentialBinding = Schema.Struct({
@@ -150,9 +155,16 @@ export const defaultOpenapiResponseLimits = {
   maxBodyBytes: 16_777_216,
   readTimeoutMs: 30_000,
 } as const;
-/** Media returned as text rather than a base64 file. NDJSON remains an unparsed text result. */
+/**
+ * A sequence of JSON values, one per line or record: NDJSON, JSON Lines and `json-seq`, whose
+ * items OpenAPI 3.2 describes with `itemSchema`. The body is not one JSON value.
+ */
+export const isOpenapiJsonSequence = (type: string): boolean =>
+  /^application\/(?:x-)?(?:ndjson|jsonl|jsonlines|json-seq)\s*(?:;|$)/i.test(type);
+/** Media returned as text rather than a base64 file. JSON sequences remain unparsed text. */
 export const isOpenapiTextMedia = (type: string): boolean =>
-  /^(?:text\/|application\/(?:[\w.-]+\+)?(?:json|xml)|application\/(?:javascript|x-ndjson|x-www-form-urlencoded))/i.test(
+  isOpenapiJsonSequence(type) ||
+  /^(?:text\/|application\/(?:[\w.-]+\+)?(?:json|xml)|application\/(?:javascript|x-www-form-urlencoded))/i.test(
     type,
   );
 /** A form field that carries raw file bytes: OpenAPI 3.1 `contentMediaType` without an
@@ -173,7 +185,7 @@ export const openapiBinaryResultSchema: JsonObject = {
 
 /** Classify request media for JSON-safe tool arguments; Swagger owns wire serialization. */
 export const openapiMediaKind = (type: string) =>
-  type.includes("json") && !type.includes("ndjson")
+  type.includes("json") && !isOpenapiJsonSequence(type)
     ? "json"
     : type === "application/x-www-form-urlencoded"
       ? "form"

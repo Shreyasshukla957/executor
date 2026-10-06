@@ -4,7 +4,7 @@ import { HttpApiBuilder } from "effect/unstable/httpapi";
 import { HostedApi } from "../contracts/api.ts";
 import { HostedExecutor } from "../contracts/executor.ts";
 import { ScheduleWakeup } from "../contracts/schedules.ts";
-import { currentResourceAuthority, requireAppAccess } from "./resource-policy.ts";
+import { requireAppAccess, requireCurrentAppAccess } from "./resource-policy.ts";
 import { checkAccounts, currentOwner, ownProfile } from "./access.ts";
 
 /** Writes wake durable setup after the saved intent commits. */
@@ -12,9 +12,8 @@ export const hostedProfileHandlers = HttpApiBuilder.group(HostedApi, "profiles",
   handlers
     .handle("list", ({ params }) =>
       Effect.gen(function* () {
-        yield* requireAppAccess(params.app, "use");
-        const owner = yield* currentOwner,
-          actor = yield* currentResourceAuthority;
+        const { actor } = yield* requireCurrentAppAccess(params.app, "use");
+        const owner = yield* currentOwner;
         return yield* (yield* Effect.flatten(HostedExecutor)).apps.profiles.list({
           app: params.app,
           owner,
@@ -34,12 +33,11 @@ export const hostedProfileHandlers = HttpApiBuilder.group(HostedApi, "profiles",
     )
     .handle("create", ({ params, payload }) =>
       Effect.gen(function* () {
-        yield* requireAppAccess(params.app, "use");
+        const { actor } = yield* requireCurrentAppAccess(params.app, "use");
         const executor = yield* Effect.flatten(HostedExecutor),
-          owner = yield* currentOwner,
-          actor = yield* currentResourceAuthority;
+          owner = yield* currentOwner;
         const app = yield* executor.apps.get({ app: params.app, owner });
-        yield* checkAccounts(executor, owner, payload.accounts);
+        yield* checkAccounts(owner, payload.accounts);
         const result = yield* executor.apps.profiles.create({
           ...payload,
           app: app.id,
@@ -56,7 +54,7 @@ export const hostedProfileHandlers = HttpApiBuilder.group(HostedApi, "profiles",
         const executor = yield* Effect.flatten(HostedExecutor),
           owner = yield* currentOwner;
         yield* ownProfile(executor, owner, params.app, params.profile);
-        yield* checkAccounts(executor, owner, payload.accounts);
+        yield* checkAccounts(owner, payload.accounts);
         const result = yield* executor.apps.profiles.update({ ...params, ...payload });
         yield* Effect.flatten(ScheduleWakeup);
         return result;
@@ -69,7 +67,7 @@ export const hostedProfileHandlers = HttpApiBuilder.group(HostedApi, "profiles",
         const current = yield* ownProfile(executor, owner, params.app, params.profile);
         if (payload.enabled) {
           yield* requireAppAccess(params.app, "use");
-          yield* checkAccounts(executor, owner, current.accounts);
+          yield* checkAccounts(owner, current.accounts);
         }
         const result = yield* executor.apps.profiles.setEnabled({ ...params, ...payload });
         yield* Effect.flatten(ScheduleWakeup);

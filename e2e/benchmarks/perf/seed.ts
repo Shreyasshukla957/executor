@@ -256,8 +256,8 @@ const authoredFiles = (kind: "mcp" | "openapi", url: string, keyed: boolean) => 
     kind === "mcp"
       ? (account: string) => `mcpRouter({
     url: ${JSON.stringify(url)},
-    cache: ${account === "" ? "cache" : "cache.forAccount(account)"},
-    ${account === "" ? "" : 'accountId: account.id,\n    headers: { "x-api-key": account.fields.token },'}
+    cache,
+    ${account === "" ? "" : 'account,\n    headers: { "x-api-key": account.fields.token },'}
     signal,
   })`
       : (account: string) => `liveOpenapiRouter({

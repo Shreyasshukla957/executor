@@ -80,6 +80,7 @@ export default defineApp(
       (account) =>
         mcpRouter({
           url: "https://example.com/mcp",
+          account,
           headers: { Authorization: "Bearer " + account.fields.token },
           signal,
         }),
@@ -89,8 +90,9 @@ export default defineApp(
 );
 ```
 
-MCP and GraphQL helpers accept `cache: ctx.cache.forAccount(account)` (or
-`ctx.cache` for a public source). They return a dynamic router, cache remote
+MCP and GraphQL helpers take the account their headers come from, and accept
+`cache: ctx.cache`; an account's catalog is kept in that account's scope and
+credentials never enter its key. They return a dynamic router, cache remote
 metadata, and compile only the selected tool. The defaults are five minutes fresh
 plus five minutes stale. Use `freshFor` / `staleFor` to change the windows, or
 `revalidate: true` to await a refresh. Tool results are never cached.

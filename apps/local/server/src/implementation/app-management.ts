@@ -1,3 +1,4 @@
+import { localSourceFormatter } from "@executor-js/app-management/source-format";
 import {
   LocalAppAccess,
   LocalAppManagementApi,
@@ -106,6 +107,7 @@ export const localAppManagement = (
       gitRoutes,
     ).pipe(
       Layer.provide(access),
+      HttpRouter.provideRequest(localSourceFormatter),
       HttpRouter.provideRequest(gitAccess),
       HttpRouter.provideRequest(
         Layer.succeed(AppManagementHost, Effect.succeed({ ...resources, publisher: undefined })),

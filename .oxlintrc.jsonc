@@ -25,6 +25,23 @@
       "rules": { "executor/no-module-level-mutable-state": "off" },
     },
     {
+      // Authorization proofs are minted only where their check runs.
+      "files": ["apps/hosted/server/src/**"],
+      "rules": {
+        "executor/no-proof-forgery": "error",
+        "executor/account-middleware-through-helper": "error",
+      },
+    },
+    {
+      // The helper itself attaches the middleware.
+      "files": ["apps/hosted/server/src/contracts/account-grants.ts"],
+      "rules": { "executor/account-middleware-through-helper": "off" },
+    },
+    {
+      "files": ["apps/hosted/server/src/implementation/proofs/**"],
+      "rules": { "executor/no-proof-forgery": "off" },
+    },
+    {
       "files": ["e2e/**"],
       "rules": { "executor/no-manual-effect-runtime-in-tests": "error" },
     },
@@ -56,5 +73,6 @@
     "**/.generated/",
     "**/routeTree.gen.ts",
     "**/browser-scripts.gen.ts",
+    "**/executor-intro.gen.ts",
   ],
 }

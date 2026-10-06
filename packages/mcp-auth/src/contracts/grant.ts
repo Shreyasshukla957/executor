@@ -97,6 +97,15 @@ export const mcpOAuthResources = (origin: string, connection?: ConnectionId) =>
     identifier: mcpResource(origin, connection === undefined ? { mode } : { mode, connection }),
     allowedScopes: ["mcp", "offline_access"],
   }));
+/**
+ * RFC 8707 makes `resource` optional. A request that names none is for the plain MCP URL
+ * that discovery advertises, in its original model mode: no approval mode or connection is
+ * implied. API authority is never a default; a request for the `executor` scope has none.
+ */
+export const defaultResource = (origin: string, scope: string | undefined) =>
+  scope?.split(" ").includes("executor") === true
+    ? undefined
+    : mcpResource(origin, { mode: "model" });
 /** Select exactly one known resource. Multi-resource consent must not combine approval modes. */
 export const grantTarget = (
   origin: string,

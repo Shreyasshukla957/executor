@@ -18,6 +18,7 @@ import {
   OrganizationDefaultsPending,
 } from "../contracts/organization-defaults.ts";
 import { organizationOwner } from "../contracts/organization.ts";
+import { ScheduleWakeup } from "../contracts/schedules.ts";
 
 /** Only a new or changed installation generates the Executor app, so its OpenAPI compiler loads then. */
 const executorApp = Effect.promise(() => import("./executor-app.ts"));
@@ -40,8 +41,11 @@ export const organizationDefaults = (
 ) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    return OrganizationDefaults.of((organization, user) =>
-      Effect.gen(function* () {
+    return OrganizationDefaults.of((organization, user) => {
+      // Upgrading the installed app makes its profiles pending, and member setup saves a
+      // profile. Either is saved setup intent, which must wake profile setup once it commits.
+      let intent = false;
+      return Effect.gen(function* () {
         const rows = yield* sql`select
           coalesce((metadata::jsonb -> 'executorDefaults' ->> 'installed')::boolean, false) as initialized,
           metadata::jsonb -> 'executorDefaults' ->> 'app' as app,
@@ -111,7 +115,13 @@ export const organizationDefaults = (
               // Unsaved edits mean someone is changing this copy; leave it to them. The framework
               // pin is a system commit, not an edit.
               if (!pinnedOnly(workspace.files, deployment.files)) return undefined;
-              return (yield* executor.apps.deploy({ owner, app: app.id, files: source.files })).app;
+              const deployed = yield* executor.apps.deploy({
+                owner,
+                app: app.id,
+                files: source.files,
+              });
+              intent = true;
+              return deployed.app;
             }).pipe(
               Effect.catch(() =>
                 Effect.logWarning("Executor app upgrade failed").pipe(Effect.as(undefined)),
@@ -141,6 +151,7 @@ export const organizationDefaults = (
               app: app.id,
               files: source.files,
             })).app;
+            intent = true;
           }
         }
         const requirement = current.requirements.accounts.service;
@@ -246,6 +257,7 @@ export const organizationDefaults = (
                 idempotencyKey: "executor-default",
                 accounts: { service: account.id },
               });
+              intent = true;
               const accounts = JSON.stringify({ ...state.accounts, [user.userId]: account.id });
               yield* sql`update "organization" set metadata = jsonb_set(jsonb_set(
             coalesce(metadata::jsonb, '{}'::jsonb), '{executorKeyAccounts}', ${accounts}::jsonb),
@@ -258,6 +270,11 @@ export const organizationDefaults = (
             Effect.catchTag("SqlError", () => Effect.fail(new StorageError())),
             Effect.uninterruptible,
           );
-      }).pipe(Effect.scoped),
-    );
+      }).pipe(
+        Effect.scoped,
+        Effect.ensuring(
+          Effect.suspend(() => (intent ? Effect.flatten(ScheduleWakeup) : Effect.void)),
+        ),
+      );
+    });
   });

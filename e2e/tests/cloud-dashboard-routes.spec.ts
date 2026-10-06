@@ -13,11 +13,11 @@ layer(TestLive, { excludeTestServices: true })("Cloud dashboard routing", (it) =
       context,
       Effect.gen(function* () {
         const browser = yield* Browser;
-        const read = (path: string) =>
+        const read = (path: string, accept = "text/html") =>
           browser.use(`Request ${path}`, (page) =>
             page
               .context()
-              .request.get(path, { maxRedirects: 0, headers: { accept: "text/html" } })
+              .request.get(path, { maxRedirects: 0, headers: { accept } })
               .then((response) =>
                 response.text().then((body) => ({
                   status: response.status(),
@@ -71,6 +71,25 @@ layer(TestLive, { excludeTestServices: true })("Cloud dashboard routing", (it) =
         const docs = yield* read("/docs");
         expect(docs.status).toBe(200);
         expect(docs.body).not.toContain(dashboardDocument);
+        const docsPage = yield* read("/docs/author-an-app");
+        expect(docsPage.status).toBe(200);
+        // The page's earlier address keeps working for links already published.
+        const movedDocsPage = yield* read("/docs/build/author-an-app");
+        expect(movedDocsPage.status).toBe(308);
+        expect(movedDocsPage.location).toBe("/docs/author-an-app");
+        // A browser that opens a missing page gets the site's 404 document, with a 404
+        // status; the documentation keeps its own. Other clients keep an empty 404.
+        const missingPage = yield* read("/no-such-page");
+        expect(missingPage.status).toBe(404);
+        expect(missingPage.body).toContain("Page not found");
+        expect(missingPage.body).toContain("data-missing-path");
+        const missingDocsPage = yield* read("/docs/no-such-page");
+        expect(missingDocsPage.status).toBe(404);
+        expect(missingDocsPage.body).toContain("Page not found");
+        expect(missingDocsPage.body).toContain("/docs/llms.txt");
+        const missingResource = yield* read("/no-such-page", "application/json");
+        expect(missingResource.status).toBe(404);
+        expect(missingResource.body).toBe("");
       }),
     ),
   );

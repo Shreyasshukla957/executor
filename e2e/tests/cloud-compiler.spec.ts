@@ -159,6 +159,72 @@ export default defineApp({accounts:{}}, {tools: router({
       }),
     ),
   );
+  it.effect(scenarios.cloudCompilerUiFiles.title, (context) =>
+    withHostedCase(
+      context,
+      Effect.gen(function* () {
+        const api = yield* Api,
+          actors = yield* Actors;
+        const prefix = `/api/organizations/${actors.organization.id}/apps`;
+        // Synthetic static files, larger than a typical UI. Embedded in the server entry, they
+        // exhausted the compiler's memory; the host serves them as UI assets instead.
+        const publicFiles = Array.from({ length: 10 }, (_, chunk) => ({
+          path: `ui/public/vendor/chunk-${chunk}.js`,
+          content: Array.from(
+            { length: 12_000 },
+            (_, line) => `export const v${line}="grammar ${chunk} scope ${line} \\"quoted\\"";\n`,
+          ).join(""),
+        }));
+        const deployed = yield* api.request(actors.owner, "POST", `${prefix}/deploy`, {
+          name: `Large UI ${randomUUID().slice(0, 8)}`,
+          files: [
+            {
+              path: "index.ts",
+              content: `import { defineApp, query, object, router } from "apps";
+export default defineApp({accounts:{}}, async (ctx) => ({tools: router({
+  inspect:query({description:"List retained files",input:object({})},async()=>ctx.files.map((file)=>file.path)),
+})}));`,
+            },
+            {
+              path: "package.json",
+              content: JSON.stringify({
+                type: "module",
+                dependencies: withApps({ react: "19.2.0", "react-dom": "19.2.0" }),
+              }),
+            },
+            {
+              path: "ui/index.html",
+              content:
+                '<!doctype html><html><head><title>Large UI</title></head><body><div id="root"></div><script type="module" src="./main.tsx"></script></body></html>',
+            },
+            {
+              path: "ui/main.tsx",
+              content:
+                'import { createRoot } from "react-dom/client";\ncreateRoot(document.getElementById("root")!).render(<p>Ready</p>);\n',
+            },
+            ...publicFiles,
+          ],
+        });
+        expect(deployed.status, JSON.stringify(deployed.body).slice(0, 500)).toBe(200);
+        const app = yield* body(App, deployed);
+        yield* Effect.addFinalizer(() =>
+          api.request(actors.owner, "DELETE", `${prefix}/${app.id}`).pipe(Effect.orDie),
+        );
+        const retained = yield* api.request(
+          actors.owner,
+          "POST",
+          `${prefix}/${app.id}/tools/call`,
+          {
+            tool: "inspect",
+            kind: "query",
+            input: {},
+          },
+        );
+        expect(retained.status).toBe(200);
+        expect(retained.body).toEqual(["index.ts", "package.json"]);
+      }),
+    ),
+  );
   it.effect(
     scenarios.cloudCompilerDeadline.title,
     (context) =>
@@ -417,5 +483,79 @@ export default defineApp({ accounts: {} }, async () => ({ tools: router({}) }));
         });
       }),
     ),
+  );
+  it.effect(
+    scenarios.cloudCompilerConcurrency.title,
+    (context) =>
+      withHostedCase(
+        context,
+        Effect.gen(function* () {
+          const api = yield* Api,
+            actors = yield* Actors,
+            evidence = yield* Evidence;
+          const prefix = `/api/organizations/${actors.organization.id}/apps`;
+          // Every build installs and bundles React, the heaviest common browser dependency. Builds
+          // that arrive together share one compiler isolate's memory; when they ran unbounded,
+          // the isolate exceeded its limit and failed every build in flight.
+          const deploy = (index: number) =>
+            Effect.gen(function* () {
+              const response = yield* api.request(actors.owner, "POST", `${prefix}/deploy`, {
+                name: `Concurrent build ${index} ${randomUUID().slice(0, 8)}`,
+                files: [
+                  {
+                    path: "index.ts",
+                    content: `import { defineApp, query, object, router } from "apps";
+import { z } from "zod";
+export default defineApp({accounts:{}}, {tools: router({
+  inspect:query({description:"Read the build",input:object({})},async()=>z.string().parse("build ${index}")),
+})});`,
+                  },
+                  {
+                    path: "package.json",
+                    content: JSON.stringify({
+                      type: "module",
+                      dependencies: withApps({
+                        zod: "3.25.76",
+                        react: "^19.2.0",
+                        "react-dom": "^19.2.0",
+                      }),
+                    }),
+                  },
+                  {
+                    path: "ui/index.html",
+                    content:
+                      '<!doctype html><html><body><div id="root"></div><script type="module" src="./main.tsx"></script></body></html>',
+                  },
+                  {
+                    path: "ui/main.tsx",
+                    content: `import React from "react";
+import { createRoot } from "react-dom/client";
+createRoot(document.getElementById("root")).render(<main>Build ${index}</main>);`,
+                  },
+                ],
+              });
+              if (response.status === 200) {
+                const app = yield* body(App, response);
+                yield* Effect.addFinalizer(() =>
+                  api.request(actors.owner, "DELETE", `${prefix}/${app.id}`).pipe(Effect.orDie),
+                );
+              }
+              return { index, status: response.status, body: response.body };
+            });
+          // Several bursts, since Cloudflare can spread a burst over fresh isolates.
+          const results = [];
+          for (let burst = 0; burst < 4; burst++)
+            results.push(
+              ...(yield* Effect.all(
+                Array.from({ length: 12 }, (_, index) => deploy(burst * 100 + index)),
+                { concurrency: "unbounded" },
+              )),
+            );
+          yield* evidence.json("concurrent-builds.json", results);
+          expect(results.filter((result) => result.status !== 200)).toEqual([]);
+        }),
+      ),
+    // Four bursts of builds, each of which may wait up to the compiler's 50 second deadline.
+    { timeout: 240_000 },
   );
 });

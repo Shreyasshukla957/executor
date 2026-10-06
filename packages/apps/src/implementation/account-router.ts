@@ -11,18 +11,22 @@ import { importedJsonSchema, nestJsonSchema, once, withLazyJsonSchemaDocument } 
 
 type Selection = { readonly accountId: string; readonly input: unknown };
 
-const inputDocument = (operation: AppOperation) => {
-  const imported = importedJsonSchema(operation.input);
+const decoderDocument = (decoder: Schema.Decoder<unknown>) => {
+  const imported = importedJsonSchema(decoder);
   if (imported !== undefined) return Schema.decodeUnknownSync(JsonObject)(imported);
-  const document = Schema.toJsonSchemaDocument(operation.input);
+  const document = Schema.toJsonSchemaDocument(decoder);
   return Schema.decodeUnknownSync(JsonObject)({ ...document.schema, $defs: document.definitions });
 };
 
 /** Read whether an output schema is declared without building one that is computed on demand. */
 const declaresOutput = (operation: AppOperation) => {
+  if (operation.output !== undefined) return true;
   const property = Object.getOwnPropertyDescriptor(operation, "outputSchema");
   return property !== undefined && (property.get !== undefined || property.value !== undefined);
 };
+/** The schema an operation is described with: its checked output, else its upstream schema. */
+const outputDocument = (operation: AppOperation) =>
+  operation.output === undefined ? operation.outputSchema : decoderDocument(operation.output);
 
 /**
  * One operation whose input selects the account whose variant runs. It is a query only when every
@@ -51,7 +55,10 @@ const combineOperation = (accounts: ReadonlyMap<string, AppOperation>): AppOpera
       type: "object",
       properties: {
         accountId: { type: "string", const: accountId },
-        input: nestJsonSchema(inputDocument(operation), `#/anyOf/${index}/properties/input`),
+        input: nestJsonSchema(
+          decoderDocument(operation.input),
+          `#/anyOf/${index}/properties/input`,
+        ),
       },
       required: ["accountId", "input"],
     })),
@@ -92,9 +99,10 @@ const combineOperation = (accounts: ReadonlyMap<string, AppOperation>): AppOpera
   if (variants.every(declaresOutput)) {
     const outputSchema = once(() => ({
       anyOf: variants
-        .flatMap((operation) =>
-          operation.outputSchema === undefined ? [] : [operation.outputSchema],
-        )
+        .flatMap((operation) => {
+          const output = outputDocument(operation);
+          return output === undefined ? [] : [output];
+        })
         .map((output, index) => nestJsonSchema(output, `#/anyOf/${index}`)),
     }));
     const native = nativeOperation(declaration);

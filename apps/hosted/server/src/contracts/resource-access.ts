@@ -1,5 +1,6 @@
 import { Profile, ProfileId, ProfileErrors } from "@executor-js/sdk/core";
 import { RequiredAction } from "./authorization.ts";
+import { requireAccount } from "./account-grants.ts";
 /** Hosted sharing policy stays separate from SDK tenant ownership and saved bindings. */
 import {
   App,
@@ -158,7 +159,7 @@ export const HostedResourceAccess = HttpApiGroup.make("resourceAccess")
       params: account,
       success: AccountAccess,
       error: errors,
-    }).annotate(RequiredAction, "read"),
+    }).pipe(requireAccount.inspect),
   )
   .add(
     HttpApiEndpoint.patch(
@@ -170,6 +171,6 @@ export const HostedResourceAccess = HttpApiGroup.make("resourceAccess")
         success: AccountAccess,
         error: errors,
       },
-    ).annotate(RequiredAction, "manage"),
+    ).pipe(requireAccount.share),
   )
   .middleware(RequireOrganization);

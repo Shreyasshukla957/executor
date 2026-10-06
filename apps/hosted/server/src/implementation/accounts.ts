@@ -10,17 +10,12 @@ import {
   createdConnectionOrganization,
 } from "./connection-policy.ts";
 import { accountDestination } from "./resource-lifecycle.ts";
-import {
-  requireAccountAccess,
-  requireAppAccess,
-  visibleApps,
-  visibleAccounts,
-} from "./resource-policy.ts";
+import { AccountGrants } from "./proofs/account-access.ts";
+import { requireAppAccess, visibleApps, visibleAccounts } from "./resource-policy.ts";
 import type { ConnectionDestination } from "../contracts/resource-access.ts";
 /** Account use cases, connection grants and OAuth routes share the same ownership checks. */
 import {
   type AccountHealth,
-  type AccountId,
   type App,
   type AppId,
   type Executor,
@@ -38,29 +33,31 @@ import {
   organizationOwner,
 } from "../contracts/organization.ts";
 import { HostedExecutor } from "../contracts/executor.ts";
-import {
-  executionManagerOwner,
-  accountManagerOwner,
-  currentOwner,
-  ownedConnection,
-} from "./access.ts";
+import { executionManagerOwner, currentOwner, ownedConnection } from "./access.ts";
 
-/** Read provider metadata through the public SDK, including for accounts with no remaining apps. */
-export const getAccount = (owner: OwnerId, account: AccountId) =>
-  Effect.gen(function* () {
-    const executor = yield* Effect.flatten(HostedExecutor);
-    yield* requireAccountAccess(account, "read");
-    const metadata = yield* executor.accounts.get({ owner, account });
-    const provider = yield* executor.accounts.provider({ owner, account });
-    const policy = yield* CurrentAuthorization;
-    const apps = yield* executor.apps.list({ owner, account }).pipe(
-      Effect.map((apps) => apps.filter((app) => permitsApp(policy, app.id))),
-      Effect.flatMap(visibleApps),
-    );
-    if (policy.tools.kind !== "all" && apps.length === 0) return yield* new OrganizationForbidden();
-    const health = yield* executor.accounts.health({ owner, account });
-    return { account: metadata, provider, apps, health: visibleHealth(health, apps) };
-  });
+/**
+ * Read provider metadata through the public SDK, including for accounts with no remaining apps.
+ * App-scoped tokens reach this only through an app they can use; see RequireAccountGrant.
+ */
+export const getAccount = Effect.gen(function* () {
+  const { owner, account, access } = yield* AccountGrants.inspect;
+  const executor = yield* Effect.flatten(HostedExecutor);
+  const metadata = yield* executor.accounts.get({ owner, account });
+  const provider = yield* executor.accounts.provider({ owner, account });
+  const policy = yield* CurrentAuthorization;
+  const apps = yield* executor.apps.list({ owner, account }).pipe(
+    Effect.map((apps) => apps.filter((app) => permitsApp(policy, app.id))),
+    Effect.flatMap(visibleApps),
+  );
+  const health = yield* executor.accounts.health({ owner, account });
+  return {
+    account: metadata,
+    provider,
+    apps,
+    health: visibleHealth(health, apps),
+    canManage: access.canManage,
+  };
+});
 /** Keep only the checks of apps the caller can see. */
 const visibleHealth = (health: AccountHealth, apps: readonly App[]): AccountHealth => {
   const visible = new Set(apps.map((app) => app.id));
@@ -77,22 +74,21 @@ export const checkCredentials = (
     return yield* executor.apps.checkCredentials({ ...input, owner });
   });
 /** Run the checks of the apps the caller can use, with the caller's own account access. */
-export const checkAccount = (owner: OwnerId, account: AccountId) =>
-  Effect.gen(function* () {
-    const executor = yield* Effect.flatten(HostedExecutor);
-    yield* requireAccountAccess(account, "use");
-    const policy = yield* CurrentAuthorization;
-    const apps = yield* executor.apps.list({ owner, account }).pipe(
-      Effect.map((apps) => apps.filter((app) => permitsApp(policy, app.id))),
-      Effect.flatMap(visibleApps),
-    );
-    const health = yield* executor.accounts.check({
-      owner,
-      account,
-      apps: apps.map((app) => app.id),
-    });
-    return visibleHealth(health, apps);
+export const checkAccount = Effect.gen(function* () {
+  const { owner, account } = yield* AccountGrants.use;
+  const executor = yield* Effect.flatten(HostedExecutor);
+  const policy = yield* CurrentAuthorization;
+  const apps = yield* executor.apps.list({ owner, account }).pipe(
+    Effect.map((apps) => apps.filter((app) => permitsApp(policy, app.id))),
+    Effect.flatMap(visibleApps),
+  );
+  const health = yield* executor.accounts.check({
+    owner,
+    account,
+    apps: apps.map((app) => app.id),
   });
+  return visibleHealth(health, apps);
+});
 /** Check only providers reachable through the caller's app or account access; return no client details. */
 export const oauthSetup = (
   owner: OwnerId,
@@ -121,39 +117,35 @@ export const oauthSetup = (
   });
 
 /** Replace credentials on the same identity so every app keeps its selection. */
-export const reconnectAccount = (owner: OwnerId, account: AccountId) =>
-  Effect.gen(function* () {
-    const executor = yield* Effect.flatten(HostedExecutor);
-    const access = yield* requireAccountAccess(account, "manage");
-    const existing = yield* executor.accounts.get({ owner, account });
-    const destination =
-      access.ownership.kind === "personal" ? ({ kind: "personal" } as const) : access.ownership;
-    yield* checkDestination(destination);
-    return yield* executor.accountConnections
-      .create({
-        owner,
-        account,
-        provider: existing.provider,
-      })
-      .pipe(Effect.flatMap((connection) => recordConnection(connection, destination)));
-  });
+export const reconnectAccount = Effect.gen(function* () {
+  const { owner, account, access } = yield* AccountGrants.reconnect;
+  const executor = yield* Effect.flatten(HostedExecutor);
+  const existing = yield* executor.accounts.get({ owner, account });
+  const destination =
+    access.ownership.kind === "personal" ? ({ kind: "personal" } as const) : access.ownership;
+  yield* checkDestination(destination);
+  return yield* executor.accountConnections
+    .create({
+      owner,
+      account,
+      provider: existing.provider,
+    })
+    .pipe(Effect.flatMap((connection) => recordConnection(connection, destination)));
+});
 /** Delete saved credentials and remove their selections through the transactional lifecycle hook. */
-export const disconnectAccount = (owner: OwnerId, account: AccountId) =>
-  Effect.gen(function* () {
-    const executor = yield* Effect.flatten(HostedExecutor);
-    yield* executor.accounts.get({ owner, account });
-    return yield* executor.accounts.remove({ owner, account });
-  });
+export const disconnectAccount = Effect.gen(function* () {
+  const { owner, account } = yield* AccountGrants.delete;
+  const executor = yield* Effect.flatten(HostedExecutor);
+  yield* executor.accounts.get({ owner, account });
+  return yield* executor.accounts.remove({ owner, account });
+});
 /** Update the label or description using the owner-filtered SDK primitive. */
-export const updateAccount = (
-  owner: OwnerId,
-  account: AccountId,
-  metadata: {
-    readonly label?: string | undefined;
-    readonly description?: string | null | undefined;
-  },
-) =>
+export const updateAccount = (metadata: {
+  readonly label?: string | undefined;
+  readonly description?: string | null | undefined;
+}) =>
   Effect.gen(function* () {
+    const { owner, account } = yield* AccountGrants.rename;
     const executor = yield* Effect.flatten(HostedExecutor);
     return yield* executor.accounts.update({ ...metadata, owner, account });
   });
@@ -251,39 +243,16 @@ export const hostedAccountHandlers = HttpApiBuilder.group(HostedApi, "accounts",
     const api = yield* ApiAuthentication;
     const redirectUri = accountOAuthRedirectUri(auth);
     return handlers
-      .handle("get", ({ params }) =>
-        Effect.gen(function* () {
-          const owner = yield* currentOwner;
-          const data = yield* getAccount(owner, params.account);
-          return {
-            ...data,
-            canManage: (yield* requireAccountAccess(params.account, "read")).canManage,
-          };
-        }),
-      )
+      .handle("get", () => getAccount)
       .handle("checkCredentials", ({ params, payload }) =>
         Effect.flatMap(currentOwner, (owner) =>
           checkCredentials(owner, { app: params.app, ...payload }),
         ),
       )
-      .handle("check", ({ params }) =>
-        Effect.flatMap(currentOwner, (owner) => checkAccount(owner, params.account)),
-      )
-      .handle("reconnect", ({ params }) =>
-        Effect.flatMap(accountManagerOwner(params.account), (owner) =>
-          reconnectAccount(owner, params.account),
-        ),
-      )
-      .handle("disconnect", ({ params }) =>
-        Effect.flatMap(accountManagerOwner(params.account), (owner) =>
-          disconnectAccount(owner, params.account),
-        ),
-      )
-      .handle("update", ({ params, payload }) =>
-        Effect.flatMap(accountManagerOwner(params.account), (owner) =>
-          updateAccount(owner, params.account, payload),
-        ),
-      )
+      .handle("check", () => checkAccount)
+      .handle("reconnect", () => reconnectAccount)
+      .handle("disconnect", () => disconnectAccount)
+      .handle("update", ({ payload }) => updateAccount(payload))
       .handle("oauthSetup", ({ params }) =>
         Effect.flatMap(currentOwner, (owner) =>
           oauthSetup(owner, { provider: params.provider, method: params.method, redirectUri }),

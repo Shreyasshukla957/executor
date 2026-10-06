@@ -328,135 +328,135 @@ export const makeSqlOrmAdapter = (
   const emptyLimit =
     provider === "mysql" ? "18446744073709551615" : provider === "sqlite" ? "-1" : undefined;
 
-  const findManyImpl: (
+  /** The read behind findMany and findFirst; each traces it under its own name. */
+  const findRows: (
     table: AnyTable,
     options: CompiledFindOptions,
-  ) => Effect.Effect<Array<Row>, OrmError, SqlClient> = Effect.fn("FumaDB.SqlQuery.findMany")(
-    function* (table: AnyTable, options: CompiledFindOptions) {
-      const sql = yield* SqlClient;
-      const selectBuilder = extendSelect(options.select);
-      const joinSelections: Array<Selection> = [];
-      const joinClauses: Array<Statement.Fragment> = [];
-      const subQueryJoins: Array<CompiledJoin> = [];
-      const flatJoins: Array<{
-        readonly name: string;
-        readonly idKey: string;
-        readonly cleanup: (record: Row) => void;
-      }> = [];
+  ) => Effect.Effect<Array<Row>, OrmError, SqlClient> = Effect.fnUntraced(function* (
+    table: AnyTable,
+    options: CompiledFindOptions,
+  ) {
+    const sql = yield* SqlClient;
+    const selectBuilder = extendSelect(options.select);
+    const joinSelections: Array<Selection> = [];
+    const joinClauses: Array<Statement.Fragment> = [];
+    const subQueryJoins: Array<CompiledJoin> = [];
+    const flatJoins: Array<{
+      readonly name: string;
+      readonly idKey: string;
+      readonly cleanup: (record: Row) => void;
+    }> = [];
 
-      for (const join of options.join ?? []) {
-        const joinOptions = join.options;
-        const relation = join.relation;
-        // A `many` relation, a join with joins of its own, and a join whose
-        // condition can never match are all resolved after the main query.
-        if (joinOptions === false || relation.type === "many" || joinOptions.join !== undefined) {
-          subQueryJoins.push(join);
-          if (joinOptions !== false) {
-            for (const [left] of relation.on) selectBuilder.extend(left);
-          }
-          continue;
+    for (const join of options.join ?? []) {
+      const joinOptions = join.options;
+      const relation = join.relation;
+      // A `many` relation, a join with joins of its own, and a join whose
+      // condition can never match are all resolved after the main query.
+      if (joinOptions === false || relation.type === "many" || joinOptions.join !== undefined) {
+        subQueryJoins.push(join);
+        if (joinOptions !== false) {
+          for (const [left] of relation.on) selectBuilder.extend(left);
         }
-        const target = relation.table;
-        const alias = relation.name;
-        // The target's id column decides whether the LEFT JOIN matched a row.
-        const joinSelect = extendSelect(joinOptions.select);
-        joinSelect.extend(target.getIdColumn().ormName);
-        const compiledJoinSelect = joinSelect.compile();
-        flatJoins.push({
-          name: alias,
-          idKey: target.getIdColumn().ormName,
-          cleanup: (record) => compiledJoinSelect.removeExtendedKeys(record),
-        });
-        joinSelections.push(
-          ...(yield* mapSelect(compiledJoinSelect.result, target, {
-            relation: alias,
-            tableName: alias,
-          })),
+        continue;
+      }
+      const target = relation.table;
+      const alias = relation.name;
+      // The target's id column decides whether the LEFT JOIN matched a row.
+      const joinSelect = extendSelect(joinOptions.select);
+      joinSelect.extend(target.getIdColumn().ormName);
+      const compiledJoinSelect = joinSelect.compile();
+      flatJoins.push({
+        name: alias,
+        idKey: target.getIdColumn().ormName,
+        cleanup: (record) => compiledJoinSelect.removeExtendedKeys(record),
+      });
+      joinSelections.push(
+        ...(yield* mapSelect(compiledJoinSelect.result, target, {
+          relation: alias,
+          tableName: alias,
+        })),
+      );
+      const on: Array<Statement.Fragment> = [];
+      for (const [left, right] of relation.on) {
+        const leftColumn = yield* columnOf(table, left);
+        const rightColumn = yield* columnOf(target, right);
+        on.push(
+          sql`${sql(`${table.names.sql}.${leftColumn.names.sql}`)} = ${sql(`${alias}.${rightColumn.names.sql}`)}`,
         );
-        const on: Array<Statement.Fragment> = [];
-        for (const [left, right] of relation.on) {
-          const leftColumn = yield* columnOf(table, left);
-          const rightColumn = yield* columnOf(target, right);
-          on.push(
-            sql`${sql(`${table.names.sql}.${leftColumn.names.sql}`)} = ${sql(`${alias}.${rightColumn.names.sql}`)}`,
-          );
-        }
-        if (joinOptions.where !== undefined) {
-          on.push(
-            yield* Effect.fromResult(
-              buildWhere(joinOptions.where, sql, provider, (t) =>
-                t === target ? alias : defaultAlias(t),
-              ),
+      }
+      if (joinOptions.where !== undefined) {
+        on.push(
+          yield* Effect.fromResult(
+            buildWhere(joinOptions.where, sql, provider, (t) =>
+              t === target ? alias : defaultAlias(t),
             ),
-          );
-        }
-        joinClauses.push(
-          sql`LEFT JOIN ${sql(target.names.sql)} AS ${sql(alias)} ON ${sql.and(on)}`,
+          ),
         );
       }
+      joinClauses.push(sql`LEFT JOIN ${sql(target.names.sql)} AS ${sql(alias)} ON ${sql.and(on)}`);
+    }
 
-      const compiledSelect = selectBuilder.compile();
-      const selections = [
-        ...joinSelections,
-        ...(yield* mapSelect(compiledSelect.result, table, { tableName: table.names.sql })),
-        ...options.computed.map((item) => computedSelect(sql, provider, item, table)),
-      ];
+    const compiledSelect = selectBuilder.compile();
+    const selections = [
+      ...joinSelections,
+      ...(yield* mapSelect(compiledSelect.result, table, { tableName: table.names.sql })),
+      ...options.computed.map((item) => computedSelect(sql, provider, item, table)),
+    ];
 
-      const useTop =
-        provider === "mssql" && options.limit !== undefined && options.offset === undefined;
-      const parts: Array<Statement.Fragment> = [
-        useTop && options.limit !== undefined
-          ? sql`SELECT TOP (${sql.literal(yield* rowCount(options.limit, "limit"))}) ${selectList(sql, selections)}`
-          : sql`SELECT ${selectList(sql, selections)}`,
-        sql`FROM ${sql(table.names.sql)}`,
-        ...joinClauses,
-      ];
-      if (options.where !== undefined) parts.push(yield* whereClause(sql, options.where));
+    const useTop =
+      provider === "mssql" && options.limit !== undefined && options.offset === undefined;
+    const parts: Array<Statement.Fragment> = [
+      useTop && options.limit !== undefined
+        ? sql`SELECT TOP (${sql.literal(yield* rowCount(options.limit, "limit"))}) ${selectList(sql, selections)}`
+        : sql`SELECT ${selectList(sql, selections)}`,
+      sql`FROM ${sql(table.names.sql)}`,
+      ...joinClauses,
+    ];
+    if (options.where !== undefined) parts.push(yield* whereClause(sql, options.where));
 
-      const orderBy =
-        options.orderBy ??
-        (provider === "mssql" && options.offset !== undefined
-          ? [[table.getIdColumn(), "asc"] as const]
-          : undefined);
-      if (orderBy !== undefined && orderBy.length > 0) parts.push(orderByFragment(sql, orderBy));
+    const orderBy =
+      options.orderBy ??
+      (provider === "mssql" && options.offset !== undefined
+        ? [[table.getIdColumn(), "asc"] as const]
+        : undefined);
+    if (orderBy !== undefined && orderBy.length > 0) parts.push(orderByFragment(sql, orderBy));
 
-      if (!useTop) {
-        if (provider === "mssql") {
-          if (options.offset !== undefined) {
-            parts.push(sql`OFFSET ${sql.literal(yield* rowCount(options.offset, "offset"))} ROWS`);
-            if (options.limit !== undefined) {
-              parts.push(
-                sql`FETCH NEXT ${sql.literal(yield* rowCount(options.limit, "limit"))} ROWS ONLY`,
-              );
-            }
+    if (!useTop) {
+      if (provider === "mssql") {
+        if (options.offset !== undefined) {
+          parts.push(sql`OFFSET ${sql.literal(yield* rowCount(options.offset, "offset"))} ROWS`);
+          if (options.limit !== undefined) {
+            parts.push(
+              sql`FETCH NEXT ${sql.literal(yield* rowCount(options.limit, "limit"))} ROWS ONLY`,
+            );
           }
-        } else {
-          if (options.limit !== undefined)
-            parts.push(sql`LIMIT ${sql.literal(yield* rowCount(options.limit, "limit"))}`);
-          else if (options.offset !== undefined && emptyLimit !== undefined)
-            parts.push(sql`LIMIT ${sql.literal(emptyLimit)}`);
-          if (options.offset !== undefined)
-            parts.push(sql`OFFSET ${sql.literal(yield* rowCount(options.offset, "offset"))}`);
         }
+      } else {
+        if (options.limit !== undefined)
+          parts.push(sql`LIMIT ${sql.literal(yield* rowCount(options.limit, "limit"))}`);
+        else if (options.offset !== undefined && emptyLimit !== undefined)
+          parts.push(sql`LIMIT ${sql.literal(emptyLimit)}`);
+        if (options.offset !== undefined)
+          parts.push(sql`OFFSET ${sql.literal(yield* rowCount(options.offset, "offset"))}`);
       }
+    }
 
-      const rows = yield* sql<RawRow>`${spaced(parts)}`;
-      const records = yield* decodeRows(rows, table, options.computed);
-      // A LEFT JOIN that matched nothing yields a row of NULLs; report it as no row.
-      for (const record of records) {
-        for (const join of flatJoins) {
-          const joined = record[join.name];
-          if (typeof joined !== "object" || joined === null) continue;
-          const nested = joined as Row;
-          if (nested[join.idKey] === null) record[join.name] = null;
-          else join.cleanup(nested);
-        }
+    const rows = yield* sql<RawRow>`${spaced(parts)}`;
+    const records = yield* decodeRows(rows, table, options.computed);
+    // A LEFT JOIN that matched nothing yields a row of NULLs; report it as no row.
+    for (const record of records) {
+      for (const join of flatJoins) {
+        const joined = record[join.name];
+        if (typeof joined !== "object" || joined === null) continue;
+        const nested = joined as Row;
+        if (nested[join.idKey] === null) record[join.name] = null;
+        else join.cleanup(nested);
       }
-      yield* Effect.forEach(subQueryJoins, (join) => runSubQueryJoin(records, join));
-      for (const record of records) compiledSelect.removeExtendedKeys(record);
-      return records;
-    },
-  );
+    }
+    yield* Effect.forEach(subQueryJoins, (join) => runSubQueryJoin(records, join));
+    for (const record of records) compiledSelect.removeExtendedKeys(record);
+    return records;
+  });
 
   /**
    * Attach a relation that cannot be a flat left join (a `many` relation, or
@@ -558,12 +558,22 @@ export const makeSqlOrmAdapter = (
   const matches = (record: Row, subRecord: Row, relation: AnyRelation): boolean =>
     relation.on.every(([left, right]) => Equal.equals(record[left], subRecord[right]));
 
+  const findManyImpl: (
+    table: AnyTable,
+    options: CompiledFindOptions,
+  ) => Effect.Effect<Array<Row>, OrmError, SqlClient> = Effect.fn("FumaDB.SqlQuery.findMany")(
+    function* (table: AnyTable, options: CompiledFindOptions) {
+      return yield* findRows(table, options);
+    },
+  );
+
+  // One span per call: a nested findMany span would repeat this one's interval.
   const findFirstImpl: (
     table: AnyTable,
     options: CompiledFindOptions,
   ) => Effect.Effect<Row | null, OrmError, SqlClient> = Effect.fn("FumaDB.SqlQuery.findFirst")(
     function* (table: AnyTable, options: CompiledFindOptions) {
-      const records = yield* findManyImpl(table, { ...options, limit: 1 });
+      const records = yield* findRows(table, { ...options, limit: 1 });
       return records[0] ?? null;
     },
   );

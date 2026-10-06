@@ -21,6 +21,7 @@ import { deployEmulator, serveEmulator } from "./perf/emulator-host.ts";
 import { compareLoad, loadTable, runLoad, type LoadWindow } from "./perf/load.ts";
 import { Observation, observe, summarizeObservations } from "./perf/observer.ts";
 import { sqlStats } from "./perf/sql-stats.ts";
+import { runIdle } from "./perf/idle.ts";
 
 const stage = Command.make(
   "stage",
@@ -169,6 +170,40 @@ const compare = Command.make(
         rounds: input.rounds,
         spacingMs: input.spacing,
         results,
+      });
+    }),
+);
+
+const idle = Command.make(
+  "idle",
+  {
+    control: Flag.String("control"),
+    receipt: Flag.String("receipt"),
+    output: Flag.String("output"),
+    org: Flag.String("org").pipe(Flag.withDefault("a8f")),
+    gaps: Flag.String("gaps").pipe(Flag.withDefault("5,20,60,120")),
+    rounds: Flag.Int("rounds").pipe(Flag.withDefault(5)),
+  },
+  (input) =>
+    Effect.gen(function* () {
+      const control = yield* readStageControl(input.control);
+      const receipt = yield* readReceipt(input.receipt);
+      const target = yield* makeTarget(control.slug, control, receipt);
+      const startedAt = new Date().toISOString();
+      const samples = yield* runIdle({
+        target,
+        org: input.org,
+        gaps: input.gaps.split(",").map(Number),
+        rounds: input.rounds,
+      });
+      yield* writeJson(input.output, {
+        kind: "perf-idle",
+        origin: control.origin,
+        slug: control.slug,
+        commit: control.commit,
+        startedAt,
+        finishedAt: new Date().toISOString(),
+        samples,
       });
     }),
 );
@@ -403,6 +438,7 @@ const root = Command.make("perf").pipe(
     seed,
     list,
     run,
+    idle,
     compare,
     flamechart,
     table,

@@ -74,6 +74,12 @@ class CurrentAppUi extends Context.Service<
 >()("hosted/CurrentAppUi") {}
 
 const unavailable = () => new UiFailed({ reason: "unavailable" });
+/** Anonymous fetches cannot serve app content; browser navigations still start sign-in. */
+const anonymousNonNavigation = (request: HttpServerRequest.HttpServerRequest, cookieName: string) =>
+  (request.method === "GET" || request.method === "HEAD") &&
+  request.headers["sec-fetch-mode"] !== "navigate" &&
+  !request.headers.accept?.includes("text/html") &&
+  !Object.hasOwn(request.cookies, cookieName);
 const accountIds = (accounts: SelectedAccounts) =>
   Object.values(accounts).flatMap((value) => (typeof value === "string" ? [value] : value));
 const privateJson = (value: unknown, status = 200) =>
@@ -478,8 +484,11 @@ export const hostedAppUi = <R = never>(
     });
   }).pipe(htmlFailure);
   const page = Effect.gen(function* () {
-    const resolved = yield* target;
     const request = yield* HttpServerRequest.HttpServerRequest;
+    const host = addresses.fromHost(request.headers.host);
+    if (Option.isSome(host) && anonymousNonNavigation(request, sessionCookie(host.value.origin)))
+      return yield* new UiForbidden();
+    const resolved = yield* target;
     const navigation =
       request.method === "GET" &&
       (request.headers["sec-fetch-mode"] === "navigate" ||
@@ -535,7 +544,7 @@ export const hostedAppUi = <R = never>(
             ),
         ),
         (item) =>
-          checkAccounts(executor, current.access.owner, item.accounts).pipe(
+          checkAccounts(current.access.owner, item.accounts).pipe(
             Effect.as(true),
             Effect.catchTags({
               OrganizationForbidden: () => Effect.succeed(false),

@@ -116,6 +116,8 @@ const siteBuild = Effect.gen(function* () {
     const lines = new Set<string>();
     for (const asset of pageAssets) {
       if (!asset.relative.endsWith(".html")) continue;
+      // The Worker serves 404.html for unmatched routes; it is not a page of its own.
+      if (asset.relative === "404.html") continue;
       const relative = `${prefix}${asset.relative.replaceAll(path.sep, "/")}`;
       const withoutPage = relative.endsWith("/index.html")
         ? relative.slice(0, -"/index.html".length)

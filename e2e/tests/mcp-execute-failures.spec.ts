@@ -1,6 +1,14 @@
 /** Failed and timed-out MCP executions report what happened instead of losing it. */
 import { expect, layer } from "@effect/vitest";
-import { Clock, Effect, Redacted, Schema } from "effect";
+import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
+import { Clock, Effect, Layer, Redacted, Ref, Schema } from "effect";
+import {
+  HttpRouter,
+  HttpServer,
+  HttpServerRequest,
+  HttpServerResponse,
+} from "effect/unstable/http";
+import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { scenarios } from "../test-plan.ts";
 import { Api, body } from "../support/api.ts";
@@ -54,6 +62,150 @@ export default defineApp({ accounts: { service } }, async () => ({ tools: router
    read: query({ input: object({}), description: "Read an item" }, async () => "item"),
  }) }));`;
 
+// An error with no message whose own fields say what went wrong, as a spec compiler throws it.
+const specInvalid = `class SpecInvalid extends Error {
+  constructor() {
+    super("");
+    this.name = "SpecInvalid";
+    this.code = "server_url";
+    this.reason = "Server URLs must use HTTPS";
+    this.pointer = "/servers/0/url";
+  }
+}`;
+
+// The factory throws, so the whole app is unavailable.
+const throwingAppSource = `import { defineApp } from "apps";
+${specInvalid}
+export default defineApp({ accounts: {} }, async () => {
+  throw new SpecInvalid();
+});`;
+
+// Only one nested router throws; the rest of the app loads.
+const throwingRouterSource = `import { defineApp, dynamicRouter, object, query, router } from "apps";
+${specInvalid}
+export default defineApp({ accounts: {} }, async () => ({
+  tools: router({
+    ping: query({ input: object({}), description: "Answer pong" }, async () => "pong"),
+    spec: dynamicRouter({
+      list: async () => {
+        throw new SpecInvalid();
+      },
+      resolve: async () => undefined,
+    }),
+  }),
+}));`;
+
+/** What a server says when it refuses a client it has not enabled, with a link to fix it. */
+const refusal =
+  "App is not enabled for MCP server access. Enable it in the app settings: https://mcp.example.test/apps/settings";
+
+/** What a server says when a tool rejects its arguments. */
+const invalidArguments = "Invalid arguments for tool lookup: item is required";
+
+/**
+ * Which requests the server answers with a JSON-RPC error: every request with HTTP 400, tool calls
+ * with HTTP 400, the session a tool call opens with HTTP 400, or tool calls inside a successful
+ * response. Only a tool call's session offers elicitation, so its initialize is told apart by that.
+ */
+type Refusal = "everything" | "tool-calls" | "call-sessions" | "tool-arguments";
+
+/** The JSON-RPC fields this fixture reads. */
+const JsonRpcRequest = Schema.Struct({
+  id: Schema.optional(Schema.Union([Schema.String, Schema.Number])),
+  method: Schema.String,
+  params: Schema.optional(
+    Schema.Struct({
+      protocolVersion: Schema.optional(Schema.String),
+      capabilities: Schema.optional(
+        Schema.Struct({ elicitation: Schema.optional(Schema.Unknown) }),
+      ),
+    }),
+  ),
+});
+
+/** An MCP server with one `lookup` tool that refuses the requests `refuse` selects. */
+const refusingMcpServer = Effect.gen(function* () {
+  const refuses = yield* Ref.make<Refusal>("everything");
+  const answer = (id: string | number | null, body: object, status = 200) =>
+    HttpServerResponse.json({ jsonrpc: "2.0", id, ...body }, { status });
+  const refused = (id: string | number | null) =>
+    answer(id, { error: { code: -32600, message: refusal } }, 400);
+  const handler = Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const refusing = yield* Ref.get(refuses);
+    if (refusing === "everything") return yield* refused(null);
+    if (request.method !== "POST") return HttpServerResponse.empty({ status: 405 });
+    const message = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(JsonRpcRequest))(
+      yield* request.text,
+    );
+    if (message.id === undefined) return HttpServerResponse.empty({ status: 202 });
+    switch (message.method) {
+      case "initialize":
+        if (refusing === "call-sessions" && message.params?.capabilities?.elicitation !== undefined)
+          return yield* refused(message.id);
+        return yield* answer(message.id, {
+          result: {
+            protocolVersion: message.params?.protocolVersion,
+            capabilities: { tools: {} },
+            serverInfo: { name: "Refusing fixture", version: "1.0.0" },
+          },
+        });
+      case "tools/list":
+        return yield* answer(message.id, {
+          result: {
+            tools: [
+              { name: "lookup", description: "Look up an item", inputSchema: { type: "object" } },
+            ],
+          },
+        });
+      case "tools/call":
+        if (refusing === "tool-calls") return yield* refused(message.id);
+        if (refusing === "tool-arguments")
+          return yield* answer(message.id, {
+            error: { code: -32602, message: invalidArguments },
+          });
+        return yield* answer(message.id, {
+          result: { content: [{ type: "text", text: "found" }] },
+        });
+      default:
+        return yield* answer(message.id, {
+          error: { code: -32601, message: "Method not found" },
+        });
+    }
+  });
+  const services = yield* Layer.build(
+    HttpRouter.serve(HttpRouter.add("*", "/mcp", handler), {
+      disableLogger: true,
+      disableListenLog: true,
+    }).pipe(Layer.provideMerge(NodeHttpServer.layer(createServer, { host: "127.0.0.1", port: 0 }))),
+  );
+  const server = yield* HttpServer.HttpServer.pipe(Effect.provideContext(services));
+  if (!("port" in server.address)) return yield* Effect.die("Fixture must listen on TCP");
+  return {
+    url: `http://127.0.0.1:${server.address.port}/mcp`,
+    refuse: (requests: Refusal) => Ref.set(refuses, requests),
+  };
+});
+
+/** An app whose only tools come from the MCP server at `url`. */
+const mcpAppFiles = (url: string) => [
+  {
+    path: "package.json",
+    content: JSON.stringify({ dependencies: withApps({ "@modelcontextprotocol/sdk": "1.30.0" }) }),
+  },
+  {
+    path: "index.ts",
+    content: `import { defineApp } from "apps";
+import { mcpRouter } from "apps/mcp";
+export default defineApp({ accounts: {} }, async () => ({ tools: await mcpRouter({ url: ${JSON.stringify(url)} }) }));`,
+  },
+];
+
+/** The safe JSON projection MCP puts in an unavailable app's reason. */
+const Diagnostic = Schema.fromJsonString(
+  Schema.Struct({ code: Schema.String, status: Schema.Number, message: Schema.String }),
+);
+
 const Failed = Schema.Struct({
   status: Schema.Literal("completed"),
   execution: Schema.Struct({
@@ -64,8 +216,21 @@ const Failed = Schema.Struct({
       response: Schema.optional(Schema.Struct({ code: Schema.String, status: Schema.Number })),
     }),
   }),
-  unavailableApps: Schema.Array(Schema.Struct({ app: Schema.String, reason: Schema.String })),
+  unavailableApps: Schema.Array(
+    Schema.Struct({
+      app: Schema.String,
+      reason: Schema.String,
+      router: Schema.optional(Schema.String),
+    }),
+  ),
 });
+
+/** The thrown error's name, code and fields reach the agent, not only that evaluation failed. */
+const expectThrownDetail = (text: string) => {
+  expect(text).toContain("The app threw SpecInvalid (server_url)");
+  expect(text).toContain('reason: "Server URLs must use HTTPS"');
+  expect(text).toContain('pointer: "/servers/0/url"');
+};
 
 const Completed = Schema.Struct({
   status: Schema.Literal("completed"),
@@ -174,6 +339,13 @@ return await ${app}.approved({});`,
 
 /** Deploy an app in the hosted organization and connect a PAT MCP client to it. */
 const hostedApp = (name: string, source: string) =>
+  hostedAppFiles(name, [{ path: "index.ts", content: source }, appsManifest]);
+
+/** Deploy these files as a hosted app and connect a PAT MCP client to it. */
+const hostedAppFiles = (
+  name: string,
+  files: ReadonlyArray<{ readonly path: string; readonly content: string }>,
+) =>
   Effect.gen(function* () {
     const api = yield* Api,
       actors = yield* Actors,
@@ -185,7 +357,7 @@ const hostedApp = (name: string, source: string) =>
     );
     const deployed = yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
       name: `${name} ${randomUUID().slice(0, 8)}`,
-      files: [{ path: "index.ts", content: source }, appsManifest],
+      files,
     });
     expect(deployed.status).toBe(200);
     const app = yield* body(App, deployed);
@@ -198,7 +370,7 @@ const hostedApp = (name: string, source: string) =>
     const client = yield* mcp.connect(key.key, name.toLowerCase().replaceAll(" ", "-"), {
       organization: actors.organization.id,
     });
-    return { client, slug: app.slug };
+    return { client, slug: app.slug, id: app.id, path: `${prefix}/apps/${app.id}` };
   });
 
 /** Deploy an app on local and connect an MCP client with the local API key. */
@@ -327,6 +499,85 @@ layer(HostedLive, { excludeTestServices: true })("Hosted MCP execute failures", 
       }).pipe(Effect.provide(McpClient.layer)),
     ),
   );
+  it.effect(scenarios.mcpExecuteAppThrew.title, (context) =>
+    withHostedCase(
+      context,
+      Effect.gen(function* () {
+        const api = yield* Api,
+          actors = yield* Actors;
+        const whole = yield* hostedApp("Throwing app", throwingAppSource);
+        // The HTTP error keeps the thrown error's name, code and fields as data.
+        const index = yield* api.request(actors.owner, "GET", `${whole.path}/tools/index`);
+        expect(index.status).toBe(502);
+        const failure = yield* body(
+          Schema.Struct({
+            _tag: Schema.Literal("AppEvaluationFailed"),
+            message: Schema.String,
+            failure: Schema.Struct({
+              source: Schema.String,
+              errorName: Schema.String,
+              code: Schema.optional(Schema.String),
+              fields: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+            }),
+          }),
+          index,
+        );
+        expect(failure.failure).toMatchObject({
+          source: "app",
+          errorName: "SpecInvalid",
+          code: "server_url",
+          fields: { reason: "Server URLs must use HTTPS", pointer: "/servers/0/url" },
+        });
+        expectThrownDetail(failure.message);
+        // A call into the app reports the same detail, both in the diagnostic and the error.
+        const root = yield* executeOnce(
+          whole.client,
+          "Call a tool of an app whose factory threw",
+          `return await tools[${JSON.stringify(whole.slug)}].anything({});`,
+          "app-threw-result.json",
+        );
+        const failedRoot = yield* Schema.decodeUnknownEffect(Failed)(root.structured);
+        const rootReason = failedRoot.unavailableApps.find((entry) => entry.app === whole.id);
+        if (rootReason === undefined) return yield* Effect.die("The app was not reported");
+        const rootDiagnostic = yield* Schema.decodeUnknownEffect(Diagnostic)(rootReason.reason);
+        expect(rootDiagnostic.code).toBe("AppEvaluationFailed");
+        expectThrownDetail(rootDiagnostic.message);
+        expectThrownDetail(failedRoot.execution.error.message);
+
+        // A nested router that throws is reported at its own namespace with the same detail.
+        const nested = yield* hostedApp("Throwing router", throwingRouterSource);
+        const searched = yield* executeOnce(
+          nested.client,
+          "Search an app whose nested router threw",
+          `return await tools.search({ query: "pong", namespace: ${JSON.stringify(nested.slug)} });`,
+          "router-threw-search.json",
+        );
+        const search = yield* Schema.decodeUnknownEffect(
+          Schema.Struct({
+            execution: Schema.Struct({ ok: Schema.Literal(true), value: Schema.Unknown }),
+            unavailableApps: Failed.fields.unavailableApps,
+          }),
+        )(searched.structured);
+        expect(JSON.stringify(search.execution.value)).toContain(".ping");
+        const routerReason = search.unavailableApps.find(
+          (entry) => entry.app === nested.id && entry.router === "spec",
+        );
+        if (routerReason === undefined) return yield* Effect.die("The router was not reported");
+        const routerDiagnostic = yield* Schema.decodeUnknownEffect(Diagnostic)(routerReason.reason);
+        expect(routerDiagnostic.code).toBe("AppEvaluationFailed");
+        expectThrownDetail(routerDiagnostic.message);
+        const called = yield* executeOnce(
+          nested.client,
+          "Call a tool under the router that threw",
+          `return await tools[${JSON.stringify(nested.slug)}].spec.anything({});`,
+          "router-threw-call.json",
+        );
+        expectThrownDetail(
+          (yield* Schema.decodeUnknownEffect(Failed)(called.structured)).execution.error.message,
+        );
+      }).pipe(Effect.provide(McpClient.layer)),
+    ),
+  );
   it.effect(scenarios.mcpExecuteServerRefused.title, (context) =>
     withHostedCase(
       context,
@@ -389,6 +640,109 @@ export default defineApp({ accounts: {} }, async () => ({ tools: await mcpRouter
         expect(failed.execution.error.message).toContain("HTTP 404");
         // A deterministic refusal fails without waiting for a connection timeout.
         expect(elapsed).toBeLessThan(10_000);
+
+        // A server that refuses with a JSON-RPC error has its code and message reported, such as
+        // a client app it has not enabled, with the settings link that enables it.
+        const refusing = yield* hostedAppFiles(
+          "JSON-RPC refusal",
+          mcpAppFiles((yield* refusingMcpServer).url),
+        );
+        const index = yield* api.request(actors.owner, "GET", `${refusing.path}/tools/index`);
+        expect(index.status).toBe(502);
+        expect(index.body).toMatchObject({
+          _tag: "AppEvaluationFailed",
+          mcp: {
+            phase: "connect",
+            reason: "request",
+            status: 400,
+            upstream: { code: -32600, message: refusal },
+          },
+        });
+        const rejected = yield* executeOnce(
+          refusing.client,
+          "Call a tool of an app whose MCP server answers with a JSON-RPC error",
+          `return await tools[${JSON.stringify(refusing.slug)}].anything({});`,
+          "json-rpc-refusal.json",
+        );
+        const refused = yield* Schema.decodeUnknownEffect(Failed)(rejected.structured);
+        const entry = refused.unavailableApps.find((entry) => entry.app === refusing.id);
+        if (entry === undefined) return yield* Effect.die("The app was not reported");
+        const diagnostic = yield* Schema.decodeUnknownEffect(Diagnostic)(entry.reason);
+        expect(diagnostic.message).toContain("refused the request while connecting (HTTP 400)");
+        const stated = `JSON-RPC error -32600: ${JSON.stringify(refusal)}`;
+        expect(diagnostic.message).toContain(stated);
+        expect(refused.execution.error.message).toContain(stated);
+      }).pipe(Effect.provide(McpClient.layer)),
+    ),
+  );
+  it.effect(scenarios.mcpExecuteCallRefused.title, (context) =>
+    withHostedCase(
+      context,
+      Effect.gen(function* () {
+        const api = yield* Api,
+          actors = yield* Actors;
+        const server = yield* refusingMcpServer;
+        // The server lists its tool and refuses only what each step selects.
+        yield* server.refuse("tool-calls");
+        const app = yield* hostedAppFiles("JSON-RPC call refusal", mcpAppFiles(server.url));
+        const lookup = (label: string, file: string) =>
+          executeOnce(
+            app.client,
+            label,
+            `return await tools[${JSON.stringify(app.slug)}].lookup({});`,
+            file,
+          ).pipe(
+            Effect.flatMap(({ structured }) => Schema.decodeUnknownEffect(Failed)(structured)),
+            Effect.map(({ execution }) => execution.error.message),
+          );
+        const refused = `JSON-RPC error -32600: ${JSON.stringify(refusal)}`;
+
+        // A refused tools/call fails the call, with the server's own error, not as an app error.
+        const called = yield* api.request(actors.owner, "POST", `${app.path}/tools/call`, {
+          tool: "lookup",
+          input: {},
+        });
+        expect(called.status, JSON.stringify(called.body)).toBe(502);
+        expect(called.body).toMatchObject({
+          _tag: "ToolCallFailed",
+          mcp: {
+            phase: "call",
+            reason: "request",
+            status: 400,
+            upstream: { code: -32600, message: refusal },
+          },
+        });
+        const callRefused = yield* lookup(
+          "Call a tool whose MCP server refuses tools/call with a JSON-RPC error",
+          "json-rpc-call-refused.json",
+        );
+        expect(callRefused).toContain("ToolCallFailed");
+        expect(callRefused).toContain("refused the request while calling a tool (HTTP 400)");
+        expect(callRefused).toContain(refused);
+        expect(callRefused).not.toContain("The app threw");
+
+        // An error inside a successful response, such as arguments the tool rejects.
+        yield* server.refuse("tool-arguments");
+        const argumentsRejected = yield* lookup(
+          "Call a tool whose MCP server answers with a JSON-RPC error in its response",
+          "json-rpc-call-error.json",
+        );
+        expect(argumentsRejected).toContain("returned an error while calling a tool");
+        expect(argumentsRejected).toContain(
+          `JSON-RPC error -32602: ${JSON.stringify(invalidArguments)}`,
+        );
+        expect(argumentsRejected).not.toContain("could not reach");
+
+        // Each call opens its own session. A server that refuses it reports why, also when the
+        // app's tool listing is kept and not read again.
+        yield* server.refuse("call-sessions");
+        const sessionRefused = yield* lookup(
+          "Call a tool whose MCP server refuses the call's session with a JSON-RPC error",
+          "json-rpc-call-session-refused.json",
+        );
+        expect(sessionRefused).toContain("refused the request while connecting (HTTP 400)");
+        expect(sessionRefused).toContain(refused);
+        expect(sessionRefused).not.toContain("The app threw");
       }).pipe(Effect.provide(McpClient.layer)),
     ),
   );

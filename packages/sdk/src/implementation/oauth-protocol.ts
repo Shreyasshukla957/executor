@@ -573,6 +573,18 @@ const jsonBody = (headers: HeadersInit | undefined, body: URLSearchParams) => {
   return { headers: json, body: JSON.stringify(Object.fromEntries(body)) };
 };
 
+/**
+ * A token or revocation request as RFC 6749's form, labeled with the bare media type its examples
+ * use. The `application/x-www-form-urlencoded` registration defines no parameters, but
+ * oauth4webapi adds `;charset=UTF-8`. Ahrefs compares the whole header and refuses that label
+ * with a non-OAuth error body, so no sign-in could complete.
+ */
+const formBody = (headers: HeadersInit | undefined, body: URLSearchParams) => {
+  const form = new Headers(headers);
+  form.set("content-type", "application/x-www-form-urlencoded");
+  return { headers: form, body };
+};
+
 /** Resolve protocol operations against one host-supplied Effect HTTP client. */
 export const makeOAuthProtocol = (options: OAuthOptions) => {
   // This callback is the external library boundary, not an internal Promise implementation.
@@ -594,8 +606,8 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
               HttpClientRequest.fromWeb(
                 new Request(destination, {
                   method: init.method,
-                  ...(format === "json" && init.body instanceof URLSearchParams
-                    ? jsonBody(init.headers, init.body)
+                  ...(init.body instanceof URLSearchParams
+                    ? (format === "json" ? jsonBody : formBody)(init.headers, init.body)
                     : {
                         headers: init.headers,
                         ...(init.body === undefined ? {} : { body: init.body }),

@@ -37,7 +37,7 @@ export const hostedWebhookHandlers = HttpApiBuilder.group(HostedApi, "webhooks",
           const subscription = yield* executor.webhooks.get(params);
           if (subscription.profile !== null)
             yield* ownProfile(executor, owner, params.app, subscription.profile);
-          yield* checkAccounts(executor, owner, subscription.accounts);
+          yield* checkAccounts(owner, subscription.accounts);
           return subscription;
         }),
       )
@@ -64,7 +64,7 @@ export const hostedWebhookHandlers = HttpApiBuilder.group(HostedApi, "webhooks",
             saved.profile ?? undefined,
           );
           yield* executor.apps.get({ owner, app: params.app });
-          yield* checkAccounts(executor, owner, (yield* executor.webhooks.get(params)).accounts);
+          yield* checkAccounts(owner, (yield* executor.webhooks.get(params)).accounts);
           yield* executor.webhookSetup.read(params);
           const request = yield* HttpServerRequest.HttpServerRequest;
           const headers = new Headers(request.headers);
@@ -97,7 +97,7 @@ export const hostedWebhookHandlers = HttpApiBuilder.group(HostedApi, "webhooks",
             Effect.gen(function* () {
               if (subscription.profile !== null)
                 yield* ownProfile(executor, owner, params.app, subscription.profile);
-              yield* checkAccounts(executor, owner, subscription.accounts);
+              yield* checkAccounts(owner, subscription.accounts);
             }).pipe(
               Effect.as(true),
               Effect.catchTag("OrganizationForbidden", () => Effect.succeed(false)),
@@ -126,7 +126,7 @@ export const hostedWebhookHandlers = HttpApiBuilder.group(HostedApi, "webhooks",
           const subscription = yield* executor.webhooks.get(params);
           if (subscription.profile !== null)
             yield* ownProfile(executor, owner, params.app, subscription.profile);
-          yield* checkAccounts(executor, owner, subscription.accounts);
+          yield* checkAccounts(owner, subscription.accounts);
           return yield* executor.webhooks.reconcile(params);
         }),
       )
@@ -143,7 +143,7 @@ export const hostedWebhookHandlers = HttpApiBuilder.group(HostedApi, "webhooks",
           const subscription = yield* executor.webhooks.get(params);
           if (subscription.profile !== null)
             yield* ownProfile(executor, owner, params.app, subscription.profile);
-          yield* checkAccounts(executor, owner, subscription.accounts);
+          yield* checkAccounts(owner, subscription.accounts);
           return yield* executor.webhooks.remove(params);
         }),
       );

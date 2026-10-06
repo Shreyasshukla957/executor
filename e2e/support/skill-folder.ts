@@ -20,6 +20,8 @@ const Bundle = Schema.Struct({
 export const skillDocument = (name: string) =>
   `---\nname: ${name}\ndescription: Packaged instructions.\nmetadata:\n  version: "1"\n---\n# ${name}`;
 const packaged = [
+  // Loose files beside skill directories are not skills.
+  { path: "skills/README.md", content: "# Skills\n" },
   { path: "skills/local-guide/SKILL.md", content: skillDocument("local-guide") },
   { path: "skills/local-guide/references/example.md", content: "Packaged reference" },
   { path: "guides/extra-guide/SKILL.md", content: skillDocument("extra-guide") },

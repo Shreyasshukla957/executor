@@ -1,11 +1,4 @@
-import {
-  HostEvaluationFailed,
-  McpError,
-  ProviderError,
-  SkillLoadFailed,
-  type HostedTool,
-  type HostedToolSummary,
-} from "apps/contracts";
+import { ProviderError } from "apps/contracts";
 import { appProviderFailure } from "./provider-error.ts";
 import { grantedDefinition } from "./provider.ts";
 /** Snapshot the configured app, then execute with its selected credentials. */
@@ -38,9 +31,11 @@ import { OAuthReconnectRequired } from "../contracts/oauth.ts";
 import type { makeOAuth } from "./oauth.ts";
 import {
   AppEvaluationFailed,
-  type AppFailure,
+  appFailure,
   appFailureText,
+  evaluationFailure,
   InputInvalid,
+  operationMcpFailure,
   ToolCallFailed,
   ToolNotFound,
   ToolKindMismatch,
@@ -54,6 +49,8 @@ import {
   type ToolInvocationOptions,
   type ToolListOptions,
   type ToolResumeResult,
+  type Tool,
+  type ToolSummary,
 } from "../contracts/tools.ts";
 import type { ExecutorDatabase } from "./storage.ts";
 import { type Credentials, StoredApp, StoredDeployment } from "../contracts/storage.ts";
@@ -168,34 +165,38 @@ export function snapshot(
 /** Resolve current credentials without holding a database transaction open. */
 export function resolve(
   state: Effect.Success<ReturnType<typeof snapshot>>,
-  resolveAccount: ReturnType<typeof makeOAuth>["resolve"],
+  resolveAccount: ReturnType<typeof makeOAuth>["resolveSelected"],
   lifecycle?: ResourceLifecycle,
 ) {
   return Effect.gen(function* () {
     if (state.profile !== undefined && lifecycle?.profileResolving)
       yield* lifecycle.profileResolving(state.profile);
     const selections = new Map<string, ResolvedAccounts[string]>();
-    // An account selected for several slots is resolved once per invocation. A token renewed
-    // for one slot is the token every slot uses, even when it already falls inside the
-    // refresh-ahead window, so one invocation never renews the same grant twice.
-    const credentials = new Map<string, Effect.Success<ReturnType<typeof resolveAccount>>>();
+    // An account selected for several slots is resolved once per invocation, in selection
+    // order. A token renewed for one slot is the token every slot uses, even when it already
+    // falls inside the refresh-ahead window, so one invocation never renews the same grant twice.
+    const distinct = new Map<AccountId, Parameters<typeof resolveAccount>[0][number]>();
+    for (const { required, accounts } of state.selections)
+      for (const account of accounts)
+        if (!distinct.has(account.id))
+          distinct.set(account.id, { account, provider: required.definition });
+    const resolvedFields = yield* resolveAccount([...distinct.values()]);
+    const credentials = new Map(
+      [...distinct.keys()].map((id, index) => [id, resolvedFields[index]] as const),
+    );
     for (const { slot, required, accounts } of state.selections) {
       const resolved = yield* Effect.forEach(accounts, (account) =>
         Effect.gen(function* () {
-          const known = credentials.get(account.id);
-          if (known !== undefined) return known;
-          const fields = yield* resolveAccount(account, required.definition);
-          credentials.set(account.id, fields);
-          return fields;
-        }).pipe(
-          Effect.map((fields) => ({
+          const fields = credentials.get(account.id);
+          if (fields === undefined) return yield* new StorageError();
+          return {
             id: account.id,
             provider: grantedDefinition(required.definition, account.allowedHosts),
             method: account.method,
             generation: account.credentialGeneration,
             fields: Redacted.value(fields),
-          })),
-        ),
+          };
+        }),
       );
       if (required.cardinality === "many") selections.set(slot, resolved);
       else {
@@ -318,63 +319,6 @@ function invocation(
   }).pipe(Effect.mapError(() => new StorageError()));
 }
 
-/** Builds from before failure details existed send none; keep their generic reason. */
-const appFailure = ({
-  source,
-  errorName,
-  code,
-  message,
-}: {
-  readonly source?: AppFailure["source"];
-  readonly errorName?: string;
-  readonly code?: string;
-  readonly message?: string;
-}) =>
-  source === undefined || errorName === undefined || message === undefined
-    ? Option.none<AppFailure>()
-    : Option.some<AppFailure>({
-        source,
-        errorName,
-        message,
-        ...(code === undefined ? {} : { code }),
-      });
-
-/**
- * Keep a skill loader's or MCP server's safe fields, and the error the app's own factory or loader
- * raised; other evaluation failures stay generic.
- */
-export const evaluationFailure = (
-  identity: { app: AppId; deployment: DeploymentId },
-  error: unknown,
-  reason = "App evaluation failed",
-) =>
-  new AppEvaluationFailed({
-    app: identity.app,
-    deployment: identity.deployment,
-    reason,
-    ...(Schema.is(SkillLoadFailed)(error)
-      ? {
-          skills: {
-            reason: error.reason,
-            ...(error.message ? { message: error.message } : {}),
-            ...(error.status === undefined ? {} : { status: error.status }),
-          },
-        }
-      : {}),
-    ...(Schema.is(HostEvaluationFailed)(error)
-      ? Option.match(appFailure(error), { onNone: () => ({}), onSome: (failure) => ({ failure }) })
-      : {}),
-    ...(Schema.is(McpError)(error)
-      ? {
-          mcp: {
-            phase: error.phase,
-            reason: error.reason,
-            ...(error.status === undefined ? {} : { status: error.status }),
-          },
-        }
-      : {}),
-  });
-
 const runtimeFailure = (
   identity: { app: AppId; deployment: DeploymentId; tool: ToolName },
   state: InvocationSnapshot,
@@ -432,7 +376,7 @@ const runtimeFailure = (
         new AppEvaluationFailed({ ...identity, reason: "App evaluation failed" }),
       HostEvaluationFailed: (error) => evaluationFailure(identity, error),
       SkillLoadFailed: (error) => evaluationFailure(identity, error),
-      McpError: (error) => evaluationFailure(identity, error),
+      McpError: (error) => operationMcpFailure(identity, error),
       RuntimeBuildUnavailable: () =>
         new AppEvaluationFailed({ ...identity, reason: "App evaluation failed" }),
       RuntimeProtocolFailed: () =>
@@ -442,18 +386,18 @@ const runtimeFailure = (
     }),
   );
 
-/** Reduce a full description from a build that cannot omit schemas itself. */
-const summarize = ({
+/** A listed tool without its schemas. */
+const summarizeTool = ({
   inputSchema: _input,
   outputSchema: _output,
   _meta,
   ...summary
-}: HostedTool): HostedToolSummary => summary;
+}: Tool): ToolSummary => summary;
 
 /** Live calls return completion or a durable approval request. Resume trusts the supplied SDK decision. */
 export const makeTools = (
   storage: ExecutorDatabase,
-  oauth: Pick<ReturnType<typeof makeOAuth>, "resolve" | "renewRejected" | "usable">,
+  oauth: Pick<ReturnType<typeof makeOAuth>, "resolveSelected" | "renewRejected" | "usable">,
   runtime: Runtime,
   credentials: Credentials,
   crypto: Crypto.Crypto,
@@ -463,7 +407,7 @@ export const makeTools = (
   lifecycle?: ResourceLifecycle,
 ) => {
   const db = database(storage);
-  const resolveAccount = oauth.resolve;
+  const resolveAccount = oauth.resolveSelected;
   const approvals = makeToolApprovals(db, credentials, crypto, storage.reactivity.inTransaction);
   /**
    * Run a tool, live or approved, and renew an account the service refuses. A 401 means the
@@ -609,18 +553,40 @@ export const makeTools = (
         "executor.deployment.id": state.deployment.id,
         "executor.build.id": state.deployment.build,
       });
-      const value = yield* readCatalog(state, context, read);
-      const catalog = {
-        deployment: state.deployment.id,
-        ...(state.profile === undefined
-          ? {}
-          : {
-              profile: state.profile.id,
-              profileRevision: state.profile.revision,
-            }),
-      };
-      return { state, catalog, value };
+      return { deployment: state.deployment.id, value: yield* readCatalog(state, context, read) };
     });
+  /** The invocation state a listing is read for, annotated on the caller's span. */
+  const listed = (input: Parameters<typeof snapshot>[1]) =>
+    Effect.gen(function* () {
+      const state = yield* snapshot(db, input).pipe(Effect.withSpan("sdk.invocation.snapshot"));
+      yield* Effect.annotateCurrentSpan({
+        "executor.app.id": state.app.id,
+        "executor.deployment.id": state.deployment.id,
+        "executor.build.id": state.deployment.build,
+      });
+      return state;
+    });
+  /** Evaluate every tool of the catalog with schemas, sorted by name, for the listing store. */
+  const listingOf = (state: InvocationSnapshot) => (context: InvocationContext) =>
+    inspectRenewing(state, context, (context) => runtime.inspect(inspection(state, context))).pipe(
+      Effect.map(({ tools, routers }): ToolListing => ({
+        catalog: {
+          deployment: state.deployment.id,
+          ...(state.profile === undefined
+            ? {}
+            : { profile: state.profile.id, profileRevision: state.profile.revision }),
+        },
+        routers,
+        items: [...tools]
+          .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+          .map((tool) => ({
+            ...tool,
+            app: state.app.id,
+            deployment: state.deployment.id,
+            name: ToolName.make(tool.name),
+          })),
+      })),
+    );
   return {
     /**
      * The first account selected by this profile whose saved sign-in must reconnect before the
@@ -663,35 +629,8 @@ export const makeTools = (
      */
     list: (input: Parameters<Executor["tools"]["list"]>[0], options?: ToolListOptions) =>
       Effect.gen(function* () {
-        const state = yield* snapshot(db, input).pipe(Effect.withSpan("sdk.invocation.snapshot"));
-        yield* Effect.annotateCurrentSpan({
-          "executor.app.id": state.app.id,
-          "executor.deployment.id": state.deployment.id,
-          "executor.build.id": state.deployment.build,
-        });
-        const evaluate = (context: InvocationContext) =>
-          inspectRenewing(state, context, (context) =>
-            runtime.inspect(inspection(state, context)),
-          ).pipe(
-            Effect.map(({ tools, routers }): ToolListing => ({
-              catalog: {
-                deployment: state.deployment.id,
-                ...(state.profile === undefined
-                  ? {}
-                  : { profile: state.profile.id, profileRevision: state.profile.revision }),
-              },
-              routers,
-              items: [...tools]
-                .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
-                .map((tool) => ({
-                  ...tool,
-                  app: state.app.id,
-                  deployment: state.deployment.id,
-                  name: ToolName.make(tool.name),
-                })),
-            })),
-          );
-        const listing = yield* listings.read(state, evaluate, options);
+        const state = yield* listed(input);
+        const listing = yield* listings.read(state, listingOf(state), options);
         // Pages share the listing's item objects, so a caller can recognise a kept listing.
         const cursor: string | undefined = input.cursor;
         const after =
@@ -714,48 +653,58 @@ export const makeTools = (
     scheduled: (input: Parameters<Executor["tools"]["list"]>[0]) =>
       Effect.gen(function* () {
         const {
+          deployment,
           value: { tools },
         } = yield* evaluate(input, (options, _toolIndex, scheduled) =>
           runtime.inspect(scheduled ? { ...options, scheduled: true } : options),
         );
-        return tools.flatMap((tool) =>
-          (tool.schedules ?? []).map((schedule) => ({
-            ...schedule,
-            tool: ToolName.make(tool.name),
-          })),
-        );
+        // Callers that act on the result can require that this deployment is still active.
+        return {
+          deployment,
+          items: tools.flatMap((tool) =>
+            (tool.schedules ?? []).map((schedule) => ({
+              ...schedule,
+              tool: ToolName.make(tool.name),
+            })),
+          ),
+        };
       }).pipe(Effect.withSpan("sdk.tools.scheduled")),
+    /**
+     * The catalog without schemas, read from the same kept listing as `list`, so browsing an app
+     * evaluates it no more often than MCP discovery does.
+     */
     index: (input: Parameters<Executor["tools"]["index"]>[0]) =>
       Effect.gen(function* () {
-        const {
-          state,
-          catalog,
-          value: { tools, routers },
-        } = yield* evaluate(input, (options, toolIndex) =>
-          toolIndex
-            ? runtime.index(options)
-            : runtime
-                .inspect(options)
-                .pipe(
-                  Effect.map(({ tools, routers }) => ({ tools: tools.map(summarize), routers })),
-                ),
-        );
+        const state = yield* listed(input);
+        const listing = yield* listings.read(state, listingOf(state));
         return {
-          ...catalog,
-          routers,
-          items: [...tools]
-            .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
-            .map((tool) => ({
-              ...tool,
-              app: state.app.id,
-              deployment: state.deployment.id,
-              name: ToolName.make(tool.name),
-            })),
+          ...listing.catalog,
+          routers: listing.routers,
+          items: listing.items.map(summarizeTool),
         };
       }).pipe(Effect.withSpan("sdk.tools.index")),
+    /**
+     * One tool's schemas from the kept listing. A tool the listing does not name, such as one a
+     * dynamic source resolves on demand or one added since the listing was evaluated, is described
+     * live; a tool under a router the listing could not read fails with that router's error.
+     */
     get: (input: Parameters<Executor["tools"]["get"]>[0]) =>
       Effect.gen(function* () {
-        const state = yield* snapshot(db, input).pipe(Effect.withSpan("sdk.invocation.snapshot"));
+        const state = yield* listed(input);
+        const listing = yield* listings.read(state, listingOf(state));
+        const kept = listing.items.find((tool) => tool.name === input.tool);
+        if (kept !== undefined) {
+          yield* Effect.annotateCurrentSpan("executor.tools.source", "listing");
+          return kept;
+        }
+        const failed = listing.routers.find(
+          (router) => router.error !== undefined && input.tool.startsWith(`${router.path}.`),
+        )?.error;
+        if (failed !== undefined)
+          return yield* Schema.is(ProviderError)(failed)
+            ? appProviderFailure(state, failed)
+            : evaluationFailure({ app: state.app.id, deployment: state.deployment.id }, failed);
+        yield* Effect.annotateCurrentSpan("executor.tools.source", "live");
         const context = yield* resolve(state, resolveAccount, lifecycle).pipe(
           Effect.withSpan("sdk.accounts.resolve"),
         );

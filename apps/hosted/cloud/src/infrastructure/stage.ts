@@ -68,6 +68,30 @@ const Origin = Schema.String.check(
   ),
 );
 
+/** The zone that serves production. See `product-zone.ts` for its certificate rule. */
+export const productZone = "executor.sh";
+
+/**
+ * A Worker's custom domain for this stage. Each new custom domain in the product zone orders a
+ * certificate that Cloudflare then serves for the apex, so only production may add one.
+ */
+export const customDomain = (origin: URL) =>
+  Effect.gen(function* () {
+    const hostname = origin.hostname;
+    const stage = Option.getOrUndefined(yield* stageName);
+    if (
+      (hostname === productZone || hostname.endsWith(`.${productZone}`)) &&
+      stage !== productionStage
+    )
+      return yield* Effect.die(
+        new Error(
+          `Stage ${stage ?? "<unset>"} cannot use ${hostname}: only ${productionStage} may add a ` +
+            `custom domain in ${productZone}. Use a test-stage domain instead.`,
+        ),
+      );
+    return hostname;
+  });
+
 /** The public origin: derived from the stage name for test stages, configured everywhere else. */
 export const cloudOrigin = testStage.pipe(
   Effect.flatMap(

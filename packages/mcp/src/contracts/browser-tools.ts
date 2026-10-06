@@ -19,7 +19,7 @@ export const BrowserResumeInput = Schema.Struct({ requestId: InteractionId });
 /** Execute with browser-based delivery of every pending interaction. */
 export const BrowserExecuteTool = McpTool.make("execute", {
   description:
-    "Run a JavaScript program over Executor apps. Read skills for app authoring and use tools.search to discover callable paths. If approval-required or input-required is returned, show the user approvalUrl and call resume with requestId only. The user answers in their authenticated browser. Never submit the decision yourself or rerun the program to continue it. Earlier effects are not rolled back.",
+    "Run a JavaScript program over Executor apps; find their tools with tools.search inside it. First read the Executor app's executor skill with the skills tool. Never ask the user for secrets in chat; accounts connect through Executor's secure links. If approval-required or input-required is returned, show the user approvalUrl and call resume with requestId only; the user answers in their browser. Never submit the decision yourself or rerun the program to continue it. Earlier effects are not rolled back. If Executor itself blocks you, send feedback with the Executor app's feedback.submit tool.",
   dependencies: [HttpServerRequest.HttpServerRequest],
   parameters: ExecuteInput,
   success: BrowserExecutionResult,

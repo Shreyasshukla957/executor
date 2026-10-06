@@ -19,6 +19,7 @@ import {
   Schedule,
 } from "effect";
 import { Target, driver, type DriverFailed } from "./platform.ts";
+import { splitRoutedReads } from "./read-batches.ts";
 import { Evidence } from "./evidence.ts";
 import type { Session } from "./api.ts";
 import { RecordingFocus } from "./recording-focus.ts";
@@ -115,6 +116,9 @@ export class Browser extends Context.Service<
           ...visitorUserAgent(browser),
           recordVideo: { dir: `${evidence.directory}/raw`, size: { width: 1440, height: 960 } },
         }),
+      );
+      yield* driver("route batched reads through test routes", () =>
+        splitRoutedReads(context, target.metadata.origin),
       );
       // Register cleanup immediately, before trace/page setup can fail.
       yield* Effect.addFinalizer((exit) =>

@@ -251,6 +251,37 @@ export default defineApp({ accounts: {} }, async (ctx) => {
 });`;
 
 /**
+ * Evaluating this app takes `sleepMs`, with no upstream. Every evaluation names itself in its
+ * tools' descriptions, so a search shows which evaluation it reads.
+ */
+const sleepingAppSource = (
+  sleepMs: number,
+  marker: string,
+) => `import { defineApp, query, object, router } from "apps";
+export default defineApp({ accounts: {} }, async () => {
+  const evaluation = crypto.randomUUID();
+  await new Promise((resolve) => setTimeout(resolve, ${sleepMs}));
+  return { tools: router(Object.fromEntries(["alpha", "beta", "gamma"].map((name) => [name, query(
+    { description: "Sleeping tool " + name + " from evaluation " + evaluation + " (marker ${marker}).", input: object({}) },
+    async () => name,
+  )]))) };
+});`;
+/** Cloud keeps background work this long after the event that started it closes. */
+const cloudBackgroundMs = 20_000;
+/**
+ * A Cloud search that reports an app without waiting for it answers well inside half the discovery
+ * wait; one that waits for the app again takes all of it.
+ */
+const cloudReportedBoundMs = discoveryWaitMs / 2;
+/** Only a remembered listing failure, not a listing still running, says this. */
+const rememberedTimeout = "a later listing finishes";
+/**
+ * Longer than Cloud keeps any search's background work and than the 45 s load bound, so no
+ * evaluation of an app that sleeps this long finishes while its scenario runs.
+ */
+const stuckListingMs = 120_000;
+
+/**
  * Every evaluation names itself, so a search shows whether it reused a listing. The description
  * also carries the deployed version and the selected account's stored token.
  */
@@ -548,6 +579,173 @@ return { items: [...small.items, ...large.items] };`;
   );
 
   it.effect(
+    scenarios.mcpBackgroundListingCloud.title,
+    (context) =>
+      withHostedCase(
+        context,
+        Effect.gen(function* () {
+          const api = yield* Api,
+            actors = yield* Actors;
+          const prefix = `/api/organizations/${actors.organization.id}`;
+          const deployed = yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
+            name: `Sleeping catalog ${randomUUID().slice(0, 8)}`,
+            // Longer than discovery waits and than the fixed 15 s Cloud once gave a listing nobody
+            // waited for, and well inside the time Cloud keeps the first search's background work.
+            files: [
+              { path: "index.ts", content: sleepingAppSource(slowListingMs, "zqsleepq") },
+              appsManifest,
+            ],
+          });
+          expect(deployed.status, JSON.stringify(deployed.body)).toBe(200);
+          const app = yield* body(App, deployed);
+          yield* Effect.addFinalizer(() =>
+            api.request(actors.owner, "DELETE", `${prefix}/apps/${app.id}`).pipe(Effect.orDie),
+          );
+          const execute = yield* connectActor(
+            actors.owner,
+            "Background listing",
+            actors.organization.id,
+          );
+          const search = `return await tools.search({ query: "zqsleepq" });`;
+          const tools = ["alpha", "beta", "gamma"].map(
+            (name) => `tools[${JSON.stringify(app.slug)}].${name}`,
+          );
+          /** The found tools and the one evaluation every description names. */
+          const listed = (value: unknown) =>
+            Schema.decodeUnknownEffect(SearchDescriptions)(value).pipe(
+              Effect.map(({ items }) => ({
+                paths: items.map((item) => item.path).sort(),
+                evaluations: [
+                  ...new Set(
+                    items.map((item) => /evaluation ([0-9a-f-]{36})/.exec(item.description)?.[1]),
+                  ),
+                ],
+              })),
+            );
+
+          // The first search waits for discovery's bound, then reports the app unavailable while
+          // its listing keeps running in the background.
+          const first = yield* execute("Search beside a slow evaluation", search);
+          const returned = yield* Clock.currentTimeMillis;
+          expect(first.completed.execution.ok).toBe(true);
+          expect(first.completed.unavailableApps.map((entry) => entry.app)).toEqual([app.id]);
+          expect(first.completed.unavailableApps[0]!.reason).toContain("AppDiscoveryTimedOut");
+          expect(first.elapsed).toBeGreaterThanOrEqual(discoveryWaitMs - 1_000);
+
+          // The listing outlives that search's response and the old fixed bound. Searches report
+          // the app at once while it runs and find its tools once it finishes, within the time
+          // Cloud keeps the first search's background work.
+          const loaded = yield* Effect.gen(function* () {
+            const polled = yield* execute("Search while the background listing runs", search);
+            expect(polled.completed.execution.ok).toBe(true);
+            expect(polled.elapsed).toBeLessThan(cloudReportedBoundMs);
+            if (polled.completed.unavailableApps.length === 0) return polled;
+            expect(polled.completed.unavailableApps.map((entry) => entry.app)).toEqual([app.id]);
+            expect(
+              (yield* Clock.currentTimeMillis) - returned,
+              "the listing should finish while Cloud keeps the first search's background work",
+            ).toBeLessThan(cloudBackgroundMs);
+            return yield* Effect.fail("still loading" as const);
+          }).pipe(
+            Effect.retry({
+              schedule: Schedule.spaced("1 second"),
+              while: (error) => error === "still loading",
+            }),
+          );
+          const found = yield* listed(loaded.completed.execution.value);
+          expect(found.paths).toEqual(tools);
+          expect(found.evaluations).toHaveLength(1);
+
+          // Later searches read that kept listing instead of evaluating the app again.
+          for (const attempt of [1, 2]) {
+            const again = yield* execute(`Search the slow app again (${attempt})`, search);
+            expect(again.completed.unavailableApps).toEqual([]);
+            expect(yield* listed(again.completed.execution.value)).toEqual(found);
+            expect(again.elapsed).toBeLessThan(cloudReportedBoundMs);
+          }
+        }).pipe(Effect.provide(McpClient.layer)),
+      ),
+    { timeout: 150_000 },
+  );
+
+  it.effect(
+    scenarios.mcpStoppedListingCloud.title,
+    (context) =>
+      withHostedCase(
+        context,
+        Effect.gen(function* () {
+          const api = yield* Api,
+            actors = yield* Actors;
+          const prefix = `/api/organizations/${actors.organization.id}`;
+          const deployed = yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
+            name: `Stuck catalog ${randomUUID().slice(0, 8)}`,
+            files: [
+              { path: "index.ts", content: sleepingAppSource(stuckListingMs, "zqstuckq") },
+              appsManifest,
+            ],
+          });
+          expect(deployed.status, JSON.stringify(deployed.body)).toBe(200);
+          const app = yield* body(App, deployed);
+          yield* Effect.addFinalizer(() =>
+            api.request(actors.owner, "DELETE", `${prefix}/apps/${app.id}`).pipe(Effect.orDie),
+          );
+          const execute = yield* connectActor(
+            actors.owner,
+            "Stopped background listing",
+            actors.organization.id,
+          );
+          const search = `return await tools.search({ query: "zqstuckq" });`;
+          /** A search that reports the app unavailable without waiting for it, and why. */
+          const reported = (step: string) =>
+            Effect.gen(function* () {
+              const result = yield* execute(step, search);
+              expect(result.completed.execution.ok).toBe(true);
+              expect(result.elapsed).toBeLessThan(cloudReportedBoundMs);
+              expect(result.completed.unavailableApps.map((entry) => entry.app)).toEqual([app.id]);
+              return result.completed.unavailableApps[0]!.reason;
+            });
+
+          const began = yield* Clock.currentTimeMillis;
+          const first = yield* execute("Search beside a stuck evaluation", search);
+          const returned = yield* Clock.currentTimeMillis;
+          expect(first.completed.execution.ok).toBe(true);
+          expect(first.completed.unavailableApps.map((entry) => entry.app)).toEqual([app.id]);
+          expect(first.completed.unavailableApps[0]!.reason).toContain("AppDiscoveryTimedOut");
+          expect(first.elapsed).toBeGreaterThanOrEqual(discoveryWaitMs - 1_000);
+
+          // Searches report the running listing at once until Cloud ends the first search's
+          // background work and stops it. That stop is remembered as a timeout, so the searches
+          // after it report the app at once too, instead of each waiting for a new evaluation.
+          yield* Effect.gen(function* () {
+            const reason = yield* reported("Search while the stuck listing runs");
+            if (reason.includes(rememberedTimeout)) return;
+            expect(reason).toContain("has been running for");
+            return yield* Effect.fail("still running" as const);
+          }).pipe(
+            Effect.retry({
+              schedule: Schedule.spaced("1 second"),
+              while: (error) => error === "still running",
+              times: 40,
+            }),
+          );
+          // The listing ran for all the time Cloud keeps the first search's background work, and
+          // was stopped when that ended rather than by the load bound.
+          const stopped = yield* Clock.currentTimeMillis;
+          expect(stopped - returned).toBeGreaterThanOrEqual(cloudBackgroundMs - 1_000);
+          expect(stopped - began).toBeLessThan(listingLoadMs);
+
+          // Reading the remembered timeout starts one background retry, which stalls too. Further
+          // searches keep reporting the remembered timeout at once.
+          for (const attempt of [1, 2, 3])
+            expect(yield* reported(`Search beside the remembered timeout (${attempt})`)).toContain(
+              rememberedTimeout,
+            );
+        }).pipe(Effect.provide(McpClient.layer)),
+      ),
+    { timeout: 150_000 },
+  );
+
+  it.effect(
     scenarios.mcpRememberedListingFailure.title,
     (context) =>
       withHostedCase(
@@ -586,9 +784,6 @@ return { items: [...small.items, ...large.items] };`;
               expect(reason).toContain("timed out");
               return reason;
             });
-          /** Only a remembered failure, not a listing still running, says this. */
-          const remembered = "a later listing finishes";
-
           const began = yield* Clock.currentTimeMillis;
           const first = yield* execute("Search beside a stalled app", search);
           expect(first.completed.unavailableApps.map((entry) => entry.app)).toEqual([app.id]);
@@ -599,7 +794,7 @@ return { items: [...small.items, ...large.items] };`;
           // bound with nobody waiting, it is stopped and its timeout remembered.
           yield* Effect.gen(function* () {
             const reason = yield* reported("Search while the stalled listing runs");
-            if (reason.includes(remembered)) return;
+            if (reason.includes(rememberedTimeout)) return;
             expect(upstream.requests.count).toBe(1);
             return yield* Effect.fail("still running" as const);
           }).pipe(
@@ -626,7 +821,7 @@ return { items: [...small.items, ...large.items] };`;
           );
           for (const attempt of [1, 2, 3])
             expect(yield* reported(`Search beside the remembered failure (${attempt})`)).toContain(
-              remembered,
+              rememberedTimeout,
             );
           expect(upstream.requests.count).toBe(2);
 

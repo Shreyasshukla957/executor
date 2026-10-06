@@ -8,7 +8,7 @@
  * request and reply passes through the adapter of the protocol the build's framework speaks.
  */
 import type { Fetcher, WorkerLoader } from "@cloudflare/workers-types";
-import { Effect, Exit, Option, Redacted, Schema, Semaphore } from "effect";
+import { Clock, Effect, Exit, Option, Redacted, Result, Schema, Semaphore } from "effect";
 import {
   ElicitationReply,
   type HostRequest,
@@ -26,7 +26,7 @@ import {
   type FacetBundle,
   type FacetInvocation,
 } from "@executor-js/app-data/cloudflare";
-import { workerModules } from "@executor-js/app-data/worker-bundle";
+import { reachableModules, workerModules } from "@executor-js/app-data/worker-bundle";
 import {
   CacheCommand,
   CacheError,
@@ -134,6 +134,17 @@ const releaseLimit = "35 seconds";
  */
 const cacheLanes = 2;
 
+/** A cold start's modules: only those its entry can import, out of the build's `total`. */
+const loadedModules = <Module>(main: string, modules: Readonly<Record<string, Module>>) => ({
+  modules: reachableModules(main, modules),
+  total: Object.keys(modules).length,
+});
+const annotateLoaded = ({ modules, total }: ReturnType<typeof loadedModules>) =>
+  Effect.annotateCurrentSpan({
+    "executor.worker.modules": Object.keys(modules).length,
+    "executor.worker.modules_total": total,
+  });
+
 /** One call's cache channel and the leases it owns until the call's release has finished. */
 interface CacheSession {
   readonly callback: Callback;
@@ -158,13 +169,25 @@ const attempt = <A>(work: () => Promise<A>) =>
 const protocols = new Map<string, AppProtocol>();
 const protocolLimit = 4096;
 /**
- * Reads of builds whose protocol is not known yet. Concurrent first calls of a build, such as a
- * tool call and the profile setup that an account selection started, share one read, so the
- * Worker they both reach loads its build once.
+ * First reads of builds whose protocol is not known yet, by build, with the read build once it
+ * arrives. Concurrent first calls of a build, such as a tool call and the profile setup that an
+ * account selection started, share one read, so the Worker they both reach loads its build once.
+ * Only plain data is shared: a call never awaits another call's promise. On Cloud, a call resumed
+ * by another request's promise continues in that request's I/O context, and its own capabilities
+ * then fail with "Cannot perform I/O on behalf of a different request". A waiting call therefore
+ * checks again on its own timer. The entry lasts as long as the reading call, so a waiting call
+ * that starts the Worker uses the shared build instead of reading it again.
  */
-const reads = new Map<string, Promise<LoadedWorkerBuild>>();
+const reads = new Map<string, { loaded?: LoadedWorkerBuild }>();
+/** How often a call waiting on another call's first read checks it. */
+const readCheck = "10 millis";
+/**
+ * How long a call waits on another call's first read before reading the build itself, should the
+ * reading call never finish, for instance because its isolate stopped serving its request.
+ */
+const readWait = 10_000;
 
-/** Record a build's protocol from its read; the cold start reuses that read. */
+/** Record a build's protocol from its read. */
 const learn = (build: string, loaded: LoadedWorkerBuild) =>
   appProtocol(loaded.protocol).pipe(
     Effect.catch(failed),
@@ -174,42 +197,52 @@ const learn = (build: string, loaded: LoadedWorkerBuild) =>
         const oldest = protocols.keys().next();
         if (oldest.done !== true) protocols.delete(oldest.value);
       }
-      return { protocol, load: async () => loaded };
+      return protocol;
     }),
   );
 
 /**
  * The adapter for an invocation's build, and the loader its cold start uses. When the protocol is
- * not known yet, the build is read once here and the cold start reuses that read.
+ * not known yet, the build is read once here and the cold start reuses that read. The read is
+ * shared until the caller's scope closes.
  */
-const protocolOf = (build: string, load: () => Promise<LoadedWorkerBuild>) =>
-  Effect.suspend(() => {
-    const known = protocols.get(build);
-    if (known !== undefined) {
-      protocols.delete(build);
-      protocols.set(build, known);
-      return Effect.succeed({ protocol: known, load });
+const protocolOf = (
+  build: string,
+  load: () => Promise<LoadedWorkerBuild>,
+  waitUntil: (task: Promise<unknown>) => void,
+) =>
+  Effect.gen(function* () {
+    const started = yield* Clock.currentTimeMillis;
+    while (true) {
+      const known = protocols.get(build);
+      const shared = reads.get(build);
+      if (known !== undefined) {
+        protocols.delete(build);
+        protocols.set(build, known);
+        const loaded = shared?.loaded;
+        return { protocol: known, load: loaded === undefined ? load : async () => loaded };
+      }
+      // Another call's read failed or was cancelled, or has not finished in time: read it here.
+      if (shared === undefined || (yield* Clock.currentTimeMillis) - started >= readWait) break;
+      yield* Effect.sleep(readCheck);
     }
-    const pending = reads.get(build);
-    if (pending !== undefined)
-      // Share the read another call started. If it fails, for instance because that caller was
-      // cancelled, this call reads the build itself and reports its own failure.
-      return attempt(() => pending).pipe(
-        Effect.flatMap((loaded) => learn(build, loaded)),
-        Effect.catch(() => attempt(load).pipe(Effect.flatMap((loaded) => learn(build, loaded)))),
+    const entry: { loaded?: LoadedWorkerBuild } = {};
+    if (!reads.has(build))
+      yield* Effect.acquireRelease(
+        Effect.sync(() => reads.set(build, entry)),
+        () =>
+          Effect.sync(() => {
+            if (reads.get(build) === entry) reads.delete(build);
+          }),
       );
     // A loader that throws before returning its promise still fails through `attempt`.
     const read = (async () => load())();
-    reads.set(build, read);
-    return attempt(() => read).pipe(
-      Effect.flatMap((loaded) => learn(build, loaded)),
-      // Removed only once the protocol is recorded, so no later call reads the build again.
-      Effect.ensuring(
-        Effect.sync(() => {
-          if (reads.get(build) === read) reads.delete(build);
-        }),
-      ),
-    );
+    // Keep this request alive until the read settles, so the calls waiting on it are released.
+    waitUntil(read.catch(() => undefined));
+    const loaded = yield* attempt(() => read);
+    const protocol = yield* learn(build, loaded);
+    entry.loaded = loaded;
+    return { protocol, load: async () => loaded };
   });
 
 /** A call whose Worker failed to load in this isolate. No authored code ran for it. */
@@ -289,14 +322,27 @@ export const makeAppRunner = (host: AppRunnerHost) => {
             : yield* Effect.acquireRelease(residency.hold(host.loader, name), (unhold) =>
                 held ? Effect.void : unhold,
               );
+        const services = yield* Effect.context<never>();
         const load = async () => {
-          const bundle = await code();
+          // Recorded when the Worker Loader runs its cold-start callback, inside runtime.app.rpc.start.
+          const read = await Effect.runPromiseWith(services)(
+            Effect.tryPromise({ try: code, catch: (cause) => cause }).pipe(
+              Effect.map((bundle) =>
+                loadedModules("__executor_rpc.js", {
+                  ...workerModules(bundle.modules),
+                  "__executor_rpc.js": appRpcBridge(bundle.mainModule),
+                }),
+              ),
+              Effect.tap(annotateLoaded),
+              Effect.withSpan("runtime.app.cold_start.load"),
+              Effect.result,
+            ),
+          );
+          // The loader reports the original failure; see loadWorker.
+          if (Result.isFailure(read)) throw read.failure;
           return {
             mainModule: "__executor_rpc.js",
-            modules: {
-              ...workerModules(bundle.modules),
-              "__executor_rpc.js": appRpcBridge(bundle.mainModule),
-            },
+            modules: read.success.modules,
             compatibilityDate,
             compatibilityFlags: ["nodejs_compat"],
             globalOutbound: options.globalOutbound,
@@ -449,10 +495,10 @@ export const makeAppRunner = (host: AppRunnerHost) => {
             const bundle = await load();
             return {
               mainModule: "__executor_facet.js",
-              modules: {
+              modules: reachableModules("__executor_facet.js", {
                 ...bundle.modules,
                 "__executor_facet.js": appFacetBridge(bundle.mainModule),
-              },
+              }),
             };
           },
           capabilities.elicit,
@@ -492,7 +538,11 @@ export const makeAppRunner = (host: AppRunnerHost) => {
         });
         // The build's protocol adapter owns this boundary: requests leave, and replies return, in
         // the host's current model whichever protocol the retained bundle speaks.
-        const { protocol, load } = yield* protocolOf(invocation.build, capabilities.load);
+        const { protocol, load } = yield* protocolOf(
+          invocation.build,
+          capabilities.load,
+          host.waitUntil,
+        );
         // A command this protocol's bundles would not run as asked fails without reaching them.
         const refused = protocol.refuse(invocation.command);
         if (refused !== undefined) return { ok: false, error: refused };
@@ -575,7 +625,7 @@ export const makeAppRunner = (host: AppRunnerHost) => {
           !Array.isArray(result)
           ? { ...result, cacheChanged: true }
           : result;
-      }).pipe(Effect.withSpan("runtime.app.invoke")),
+      }).pipe(Effect.scoped, Effect.withSpan("runtime.app.invoke")),
     /**
      * Evaluate a new build's declarations before it is retained. No later call can reuse this
      * Worker, so it is not named and the runtime does not keep it; it has no network or cache.

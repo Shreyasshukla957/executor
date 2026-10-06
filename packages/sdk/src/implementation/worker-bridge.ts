@@ -1,5 +1,12 @@
 import { retireMethod } from "@executor-js/app-data/worker-bundle";
 import type { SourceFile } from "../contracts/deployment.ts";
+
+/**
+ * The text files a server entry retains as `ctx.files`. `ui/` is the browser app: the host serves
+ * it as compiled assets, and embedding it would make every build parse it as one string literal.
+ */
+const serverFiles = (files: readonly SourceFile[]) =>
+  JSON.stringify(files.filter((file) => !file.path.startsWith("ui/")));
 /**
  * The retained server entry for every protocol so far. It imports the framework's host module as a
  * namespace and uses only what protocol 1 guarantees, so it links against every protocol-1 framework. Optional
@@ -10,7 +17,7 @@ export const appBridge = (files: readonly SourceFile[]) => `
 import app from "./index.ts";
 import * as host from "apps/host";
 const handler = host.createIsolatedAppHandler(app);
-const files = ${JSON.stringify(files)};
+const files = ${serverFiles(files)};
 export default {
   cacheSession: host.isolatedCacheSession,
   async fetch(request, env) {
@@ -37,7 +44,7 @@ export const nodeAppEntry = (protocol: number) => (files: readonly SourceFile[])
     'import * as host from "apps/host";',
     `export const protocol = ${protocol};`,
     "const handler = host.createAppHandler(app);",
-    `const files = ${JSON.stringify(files)};`,
+    `const files = ${serverFiles(files)};`,
     // Redacted owns a private store per Effect instance. Decode on
     // the host side and re-wrap with the selected app framework.
     "export default (request, context, accounts) => handler(request, { ...context, ...host.hostContext(accounts, context.approval), files });",

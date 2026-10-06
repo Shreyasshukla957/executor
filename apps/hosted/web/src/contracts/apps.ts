@@ -27,9 +27,14 @@ import {
 } from "@executor-js/sdk";
 import { OrganizationReference } from "@executor-js/hosted-server/organization";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
-import { Data, Effect, Option, Schema, type Redacted } from "effect";
+import { Cause, Data, Effect, Option, Schema, type Redacted } from "effect";
 import { HostedClient } from "./api.ts";
-import { acknowledge, upsert, invalidate } from "@executor-js/ui/contracts/mutations";
+import {
+  acknowledge,
+  acknowledgedQuery,
+  upsert,
+  invalidate,
+} from "@executor-js/ui/contracts/mutations";
 import { inventoryAtom } from "./organization.ts";
 import { accountAtom, acknowledgeAccount } from "./accounts.ts";
 import { selectedIds, type ToolCatalog } from "@executor-js/ui/contracts/dashboard";
@@ -121,13 +126,20 @@ const toolsQuery = Atom.family((key: ToolKey) =>
     }),
   ).pipe(revalidated),
 );
-/** Pending credentials are fetched without reading saved secrets. */
-const connectionQuery = Atom.family(
-  (key: {
-    readonly organization: OrganizationReference;
-    readonly connection: AccountConnectionId;
-  }) => HostedClient.query("accounts", "connection", hydrated({ params: key })),
+/**
+ * Pending credentials are fetched without reading saved secrets. A request whose app changed can
+ * never complete, so a read reporting that drops the old form instead of showing it beside the error.
+ */
+const connectionQuery = Atom.family((key: ConnectionKey) =>
+  acknowledgedQuery(
+    HostedClient.query("accounts", "connection", hydrated({ params: key })),
+    (cause) =>
+      !Option.exists(Cause.findErrorOption(cause), Schema.is(AccountConnectionTargetChanged)),
+  ),
 );
+/** A write that reports a changed app reads the request again, so the change replaces its form. */
+const reloadConnection = (get: Atom.FnContext, key: ConnectionKey) =>
+  Effect.sync(() => get.refresh(connectionQuery(key)));
 /** Catalog installation, selection, connection and execution actions. */
 const activateApp = Atom.family((key: AppKey) =>
   HostedClient.runtime.fn(
@@ -287,6 +299,7 @@ const submitConnection = Atom.family((key: ConnectionKey) =>
             get.refresh(connectionAtom(key));
           }),
         ),
+        Effect.tapErrorTag("AccountConnectionTargetChanged", () => reloadConnection(get, key)),
       ),
   ),
 );
@@ -345,6 +358,7 @@ const startOAuth = Atom.family((key: ConnectionKey) =>
             }
           }),
         ),
+        Effect.tapErrorTag("AccountConnectionTargetChanged", () => reloadConnection(get, key)),
       ),
   ),
 );

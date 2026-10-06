@@ -153,11 +153,7 @@ export function AccountForm<A, E>({
       )}
       {auth?.type === "oauth2" ? (
         <div key={method} className="oauth-fields flex flex-col gap-4">
-          <CredentialAccess
-            hosts={provider.definition.hosts}
-            hidden={provider.definition.hosts !== undefined}
-            readable={provider.definition.hosts === undefined}
-          />
+          <SignInAccess provider={provider.definition.name} hosts={provider.definition.hosts} />
           {oauth({ method, disabled, onPendingChange: updatePending })}
         </div>
       ) : fields ? (
@@ -262,9 +258,7 @@ function CredentialAccess({
                 on requests to{" "}
                 {hosts.map((host, index) => (
                   <span key={host}>
-                    <span className="rounded border border-border bg-muted/50 px-1 py-px font-mono text-[11px] text-foreground">
-                      {host}
-                    </span>
+                    <HostChip host={host} />
                     {index < hosts.length - 1 ? " " : "."}
                   </span>
                 ))}
@@ -288,6 +282,65 @@ function CredentialAccess({
         </p>
       )}
     </div>
+  );
+}
+
+/** A host name as the access notices show it. */
+const HostChip = ({ host }: { readonly host: string }) => (
+  <span className="rounded border border-border bg-muted/50 px-1 py-px font-mono text-[11px] text-foreground">
+    {host}
+  </span>
+);
+
+/**
+ * Where a sign-in's tokens go, in one line. Signing in enters no value, so this names the
+ * sign-in rather than explaining placeholders: hosts keep it from the app, and without hosts the
+ * app reads it.
+ */
+function SignInAccess({
+  provider,
+  hosts,
+}: {
+  readonly provider: string;
+  readonly hosts?: readonly string[] | undefined;
+}) {
+  return hosts === undefined ? (
+    <p
+      className="flex items-start gap-1.5 text-xs leading-relaxed text-muted-foreground"
+      data-credential-access="readable"
+    >
+      <HugeiconsIcon icon={ViewIcon} className="mt-0.5 size-3.5 shrink-0 text-amber-600" />
+      <span>
+        The app can read your {provider} sign-in and send it anywhere. You can ask your agent to
+        limit where it is sent.
+      </span>
+    </p>
+  ) : (
+    <p
+      className="flex items-start gap-1.5 text-xs leading-relaxed text-muted-foreground"
+      data-credential-access="hidden"
+      data-credential-hosts
+    >
+      <HugeiconsIcon
+        icon={SquareLock02Icon}
+        className="mt-0.5 size-3.5 shrink-0 text-emerald-600"
+      />
+      <span>
+        {hosts.length === 0 ? (
+          <>Executor never sends your {provider} sign-in on the app's requests.</>
+        ) : (
+          <>
+            Your {provider} sign-in is only sent to{" "}
+            {hosts.map((host, index) => (
+              <span key={host}>
+                <HostChip host={host} />
+                {index < hosts.length - 1 ? " " : "."}
+              </span>
+            ))}
+          </>
+        )}
+      </span>
+    </p>
   );
 }
 

@@ -326,4 +326,35 @@ layer(HostedLive, { excludeTestServices: true })("OAuth service interoperability
       }),
     ),
   );
+
+  it.effect(scenarios.oauthAhrefs.title, (context) =>
+    withHostedCase(
+      context,
+      Effect.gen(function* () {
+        const app = yield* oauthApp;
+        const ahrefs = yield* oauthInteropIssuer("ahrefs");
+        const signIn = yield* app.connect(
+          { discover: `${ahrefs.origin}/mcp` },
+          undefined,
+          `${ahrefs.origin}/resource`,
+        );
+        expect(signIn.completed.status, JSON.stringify(signIn.completed.body)).toBe(200);
+        const metrics = yield* ahrefs.metrics;
+        // Ahrefs refuses `application/x-www-form-urlencoded;charset=UTF-8`.
+        expect(metrics.tokenContentTypes).toEqual(["application/x-www-form-urlencoded"]);
+        // The trailing-slash resource is sent as published.
+        expect(signIn.authorizationUrl.searchParams.get("resource")).toBe(`${ahrefs.origin}/`);
+        expect(metrics.tokenRequests).toEqual([{ resource: `${ahrefs.origin}/`, issued: true }]);
+        expect(metrics.registrations).toEqual([
+          { grantTypes: ["authorization_code"], accepted: true },
+        ]);
+        const read = yield* app.read(signIn.app, signIn.profile);
+        expect(read.status, JSON.stringify(read.body)).toBe(200);
+        expect(yield* body(Echo, read)).toEqual({
+          refreshed: false,
+          authorization: "Bearer synthetic-access-token",
+        });
+      }),
+    ),
+  );
 });

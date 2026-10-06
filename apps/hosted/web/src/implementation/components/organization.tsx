@@ -1,6 +1,11 @@
 import { usePreload } from "@executor-js/ui/dashboard/context";
 import { PageFrame, PageHeader } from "@executor-js/ui/dashboard/page";
-import { OrganizationSlug, OrganizationReference } from "@executor-js/hosted-server/organization";
+import {
+  OrganizationSlug,
+  OrganizationReference,
+  organizationHandle,
+  organizationSlugMaxLength,
+} from "@executor-js/hosted-server/organization";
 import { organizationTargetAtom } from "../../contracts/organization-reference.ts";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { EmptyState } from "@executor-js/ui/dashboard/empty-state";
@@ -24,15 +29,7 @@ import {
   DropdownMenuTrigger,
 } from "@executor-js/ui/components/dropdown-menu";
 import { Avatar, AvatarFallback, AvatarImage } from "@executor-js/ui/components/avatar";
-import {
-  createContext,
-  useContext,
-  useEffect,
-  useRef,
-  useState,
-  type ReactNode,
-  type RefObject,
-} from "react";
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   accessAtom,
   organizationPresentation,
@@ -42,10 +39,16 @@ import {
   type OrganizationSummary,
 } from "../../contracts/organization.ts";
 import { Button } from "@executor-js/ui/components/button";
-import { Input } from "@executor-js/ui/components/input";
 import { Spinner } from "@executor-js/ui/components/spinner";
 
 import { HostedDashboard } from "./dashboard-bindings.tsx";
+import {
+  OrganizationForm,
+  OrganizationFormError,
+  OrganizationFormField,
+  OrganizationFormHeader,
+  OrganizationFormSubmit,
+} from "./organization-form.tsx";
 import { OrganizationSwitcherSkeleton } from "./dashboard-frame.tsx";
 import { HostedEntry, DashboardEntryPending, OrganizationLookupError } from "./entry.tsx";
 
@@ -144,20 +147,22 @@ export function organizationError(cause: Cause.Cause<OrganizationFailed | Schema
   });
 }
 
-/** Explicit creation, never an implicitly provisioned global organization. */
+/** Explicit creation, never an implicitly provisioned global organization. Children head the form. */
 export function CreateOrganization({
   onCreated,
-  heading = <h2>Create an organization</h2>,
+  children,
 }: {
   readonly onCreated?: (organization: OrganizationSummary) => void | Promise<void>;
-  readonly heading?: ReactNode;
+  readonly children: ReactNode;
 }) {
   const create = useAtomSet(createOrganizationAtom, { mode: "promiseExit" });
   const state = useAtomValue(createOrganizationAtom);
   const [error, setError] = useState<string | null>(null);
+  const [name, setName] = useState("");
+  // The handle follows the name until someone edits it.
+  const [handle, setHandle] = useState<string | null>(null);
   return (
-    <form
-      className="settings-form [&_h2]:text-[15px] [&_h2]:font-medium flex flex-col gap-4 w-full max-w-100 mt-7 [&_label]:flex [&_label]:flex-col [&_label]:gap-1.5 [&_label]:text-[13px] [&_>_button]:self-start"
+    <OrganizationForm
       onSubmit={async (event) => {
         event.preventDefault();
         setError(null);
@@ -170,66 +175,34 @@ export function CreateOrganization({
         else await onCreated?.(result.value);
       }}
     >
-      {heading}
-      <label>
-        Name
-        <Input name="name" placeholder="Acme" required maxLength={100} disabled={state.waiting} />
-      </label>
-      <label>
-        Handle
-        <Input
-          name="slug"
-          placeholder="acme"
-          required
-          pattern="[a-z0-9]+(-[a-z0-9]+)*"
-          title="Lowercase letters, numbers, and hyphens"
-          maxLength={80}
-          disabled={state.waiting}
-        />
-      </label>
-      {error && (
-        <p className="auth-error text-destructive text-[13px]" role="alert">
-          {error}
-        </p>
-      )}
-      <Button loading={state.waiting}>Create organization</Button>
-    </form>
-  );
-}
-
-/** Shared creation modal. Return keyboard focus to the button that opened it. */
-export function CreateOrganizationDialog({
-  open,
-  onOpenChange,
-  triggerRef,
-}: {
-  readonly open: boolean;
-  readonly onOpenChange: (open: boolean) => void;
-  readonly triggerRef: RefObject<HTMLButtonElement | null>;
-}) {
-  const navigate = useNavigate();
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        className="organization-dialog max-h-[calc(100dvh-32px)] w-[420px] overflow-y-auto rounded-[10px] sm:max-w-[420px] [&_.settings-form]:m-0 [&_.settings-form]:max-w-none [&_.settings-form_h2]:pr-7 [&_.settings-form_h2]:mb-1"
-        aria-describedby={undefined}
-        onCloseAutoFocus={(event) => {
-          event.preventDefault();
-          triggerRef.current?.focus();
-        }}
-      >
-        <CreateOrganization
-          heading={<DialogTitle>Create organization</DialogTitle>}
-          onCreated={async ({ slug }) => {
-            onOpenChange(false);
-            await navigate({
-              to: "/org/$organizationSlug/apps",
-              params: { organizationSlug: slug },
-            });
-          }}
-        />
-      </DialogContent>
-    </Dialog>
+      <OrganizationFormHeader>{children}</OrganizationFormHeader>
+      <OrganizationFormField
+        label="Name"
+        name="name"
+        placeholder="Acme"
+        value={name}
+        onChange={(event) => setName(event.target.value)}
+        required
+        maxLength={100}
+        autoComplete="organization"
+        autoFocus
+        disabled={state.waiting}
+      />
+      <OrganizationFormField
+        label="Handle"
+        name="slug"
+        placeholder="acme"
+        value={handle ?? organizationHandle(name)}
+        onChange={(event) => setHandle(event.target.value)}
+        required
+        pattern="[a-z0-9]+(-[a-z0-9]+)*"
+        title="Lowercase letters, numbers, and hyphens"
+        maxLength={organizationSlugMaxLength}
+        disabled={state.waiting}
+      />
+      <OrganizationFormError>{error}</OrganizationFormError>
+      <OrganizationFormSubmit loading={state.waiting}>Create organization</OrganizationFormSubmit>
+    </OrganizationForm>
   );
 }
 
@@ -453,7 +426,7 @@ export function OrganizationEntry({ allowCreate = true }: { readonly allowCreate
     <HostedEntry
       title={organizations.value.length > 0 ? "Choose an organization" : "Your organizations"}
     >
-      <div className="organization-entry flex flex-col gap-6 [&_.settings-form]:mt-0 [&_.settings-form_>_button]:self-stretch">
+      <div className="organization-entry flex flex-col gap-6">
         {organizations.value.length > 0 && (
           <div className="flex flex-col gap-2">
             {organizations.value.map((organization) => (
@@ -474,7 +447,9 @@ export function OrganizationEntry({ allowCreate = true }: { readonly allowCreate
               onCreated={({ slug }) =>
                 navigate({ to: "/org/$organizationSlug/apps", params: { organizationSlug: slug } })
               }
-            />
+            >
+              <h2>Create an organization</h2>
+            </CreateOrganization>
           ) : (
             <EmptyState size="compact" title="No organization access">
               Your account has no access to this instance. Contact an administrator.
@@ -632,11 +607,28 @@ export function OrganizationSwitcher({ allowCreate = true }: { readonly allowCre
           )}
         </DropdownMenuContent>
       </DropdownMenu>
-      <CreateOrganizationDialog
-        open={creating}
-        onOpenChange={setCreating}
-        triggerRef={triggerRef}
-      />
+      <Dialog open={creating} onOpenChange={setCreating}>
+        <DialogContent
+          className="max-h-[calc(100dvh-32px)] overflow-y-auto sm:max-w-[480px]"
+          aria-describedby={undefined}
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            triggerRef.current?.focus();
+          }}
+        >
+          <CreateOrganization
+            onCreated={async ({ slug }) => {
+              setCreating(false);
+              await navigate({
+                to: "/org/$organizationSlug/apps",
+                params: { organizationSlug: slug },
+              });
+            }}
+          >
+            <DialogTitle className="pr-7">Create organization</DialogTitle>
+          </CreateOrganization>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

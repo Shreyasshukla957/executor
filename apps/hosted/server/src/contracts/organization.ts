@@ -29,6 +29,16 @@ export const OrganizationSlug = Schema.String.check(
   Schema.isPattern(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
 ).pipe(Schema.brand("OrganizationSlug"));
 export type OrganizationSlug = typeof OrganizationSlug.Type;
+/** Suggested handle for a display name; empty when the name has no usable characters. */
+export const organizationHandle = (name: string, maxLength = organizationSlugMaxLength) =>
+  name
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, maxLength)
+    .replace(/-+$/g, "");
 /** Explicit API target. Resolution rejects collisions between the ID and slug namespaces. */
 export const OrganizationReference = Schema.Union([OrganizationId, OrganizationSlug]);
 export type OrganizationReference = typeof OrganizationReference.Type;

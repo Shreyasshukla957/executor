@@ -13,7 +13,14 @@ import { scenarios } from "../test-plan.ts";
 
 const Requirements = Schema.Struct({
   id: Schema.String,
-  requirements: Schema.Struct({ accounts: Schema.Record(Schema.String, Schema.Unknown) }),
+  requirements: Schema.Struct({
+    accounts: Schema.Record(
+      Schema.String,
+      Schema.Struct({
+        definition: Schema.Struct({ hosts: Schema.optionalKey(Schema.Array(Schema.String)) }),
+      }),
+    ),
+  }),
 });
 const Rejected = Schema.Struct({
   _tag: Schema.Literal("CatalogImportFailed"),
@@ -62,6 +69,10 @@ layer(HostedLive, { excludeTestServices: true })("MCP auth discovery", (it) => {
             probes,
           );
           expect(Object.keys(app.requirements.accounts)).toEqual(["service"]);
+          expect(
+            app.requirements.accounts.service?.definition.hosts,
+            "The generated provider sends its tokens only to the server",
+          ).toEqual([new URL(issuer.origin).host]);
           const profile = yield* createProfile(actors.owner, `${prefix}/apps/${app.id}`);
           const connection = yield* body(
             Resource,

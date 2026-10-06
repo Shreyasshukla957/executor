@@ -7,12 +7,18 @@ import { HostedEntry, HostedEntryLoading } from "@executor-js/hosted-web/entry";
 import { McpConsentLoading } from "@executor-js/ui/dashboard/mcp-consent";
 import { IconPicker } from "@executor-js/hosted-web/icon-picker";
 import {
+  OrganizationForm,
+  OrganizationFormError,
+  OrganizationFormField,
+  OrganizationFormHeader,
+  OrganizationFormSubmit,
+} from "@executor-js/hosted-web/organization-form";
+import {
   selectOrganizationIconAtom,
   OrganizationIconSelectionFailed,
   type SelectedOrganizationIcon,
 } from "@executor-js/hosted-web/contracts/organization-icon";
 import { Button } from "@executor-js/ui/components/button";
-import { Input } from "@executor-js/ui/components/input";
 import { Link, Navigate, useLocation } from "@tanstack/react-router";
 import { Cause, Exit, Option, Schema } from "effect";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
@@ -190,7 +196,7 @@ function TeamForm({
         className="w-full max-w-[560px] rounded-2xl border bg-card p-10 max-[600px]:p-6"
         aria-labelledby="team-setup-title"
       >
-        <header className="mb-5 flex items-center gap-3.5 [&_h1]:text-2xl [&_h1]:font-medium [&_h1]:tracking-[-0.04em]">
+        <OrganizationFormHeader className="mb-5">
           <IconPicker
             name={suggestion.name}
             preview={icon.kind === "file" ? icon.preview : icon.logo}
@@ -212,13 +218,12 @@ function TeamForm({
             }}
           />
           <h1 id="team-setup-title">Create your team</h1>
-        </header>
+        </OrganizationFormHeader>
         <p className="mb-8 text-sm leading-6 text-muted-foreground">
           You use Executor through your AI agent. Connect your agent over MCP to build apps and use
           your tools. Your team keeps your apps, accounts, and access together.
         </p>
-        <form
-          className="flex flex-col gap-2.5 [&_label]:text-sm [&_label]:text-muted-foreground [&_input]:h-12 [&_input]:px-3.5 [&_input]:text-base"
+        <OrganizationForm
           onSubmit={async (event) => {
             event.preventDefault();
             if (pending) return;
@@ -243,9 +248,8 @@ function TeamForm({
             if (Exit.isFailure(result)) setError("Unable to create your team. Try again.");
           }}
         >
-          <label htmlFor="team-name">Team name</label>
-          <Input
-            id="team-name"
+          <OrganizationFormField
+            label="Team name"
             name="name"
             defaultValue={suggestion.name}
             required
@@ -257,15 +261,9 @@ function TeamForm({
           <span className="sr-only" role="status">
             {selection.waiting ? "Reading icon" : icon.kind === "file" ? "Icon selected" : ""}
           </span>
-          {error && (
-            <p className="auth-error text-[13px] text-destructive" role="alert">
-              {error}
-            </p>
-          )}
-          <Button className="mt-[30px] min-h-12 w-full text-base" type="submit" loading={pending}>
-            Continue
-          </Button>
-        </form>
+          <OrganizationFormError>{error}</OrganizationFormError>
+          <OrganizationFormSubmit loading={pending}>Continue</OrganizationFormSubmit>
+        </OrganizationForm>
       </section>
     </SetupPageFrame>
   );

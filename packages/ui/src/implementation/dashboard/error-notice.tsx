@@ -14,6 +14,7 @@ export function ErrorNotice({
   error,
   action,
   context,
+  recovery = error.recovery.action,
   retry,
   retrying = false,
   layout = "inline",
@@ -24,6 +25,11 @@ export function ErrorNotice({
   readonly action?: ReactNode;
   /** The operation supplies task context without changing the error's reusable explanation. */
   readonly context: string;
+  /**
+   * The product's next step when it does not offer the one the error's recovery names, such as a
+   * page that cannot start account setup itself. The explanation and fix prompt stay the error's.
+   */
+  readonly recovery?: string | undefined;
   readonly retry?: (() => void) | undefined;
   readonly retrying?: boolean | undefined;
   readonly layout?: "inline" | "panel";
@@ -56,7 +62,7 @@ export function ErrorNotice({
         )}
       >
         <p>{error.description}</p>
-        <p>{error.recovery.action}</p>
+        <p>{recovery}</p>
       </AlertDescription>
       <ErrorTrackedNote error={error} />
       {error.detail && (

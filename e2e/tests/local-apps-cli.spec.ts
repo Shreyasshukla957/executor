@@ -1,6 +1,6 @@
 /** Drive the real `executor apps` CLI against the managed local server. */
 import { expect, layer } from "@effect/vitest";
-import { Config, Effect, FileSystem, Option, Redacted, Schema, Stream } from "effect";
+import { Config, Effect, FileSystem, Option, Path, Redacted, Schema, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { scenarios } from "../test-plan.ts";
 import { Api } from "../support/api.ts";
@@ -31,31 +31,40 @@ const Deployed = Schema.Struct({
 const Source = Schema.fromJsonString(
   Schema.Struct({ files: Schema.Array(Schema.Struct({ path: Schema.String })) }),
 );
+/** A CLI commit prints only its new revision, never the files it sent. */
+const Committed = Schema.fromJsonString(Schema.Struct({ revision: Workspace.fields.revision }));
 
 /** The real CLI, run as a child process against the managed local server with its own home. */
 const cli = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem,
+    path = yield* Path.Path,
     processes = yield* ChildProcessSpawner.ChildProcessSpawner,
     target = yield* Target,
     evidence = yield* Evidence;
   const packagedEntry = yield* Config.NonEmptyString("EXECUTOR_E2E_LOCAL_ENTRY").pipe(
     Config.option,
   );
-  // The packaged entry is JavaScript; Windows cannot execute it directly.
-  const entry = Option.isSome(packagedEntry) ? packagedEntry.value : "apps/local/server/src/bin.ts";
+  // The packaged entry is JavaScript; Windows cannot execute it directly. Commands may run from
+  // another directory, so the entry is absolute.
+  const entry = path.resolve(
+    Option.isSome(packagedEntry) ? packagedEntry.value : "apps/local/server/src/bin.ts",
+  );
   const home = yield* fs.makeTempDirectoryScoped({ prefix: "executor-apps-cli-" });
   const origin = target.metadata.origin;
-  const run = (args: readonly string[], signedIn: boolean) =>
+  const run = (args: readonly string[], signedIn: boolean, cwd?: string) =>
     evidence.step(
       `executor apps ${args.join(" ")}`,
       Effect.scoped(
         Effect.gen(function* () {
           const child = yield* processes.spawn(
             ChildProcess.make("node", [entry, "apps", ...args], {
+              cwd,
               extendEnv: false,
               env: {
                 PATH: process.env.PATH ?? "",
                 HOME: home,
+                // Release scenarios never send product analytics, even from a build with a baked key.
+                DO_NOT_TRACK: "1",
                 ...(signedIn ? { EXECUTOR_API_KEY: Redacted.value(target.apiKey) } : {}),
               },
               stdout: "pipe",
@@ -103,12 +112,22 @@ layer(TestLive, { excludeTestServices: true })("Local apps CLI", (it) => {
         expect(listed.code, listed.stderr).toBe(0);
         const catalogs = yield* Schema.decodeUnknownEffect(Catalogs)(listed.stdout);
         expect(
-          catalogs.catalogs.some(
-            (catalog) =>
-              catalog.app.slug === "executor" &&
-              catalog.skills.some((skill) => skill.name === "app-authoring"),
-          ),
-        ).toBe(true);
+          catalogs.catalogs
+            .find((catalog) => catalog.app.slug === "executor")
+            ?.skills.map((skill) => skill.name)
+            .toSorted(),
+        ).toEqual(["app-authoring", "code-mode", "executor"]);
+
+        // Agents read the entry skill first; it links to the authoring guide.
+        const entry = yield* run(
+          ["skills", "--host", origin, "--app", "executor", "--name", "executor"],
+          true,
+        );
+        expect(entry.code, entry.stderr).toBe(0);
+        const entryDocument = yield* Schema.decodeUnknownEffect(Document)(entry.stdout);
+        expect(entryDocument.content).toContain("# Executor");
+        expect(entryDocument.content).toContain("`app-authoring`");
+        expect(entryDocument.files).toContain("feedback.md");
 
         const guide = yield* run(
           ["skills", "--host", origin, "--app", "executor", "--name", "app-authoring"],
@@ -193,6 +212,42 @@ layer(TestLive, { excludeTestServices: true })("Local apps CLI", (it) => {
         expect(refused.code).toBe(1);
         expect(refused.stderr).toContain(
           `Add "apps": "${appsVersion}" to package.json dependencies.`,
+        );
+
+        // Committing the current directory prints only the new revision, which the next read reports.
+        yield* fs.writeFileString(`${source}/lib/label.ts`, 'export const label = "edited";\n');
+        const committed = yield* run(
+          [
+            "commit",
+            "--host",
+            origin,
+            "--app",
+            app.id,
+            "--files",
+            ".",
+            "--expected",
+            directory.revision.commit,
+            "--message",
+            "Edit the label",
+          ],
+          true,
+          source,
+        );
+        yield* evidence.json("commit.json", committed);
+        expect(committed.code, committed.stderr).toBe(0);
+        const saved = yield* Schema.decodeUnknownEffect(Committed)(committed.stdout, {
+          onExcessProperty: "error",
+        });
+        expect(saved.revision.code).toBe(directory.revision.code);
+        expect(saved.revision.commit).not.toBe(directory.revision.commit);
+        const edited = yield* run(["source", "--host", origin, "--app", app.id], true);
+        expect(edited.code, edited.stderr).toBe(0);
+        const after = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Workspace))(
+          edited.stdout,
+        );
+        expect(after.revision).toEqual(saved.revision);
+        expect(after.files.find((file) => file.path === "lib/label.ts")?.content).toBe(
+          'export const label = "edited";\n',
         );
       }),
     ),

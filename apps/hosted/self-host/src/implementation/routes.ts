@@ -1,3 +1,4 @@
+import { localSourceFormatter } from "@executor-js/app-management/source-format";
 import { publishedSkillRoutes } from "@executor-js/app-templates/executor";
 import {
   drainProvisioning,
@@ -22,8 +23,7 @@ import {
   hostedOAuthCallback,
   hostedWebhookCallback,
   catalogLive,
-  requireUserLive,
-  requireOrganizationLive,
+  hostedMiddlewareLive,
   mcpProtectedResource,
   mcpAuthorizationServer,
   apiChallenge,
@@ -99,11 +99,11 @@ export const selfHostRouteMap = <DashboardE, DashboardR>(options: {
     const document = lazyHostedApiDocument(() => executorSelfHostApiDocument(auth.origin));
     const api = selfHostApi(document).pipe(
       Layer.provide(frameworkDocumentation(Effect.succeed(skills))),
+      HttpRouter.provideRequest(localSourceFormatter),
       Layer.provide(appUi.dashboard),
       HttpRouter.provideRequest(auth.appSessions),
       HttpRouter.provideRequest(catalogLive(document.document, egress)),
-      Layer.provide(requireUserLive),
-      Layer.provide(requireOrganizationLive),
+      Layer.provide(hostedMiddlewareLive),
       HttpRouter.provideRequest(executorServices),
       Layer.provide(auth.identity),
       Layer.provide(auth.apiIdentity),

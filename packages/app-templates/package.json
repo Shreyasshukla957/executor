@@ -7,7 +7,7 @@
     ".": "./src/index.ts",
     "./contracts": "./src/contracts/templates.ts",
     "./executor": "./src/executor.ts",
-    "./executor/skills/app-authoring/SKILL.md": "./executor/skills/app-authoring/SKILL.md"
+    "./executor/skills/executor/SKILL.md": "./executor/skills/executor/SKILL.md"
   },
   "dependencies": {
     "@executor-js/sdk": "workspace:*",

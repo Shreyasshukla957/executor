@@ -4,6 +4,7 @@ import { FetchHttpClient } from "effect/unstable/http";
 import {
   OpenapiError,
   OpenapiToolsOptions,
+  isOpenapiReadMethod,
   type OpenapiTools,
   type OpenapiOperation,
   type OpenapiParameterDefaults,
@@ -181,7 +182,7 @@ export const openapiToolsEffect = (
           const { input, errors } = schemas;
           const tool: OpenapiTools[string] = {
             description: op.description,
-            readOnly: ["GET", "HEAD", "OPTIONS"].includes(op.method),
+            readOnly: isOpenapiReadMethod(op.method),
             input,
             run: (_context, value) =>
               Schema.decodeUnknownEffect(input)(

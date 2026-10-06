@@ -123,4 +123,74 @@ export default defineApp({ accounts: {} }, async (ctx) => ({
       }),
     ),
   );
+
+  it.effect(scenarios.cachedSkillsRefresh.title, (context) =>
+    withHostedCase(
+      context,
+      Effect.gen(function* () {
+        const api = yield* Api,
+          actors = yield* Actors;
+        const upstream = yield* skillUpstream;
+        const prefix = `/api/organizations/${actors.organization.id}/apps`;
+        const response = yield* api.request(actors.owner, "POST", `${prefix}/deploy`, {
+          name: `Refreshed skills ${randomUUID().slice(0, 8)}`,
+          files: [
+            {
+              path: "index.ts",
+              content: `import { defineApp, query, object, router } from "apps";
+import { wellKnownSkills } from "apps/skills";
+export default defineApp({ accounts: {} }, async (ctx) => ({
+  tools: router({
+    reference: query({ input: object({}) }, async () => {
+      const skills = await wellKnownSkills({ url: ${JSON.stringify(upstream.url)}, cache: ctx.cache, freshFor: "1 second", fetch: ctx.fetch, signal: ctx.signal });
+      return skills.flatMap((skill) => skill.files).find((file) => file.path === "references/example.md")?.content ?? null;
+    }),
+  }),
+}));`,
+            },
+            appsManifest,
+          ],
+        });
+        expect(response.status, JSON.stringify(response.body)).toBe(200);
+        const app = yield* body(App, response);
+        yield* Effect.addFinalizer(() =>
+          api.request(actors.owner, "DELETE", `${prefix}/${app.id}`).pipe(Effect.orDie),
+        );
+        /** The reference file of the catalog the tool read, as the tool call returned it. */
+        const reference = Effect.gen(function* () {
+          const called = yield* api.request(
+            actors.owner,
+            "POST",
+            `${prefix}/${app.id}/tools/call`,
+            {
+              tool: "reference",
+              kind: "query",
+              input: {},
+            },
+          );
+          expect(called.status, JSON.stringify(called.body)).toBe(200);
+          const text = JSON.stringify(called.body);
+          return text.includes("# Reference 2") ? 2 : text.includes("# Reference 1") ? 1 : 0;
+        });
+
+        expect(yield* reference).toBe(1);
+        const loaded = (yield* upstream.requests).length;
+
+        // Past freshFor, a read returns the kept catalog while a background refresh loads the new
+        // publication with the author's fetch; the refresh outlives the call that started it.
+        yield* upstream.publish(2);
+        yield* Effect.sleep("1500 millis");
+        expect(yield* reference).toBe(1);
+        const refreshed = yield* reference.pipe(
+          Effect.flatMap((version) =>
+            version === 2 ? Effect.succeed(version) : Effect.fail(new Error("Not refreshed")),
+          ),
+          Effect.retry({ schedule: Schedule.spaced("250 millis"), times: 20 }),
+          Effect.orElseSucceed(() => 1),
+        );
+        expect(refreshed, JSON.stringify(yield* upstream.requests)).toBe(2);
+        expect((yield* upstream.requests).length).toBeGreaterThan(loaded);
+      }),
+    ),
+  );
 });

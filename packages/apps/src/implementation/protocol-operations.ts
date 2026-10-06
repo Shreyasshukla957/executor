@@ -17,6 +17,9 @@ interface ProtocolOperation {
   readonly annotations?: ToolAnnotations | undefined;
   readonly _meta?: JsonObject | undefined;
   readonly input: Schema.Decoder<JsonValue>;
+  /** Checks and describes every returned value. */
+  readonly output?: Schema.Decoder<JsonValue> | undefined;
+  /** Describes the returned value without checking it; ignored when `output` is declared. */
   readonly outputSchema?: JsonObject | undefined;
   readonly run: (context: OperationContext, input: JsonValue) => Effect.Effect<unknown, unknown>;
 }
@@ -41,12 +44,15 @@ export const protocolOperations = (
       ...(operation.annotations === undefined ? {} : { annotations: operation.annotations }),
       ...(operation._meta === undefined ? {} : { _meta: operation._meta }),
       input: operation.input,
+      ...(operation.output === undefined ? {} : { output: operation.output }),
       run: operation.run,
     };
     // Copy the property itself: an adapter may build a large output schema only when it is read.
     const output = Object.getOwnPropertyDescriptor(operation, "outputSchema");
     const withOutput = <T extends object>(target: T): T =>
-      output === undefined || (output.get === undefined && output.value === undefined)
+      operation.output !== undefined ||
+      output === undefined ||
+      (output.get === undefined && output.value === undefined)
         ? target
         : Object.defineProperty(target, "outputSchema", { ...output, enumerable: true });
     declared[name] = operationDeclaration(withOutput({ ...native, kind }));

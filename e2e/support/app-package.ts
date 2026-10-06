@@ -106,7 +106,7 @@ const packDirectory = (source: string, destination: string) =>
   });
 
 /**
- * The published `apps@0.0.1-beta.0`, and a copy whose `runtime.json` declares protocol 8. The real
+ * The published `apps@0.0.1-beta.0`, and a copy whose `runtime.json` declares protocol 9. The real
  * archive predates exports the host added later, so linking only current exports would fail.
  */
 export const appPackageFixture = Effect.gen(function* () {
@@ -130,7 +130,7 @@ export const appPackageFixture = Effect.gen(function* () {
   const runtime = yield* fs
     .readFileString(runtimeFile)
     .pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(RuntimePackage))));
-  yield* fs.writeFileString(runtimeFile, JSON.stringify({ ...runtime, protocol: 8 }));
+  yield* fs.writeFileString(runtimeFile, JSON.stringify({ ...runtime, protocol: 9 }));
   archives.set("/unsupported.tgz", yield* pack(path.join(extracted, "package")));
 
   for (const [name, dependencies, content] of [

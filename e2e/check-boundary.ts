@@ -37,6 +37,12 @@ const check = Effect.gen(function* () {
   const root = path.resolve("e2e");
   const problems: string[] = [];
   const plan = new Map<string, typeof TestPlan.Type>(Object.entries(scenarios));
+  const legacyStorage = path.join("support", "legacy-storage.ts");
+  for (const [name, scenario] of plan)
+    if (scenario.legacyStorage === true && scenario.targets.cloud.status === "scheduled")
+      problems.push(
+        `test-plan.ts: scenarios.${name} writes legacy storage, which Cloud does not expose`,
+      );
   const walk = (directory: string): Effect.Effect<void, PlatformError.PlatformError> =>
     Effect.gen(function* () {
       for (const name of yield* fs.readDirectory(directory)) {
@@ -76,6 +82,18 @@ const check = Effect.gen(function* () {
           )
             return;
           if (label.startsWith(`viewer${path.sep}`) && specifier === "media-chrome/react") return;
+          // The only database driver: runner-applied legacy rows for declared scenarios.
+          if (label === legacyStorage && specifier === "@electric-sql/pglite") return;
+          if (
+            specifier.startsWith(".") &&
+            path.resolve(path.dirname(file), specifier) === path.join(root, legacyStorage) &&
+            !label.startsWith(`tests${path.sep}`) &&
+            label !== `support${path.sep}managed-server.ts`
+          ) {
+            // A wrapper would hide direct database writes from the scenario declaration check.
+            problems.push(`${label}: only scenarios and the runner may use legacy storage`);
+            return;
+          }
           if (
             specifier.startsWith(".") &&
             path.resolve(path.dirname(file), specifier).startsWith(root + path.sep)
@@ -96,7 +114,56 @@ const check = Effect.gen(function* () {
               ts.isStringLiteral(attribute.value) &&
               attribute.value.text === "json",
           ) === true;
+        // Names bound to legacy storage in this scenario file; each use needs a declaration.
+        const legacyNames = new Set<string>();
+        if (label.startsWith(`tests${path.sep}`))
+          for (const statement of source.statements) {
+            if (
+              !ts.isImportDeclaration(statement) ||
+              !ts.isStringLiteral(statement.moduleSpecifier) ||
+              path.resolve(path.dirname(file), statement.moduleSpecifier.text) !==
+                path.join(root, legacyStorage)
+            )
+              continue;
+            const clause = statement.importClause;
+            if (clause?.name) legacyNames.add(clause.name.text);
+            const bindings = clause?.namedBindings;
+            if (bindings && ts.isNamespaceImport(bindings)) legacyNames.add(bindings.name.text);
+            if (bindings && ts.isNamedImports(bindings))
+              for (const element of bindings.elements) legacyNames.add(element.name.text);
+          }
+        const scenarioOf = (node: ts.Node) => {
+          for (let parent: ts.Node | undefined = node.parent; parent; parent = parent.parent) {
+            if (!ts.isCallExpression(parent)) continue;
+            const title = parent.arguments[0];
+            if (!title || !ts.isPropertyAccessExpression(title) || title.name.text !== "title")
+              continue;
+            const entry = title.expression;
+            if (
+              ts.isPropertyAccessExpression(entry) &&
+              ts.isIdentifier(entry.expression) &&
+              entry.expression.text === "scenarios"
+            )
+              return entry.name.text;
+          }
+          return undefined;
+        };
         const visit = (node: ts.Node) => {
+          if (
+            ts.isIdentifier(node) &&
+            legacyNames.has(node.text) &&
+            !ts.isImportSpecifier(node.parent) &&
+            !ts.isImportClause(node.parent) &&
+            !ts.isNamespaceImport(node.parent) &&
+            !(ts.isPropertyAccessExpression(node.parent) && node.parent.name === node) &&
+            !(ts.isPropertyAssignment(node.parent) && node.parent.name === node)
+          ) {
+            const name = scenarioOf(node);
+            if (name === undefined)
+              problems.push(`${label}: legacy storage must be used inside a planned scenario`);
+            else if (plan.get(name)?.legacyStorage !== true)
+              problems.push(`${label}: scenarios.${name} must declare legacyStorage`);
+          }
           if (
             label.startsWith(`tests${path.sep}`) &&
             ts.isCallExpression(node) &&
@@ -104,22 +171,9 @@ const check = Effect.gen(function* () {
             node.expression.text === "withHostedCase"
           ) {
             // The case and native setup hook must agree before we start a server.
-            for (let parent: ts.Node | undefined = node.parent; parent; parent = parent.parent) {
-              if (!ts.isCallExpression(parent)) continue;
-              const title = parent.arguments[0];
-              if (!title || !ts.isPropertyAccessExpression(title) || title.name.text !== "title")
-                continue;
-              const entry = title.expression;
-              if (
-                !ts.isPropertyAccessExpression(entry) ||
-                !ts.isIdentifier(entry.expression) ||
-                entry.expression.text !== "scenarios"
-              )
-                continue;
-              if (plan.get(entry.name.text)?.fixtures !== "actors")
-                problems.push(`${label}: scenarios.${entry.name.text} must declare actor fixtures`);
-              break;
-            }
+            const name = scenarioOf(node);
+            if (name !== undefined && plan.get(name)?.fixtures !== "actors")
+              problems.push(`${label}: scenarios.${name} must declare actor fixtures`);
           }
           if (
             !label.startsWith(`viewer${path.sep}`) &&

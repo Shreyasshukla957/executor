@@ -16,7 +16,7 @@ import type { makeOAuth } from "./oauth.ts";
 /** Bind data calls to fresh saved app/deployment/account selections. */
 export const makeAppData = (
   storage: ExecutorDatabase,
-  resolveAccount: ReturnType<typeof makeOAuth>["resolve"],
+  resolveAccount: ReturnType<typeof makeOAuth>["resolveSelected"],
   runtime: Runtime,
   appStorage?: AppDatabases,
   workflows?: (state: InvocationSnapshot) => WorkflowHostControls,

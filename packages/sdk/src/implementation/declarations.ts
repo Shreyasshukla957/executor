@@ -1,5 +1,16 @@
 /** Stale-while-revalidate reads of evaluated app declarations (skills, workflows, webhooks). */
-import { Clock, Deferred, Effect, Encoding, Fiber, Option, Schema, type Crypto } from "effect";
+import {
+  Array as Arr,
+  Clock,
+  Deferred,
+  Effect,
+  Encoding,
+  Exit,
+  Fiber,
+  Option,
+  Schema,
+  type Crypto,
+} from "effect";
 import {
   declarationFreshness,
   declarationLimits,
@@ -16,6 +27,7 @@ import type { ResourceLifecycle } from "../contracts/executor.ts";
 import { CurrentProfile } from "../contracts/profiles.ts";
 import { StorageError } from "../contracts/shared.ts";
 import type { makeOAuth } from "./oauth.ts";
+import { makeHandoff } from "./handoff.ts";
 import { resolve, type InvocationSnapshot } from "./tools.ts";
 
 /** One store per process or isolate. Least recently used entries leave first. */
@@ -82,7 +94,7 @@ export const makeDeclarations = (options: {
   readonly cache: DeclarationCache;
   readonly durable: DurableDeclarations | undefined;
   readonly background: BackgroundWork | undefined;
-  readonly resolveAccount: ReturnType<typeof makeOAuth>["resolve"];
+  readonly resolveAccount: ReturnType<typeof makeOAuth>["resolveSelected"];
   readonly accountUsable: ReturnType<typeof makeOAuth>["usable"];
   readonly crypto: Crypto.Crypto;
   readonly lifecycle: ResourceLifecycle | undefined;
@@ -129,18 +141,35 @@ export const makeDeclarations = (options: {
       const lifecycle = options.lifecycle;
       if (state.profile !== undefined && lifecycle?.profileResolving)
         yield* lifecycle.profileResolving(state.profile);
-      yield* Effect.forEach(
-        state.selections.flatMap(({ required, accounts }) =>
-          accounts.map((account) => ({ account, provider: required.definition })),
-        ),
-        ({ account, provider }) =>
-          Effect.all(
-            [
-              lifecycle === undefined ? Effect.void : lifecycle.accountResolving(account),
-              options.accountUsable(account, provider),
-            ],
-            { concurrency: "unbounded", discard: true },
+      const selected = state.selections.flatMap(({ required, accounts }) =>
+        accounts.map((account) => ({ account, provider: required.definition })),
+      );
+      const accounts = selected.map(({ account }) => account);
+      // Product authority for every account is one read, alongside the grant checks.
+      const authorized =
+        lifecycle === undefined || !Arr.isReadonlyArrayNonEmpty(accounts)
+          ? Effect.void
+          : lifecycle
+              .accountsResolving(accounts)
+              .pipe(
+                Effect.flatMap((allowed) =>
+                  accounts.every((account) => allowed.has(account.id))
+                    ? Effect.void
+                    : Effect.fail(new StorageError()),
+                ),
+              );
+      yield* Effect.all(
+        [
+          authorized,
+          Effect.forEach(
+            selected,
+            ({ account, provider }) => options.accountUsable(account, provider),
+            {
+              concurrency: "unbounded",
+              discard: true,
+            },
           ),
+        ],
         { concurrency: "unbounded", discard: true },
       );
     }).pipe(Effect.provideService(CurrentProfile, state.profile));
@@ -284,8 +313,8 @@ export const makeDeclarations = (options: {
                     started: yield* Clock.currentTimeMillis,
                     waiters: 0,
                     overdue: false,
-                    unwatched: Deferred.makeUnsafe(),
-                    done: Deferred.makeUnsafe(),
+                    unwatched: makeHandoff(),
+                    done: makeHandoff(),
                   };
                   options.cache.begin(id, refresh);
                   const accepted = yield* background(
@@ -296,7 +325,7 @@ export const makeDeclarations = (options: {
                       Effect.onExit(() =>
                         Effect.suspend(() => {
                           options.cache.end(id, refresh);
-                          return Deferred.succeed(refresh.done, undefined);
+                          return refresh.done.settle(undefined);
                         }),
                       ),
                       Effect.withSpan("sdk.declarations.refresh"),
@@ -307,6 +336,70 @@ export const makeDeclarations = (options: {
               );
             return value;
           });
+        /**
+         * The evaluation that runs beside a slow durable read. With background work it outlives
+         * the read when the durable copy answers first, so the reader never waits for it to stop,
+         * and it is this key's registered evaluation, so serving a stale copy starts no second
+         * one. It keeps its result like a refresh. Without background work it is the reader's own.
+         */
+        const beside = Effect.uninterruptible(
+          Effect.gen(function* () {
+            const background = options.background;
+            if (background === undefined || options.cache.pending(id) !== undefined) return miss;
+            const result = yield* Deferred.make<
+              Effect.Success<typeof evaluation>,
+              Effect.Error<typeof evaluation>
+            >();
+            const load: PendingLoad = {
+              started: yield* Clock.currentTimeMillis,
+              waiters: 0,
+              overdue: false,
+              unwatched: makeHandoff(),
+              done: makeHandoff(),
+            };
+            options.cache.begin(id, load);
+            const accepted = yield* background(
+              evaluation.pipe(
+                Effect.exit,
+                Effect.tap((exit) => Deferred.done(result, exit)),
+                Effect.flatMap((exit) =>
+                  Exit.isSuccess(exit) && exit.value.kept !== undefined
+                    ? persist(state.app.id, id, Effect.succeed(exit.value.kept))
+                    : Effect.void,
+                ),
+                // Once the reader has left, it is bounded like a refresh, since it holds this
+                // key's registration and no other refresh starts while it runs.
+                Effect.raceFirst(
+                  Effect.sleep(declarationFreshness.refreshMillis).pipe(
+                    Effect.andThen(load.unwatched.await),
+                    Effect.andThen(Effect.logWarning("Declaration evaluation stopped")),
+                  ),
+                ),
+                Effect.onExit(() =>
+                  Effect.suspend(() => {
+                    options.cache.end(id, load);
+                    return load.done.settle(undefined);
+                  }),
+                ),
+                // A host that stops background work early leaves the reader with no result.
+                Effect.ensuring(Deferred.interrupt(result)),
+                Effect.asVoid,
+                Effect.withSpan("sdk.declarations.evaluate"),
+                // Background work may start uninterruptible; its time bound must still stop it.
+                Effect.interruptible,
+              ),
+            );
+            if (!accepted) {
+              options.cache.end(id, load);
+              return miss;
+            }
+            return Effect.annotateCurrentSpan("executor.declarations.cache", "miss").pipe(
+              Effect.andThen(Deferred.await(result)),
+              Effect.ensuring(load.unwatched.settle(undefined)),
+              Effect.map(({ value }) => value),
+            );
+          }),
+        );
         const kept = current(yield* options.cache.get(id), yield* Clock.currentTimeMillis);
         if (kept?.kind === "json") return yield* serve(kept);
         if (options.durable === undefined) return yield* miss;
@@ -338,7 +431,7 @@ export const makeDeclarations = (options: {
         // A slow supervisor, often one waking up, would delay every miss: evaluate beside the
         // read and answer with whichever settles first. A result the read finds still wins.
         return yield* Effect.raceFirst(
-          miss,
+          yield* beside,
           Fiber.join(recalling).pipe(Effect.flatMap((found) => recalled(found) ?? Effect.never)),
         );
       }).pipe(

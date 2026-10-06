@@ -1,13 +1,12 @@
 /** App-origin sessions read Better Auth's tables without the dashboard's sign-in stack. */
-import { HostedAppSessions, hostedAppSessions } from "@executor-js/hosted-server/app-ui";
+import { HostedAppSessions } from "@executor-js/hosted-server/app-ui";
 import { createLogger } from "@better-auth/core/env";
 import { generateId } from "@better-auth/core/utils/id";
 import type { BetterAuthOptions, BetterAuthPlugin } from "better-auth";
 import { createInternalAdapter } from "better-auth/db";
 import { getAdapter } from "better-auth/db/adapter";
-import { RuntimeContext } from "alchemy";
 import { Effect, Layer } from "effect";
-import { AuthDatabase, boundAuthAdapter } from "./auth-database.ts";
+import { AuthDatabase, appSessionsPerCall, boundAuthAdapter } from "./auth-database.ts";
 
 /**
  * The organization plugin's columns that app sessions read. The dashboard's plugin
@@ -56,20 +55,15 @@ export const cloudAppSessions = Effect.gen(function* () {
   // One adapter per isolate, like the dashboard's Better Auth instance. It holds no
   // connection: every call binds the calling invocation's pool through `database`.
   let store: Awaited<ReturnType<typeof makeStore>> | undefined;
-  return Layer.effect(
+  return Layer.succeed(
     HostedAppSessions,
-    Effect.all([Effect.promise(async () => (store ??= await makeStore())), database.bind]).pipe(
-      Effect.map(([{ adapter, internalAdapter }, bind]) =>
-        hostedAppSessions(
-          {
-            internalAdapter: boundAuthAdapter(internalAdapter, bind),
-            adapter: boundAuthAdapter(adapter, bind),
-          },
-          globalThis.crypto,
-        ),
+    appSessionsPerCall(
+      Effect.all([Effect.promise(async () => (store ??= await makeStore())), database.bind]).pipe(
+        Effect.map(([{ adapter, internalAdapter }, bind]) => ({
+          internalAdapter: boundAuthAdapter(internalAdapter, bind),
+          adapter: boundAuthAdapter(adapter, bind),
+        })),
       ),
-      Effect.provide(RuntimeContext.phantom),
-      Effect.withSpan("auth.app_sessions.initialize"),
     ),
   );
 });

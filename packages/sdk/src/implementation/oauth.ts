@@ -3,6 +3,7 @@ import type { BackgroundWork } from "../contracts/declarations.ts";
 /** Trusted OAuth lifecycle. Provider definitions never contain client secrets or saved grants. */
 import { parseDestination, parseEndpoint, httpsOnlyUrlPolicy } from "@executor-js/utils/url-policy";
 import {
+  Array as Arr,
   Clock,
   type Crypto,
   Effect,
@@ -27,6 +28,7 @@ import {
   finishConnection,
   lockConnection,
 } from "./connection-state.ts";
+import { requireTargetProvider } from "./connection-target.ts";
 import { Account } from "../contracts/account.ts";
 import {
   OAuthClientUnavailable,
@@ -158,6 +160,14 @@ const causeAttributes = (cause: OAuthFailureCause) => ({
     : { "oauth.error.provider_code": cause.providerError }),
   ...(cause.field === undefined ? {} : { "oauth.error.field": cause.field }),
 });
+
+/**
+ * Whether resolving credentials waited for, or performed, a renewal. Only then can it outlive a
+ * permission change, so only then is product authority checked again afterwards.
+ */
+interface Resolution {
+  contested: boolean;
+}
 
 /** Spans that can find a grant that needs reconnecting. */
 type ReconnectSpan = "oauth.resolve" | "oauth.usable";
@@ -740,6 +750,8 @@ export const makeOAuth = (
       if (saved.state.status === "completed")
         return { status: "completed" as const, account: saved.state.account };
       const connection = yield* requireOpen(input, saved);
+      // Never discover or register a client for a provider the target app no longer requires.
+      yield* requireTargetProvider(db, connection);
       const existing =
         connection.reconnectAccount === null
           ? undefined
@@ -1033,6 +1045,7 @@ export const makeOAuth = (
   const resolveCredentials = (
     account: StoredAccount,
     provider: ProviderDefinition,
+    resolution: Resolution,
     rejected?: JsonObject,
   ) =>
     Effect.gen(function* () {
@@ -1061,6 +1074,7 @@ export const makeOAuth = (
           (heldClaims.has(row.status) || now - row.updatedAt.getTime() <= renewalLease)
         ) {
           awaited = true;
+          resolution.contested = true;
           yield* Effect.sleep("100 millis");
           continue;
         }
@@ -1217,6 +1231,7 @@ export const makeOAuth = (
         // times out or disconnects would otherwise abandon a live claim, and with it any rotated
         // refresh token the service has already issued. The token request is bounded by its own
         // timeout, so an interruption waits at most that long plus the save.
+        resolution.contested = true;
         const renewed = yield* Effect.uninterruptible(
           Effect.gen(function* () {
             const claimedAt = new Date(yield* Clock.currentTimeMillis);
@@ -1310,13 +1325,59 @@ export const makeOAuth = (
       ),
     );
 
-  const resolve = (account: StoredAccount, provider: ProviderDefinition, rejected?: JsonObject) =>
+  /** The accounts the product still authorizes; undefined when it has no lifecycle. */
+  const authorized = (accounts: readonly StoredAccount[]) =>
+    lifecycle === undefined || !Arr.isReadonlyArrayNonEmpty(accounts)
+      ? Effect.succeed(undefined)
+      : lifecycle.accountsResolving(accounts);
+  /**
+   * Resolve one account checked in `allowed`, checking again if resolving waited or renewed.
+   * `resolution` records whether it did.
+   */
+  const resolveAuthorized = (
+    account: StoredAccount,
+    provider: ProviderDefinition,
+    allowed: ReadonlySet<AccountId> | undefined,
+    resolution: Resolution,
+    rejected?: JsonObject,
+  ) =>
     Effect.gen(function* () {
-      if (lifecycle) yield* lifecycle.accountResolving(account);
-      const fields = yield* resolveCredentials(account, provider, rejected);
+      if (allowed !== undefined && !allowed.has(account.id)) return yield* new StorageError();
+      const fields = yield* resolveCredentials(account, provider, resolution, rejected);
       // A remote token refresh can outlive a permission change or account deletion.
-      if (lifecycle) yield* lifecycle.accountResolving(account);
+      if (resolution.contested) {
+        const current = yield* authorized([account]);
+        if (current !== undefined && !current.has(account.id)) return yield* new StorageError();
+      }
       return fields;
+    });
+  const resolve = (account: StoredAccount, provider: ProviderDefinition, rejected?: JsonObject) =>
+    Effect.flatMap(authorized([account]), (allowed) =>
+      resolveAuthorized(account, provider, allowed, { contested: false }, rejected),
+    );
+  /**
+   * Resolve each selected account's credentials in order. Product authority for all of them is
+   * checked in one read first, and refused in selection order. Once one account has waited for
+   * or performed a renewal, that read can be seconds old, so each later account is checked
+   * again immediately before it resolves.
+   */
+  const resolveSelected = (
+    selected: ReadonlyArray<{
+      readonly account: StoredAccount;
+      readonly provider: ProviderDefinition;
+    }>,
+  ) =>
+    Effect.flatMap(authorized(selected.map(({ account }) => account)), (checked) => {
+      const batch: Resolution = { contested: false };
+      return Effect.forEach(selected, ({ account, provider }) =>
+        Effect.gen(function* () {
+          const allowed = batch.contested ? yield* authorized([account]) : checked;
+          const resolution: Resolution = { contested: false };
+          const fields = yield* resolveAuthorized(account, provider, allowed, resolution);
+          if (resolution.contested) batch.contested = true;
+          return fields;
+        }),
+      );
     });
   /**
    * The service refused these credentials. Renew the grant once, or read a renewal another call
@@ -1379,6 +1440,7 @@ export const makeOAuth = (
     connections: { oauthSetup, startOAuth, completeOAuth },
     findOAuth,
     resolve: (account: StoredAccount, provider: ProviderDefinition) => resolve(account, provider),
+    resolveSelected,
     renewRejected,
     usable,
     revokeRemoved,

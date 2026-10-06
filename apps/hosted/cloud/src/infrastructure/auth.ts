@@ -1,5 +1,5 @@
 import { BrowserSession } from "@executor-js/hosted-server/browser/contracts";
-import { HostedAppSessions, hostedAppSessions } from "@executor-js/hosted-server/app-ui";
+import { HostedAppSessions } from "@executor-js/hosted-server/app-ui";
 import { authObservability } from "../implementation/auth-observability.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { APIError } from "better-auth/api";
@@ -26,17 +26,20 @@ import {
   mcpAuthenticationError,
   mcpConnectionStore,
   ApiAuthentication,
-  apiAuthenticationError,
+  apiBearerAccess,
+  mcpBearerAccess,
 } from "@executor-js/hosted-server";
 import { betterAuth } from "better-auth";
 import { BetterAuthApiError, isAPIErrorLike } from "@alchemy.run/better-auth";
 import { cloudSessionCookiePrefix } from "../contracts/browser.ts";
 import { RuntimeContext } from "alchemy";
 import { Context, Effect, Layer, Option, Redacted, Schema, type Scope } from "effect";
+import { SqlClient } from "effect/unstable/sql";
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import type { SendAuthEmail } from "../contracts/email.ts";
 import { cloudSecrets } from "./secrets.ts";
-import { AuthDatabase, boundAuthAdapter } from "./auth-database.ts";
+import { AuthDatabase, appSessionsPerCall, boundAuthAdapter } from "./auth-database.ts";
+import { InvocationDatabase } from "./invocation-database.ts";
 
 /** Bind during initialization; database calls capture the current invocation only. */
 export const cloudAuth = (send: SendAuthEmail) =>
@@ -150,6 +153,21 @@ export const cloudAuth = (send: SendAuthEmail) =>
       Effect.map(([context, bind]) => boundAuthAdapter(context.adapter, bind)),
       Effect.provide(RuntimeContext.phantom),
     );
+    // Bearer authentication reads its rows in one statement on the client this invocation
+    // shares with Better Auth and the executor. Building it opens no connection; a malformed
+    // URL is a deployment defect.
+    const invocationDatabase = yield* InvocationDatabase;
+    const withSql = <A, E>(effect: Effect.Effect<A, E, SqlClient.SqlClient>) =>
+      invocationDatabase.pipe(
+        Effect.orDie,
+        Effect.flatMap((services) =>
+          Effect.provideService(
+            effect,
+            SqlClient.SqlClient,
+            Context.get(services, SqlClient.SqlClient),
+          ),
+        ),
+      );
     const identity = Layer.effect(
       Authentication,
       Effect.gen(function* () {
@@ -209,19 +227,9 @@ export const cloudAuth = (send: SendAuthEmail) =>
         return McpAuthentication.of({
           origin: settings.url,
           authenticate: (headers, mode, organization) =>
-            bound
-              .pipe(
-                Effect.flatMap(([instance, bind]) =>
-                  Effect.tryPromise({
-                    try: () =>
-                      bind(() =>
-                        instance.api.getMcpAccess({ headers, query: { mode, organization } }),
-                      ),
-                    catch: mcpAuthenticationError,
-                  }),
-                ),
-              )
-              .pipe(Effect.withSpan("auth.authenticate")),
+            withSql(mcpBearerAccess(settings.url, { headers, mode, organization })).pipe(
+              Effect.withSpan("auth.authenticate"),
+            ),
           browserGrant: (headers, id) =>
             bound.pipe(
               Effect.flatMap(([instance, bind]) =>
@@ -254,34 +262,21 @@ export const cloudAuth = (send: SendAuthEmail) =>
         return ApiAuthentication.of({
           origin: settings.url,
           authenticate: (headers, organization) =>
-            bound
-              .pipe(
-                Effect.flatMap(([instance, bind]) =>
-                  Effect.tryPromise({
-                    try: () =>
-                      bind(() => instance.api.getApiAccess({ headers, query: { organization } })),
-                    catch: apiAuthenticationError,
-                  }),
-                ),
-              )
-              .pipe(Effect.withSpan("auth.authenticate")),
+            withSql(apiBearerAccess(settings.url, { headers, organization })).pipe(
+              Effect.withSpan("auth.authenticate"),
+            ),
         });
       }),
     );
-    const appSessions = Layer.effect(
+    const appSessions = Layer.succeed(
       HostedAppSessions,
-      Effect.all([authContext, database.bind]).pipe(
-        Effect.map(([context, bind]) =>
-          hostedAppSessions(
-            {
-              internalAdapter: boundAuthAdapter(context.internalAdapter, bind),
-              adapter: boundAuthAdapter(context.adapter, bind),
-            },
-            globalThis.crypto,
-          ),
+      appSessionsPerCall(
+        Effect.all([authContext, database.bind]).pipe(
+          Effect.map(([context, bind]) => ({
+            internalAdapter: boundAuthAdapter(context.internalAdapter, bind),
+            adapter: boundAuthAdapter(context.adapter, bind),
+          })),
         ),
-        Effect.provide(RuntimeContext.phantom),
-        Effect.withSpan("auth.app_sessions.initialize"),
       ),
     );
     const requestHandler = Effect.gen(function* () {

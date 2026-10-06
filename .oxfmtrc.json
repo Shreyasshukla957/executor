@@ -15,6 +15,7 @@
     "**/.generated",
     "**/routeTree.gen.ts",
     "**/browser-scripts.gen.ts",
+    "**/executor-intro.gen.ts",
     "apps/docs/content"
   ]
 }

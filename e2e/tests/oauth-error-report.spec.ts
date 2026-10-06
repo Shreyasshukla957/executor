@@ -88,15 +88,16 @@ export default defineApp({accounts:{service}},async()=>({tools: router({})}));`,
           page.emulateMedia({ colorScheme: "dark" }),
         );
         const title = "Executor could not use the service’s response";
+        // Open the page in its own step: the dashboard is server-rendered, and the browser waits
+        // for hydration only after a step, so a click in the same step can land on inert markup.
+        yield* browser.use("Open the app's accounts", (page) =>
+          page.goto(`/org/${actors.organization.slug}/apps/${app.id}?view=accounts`),
+        );
         yield* browser.use("Prepare the service connection", (page) =>
           page
-            .goto(`/org/${actors.organization.slug}/apps/${app.id}?view=accounts`)
-            .then(() =>
-              page
-                .getByRole("region", { name: "Sample service", exact: true })
-                .getByRole("button", { name: "Connect new account", exact: true })
-                .click(),
-            ),
+            .getByRole("region", { name: "Sample service", exact: true })
+            .getByRole("button", { name: "Connect new account", exact: true })
+            .click(),
         );
         yield* emulatorRequest(issuer, "/_emulate/faults", {
           match: { method: "POST", pathPattern: "/register" },

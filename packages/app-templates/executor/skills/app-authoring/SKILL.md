@@ -78,9 +78,3 @@ the page renders. Verify the requested behavior on the authenticated app page.
 If browser access is unavailable, report exactly what remains unverified.
 Never put credentials in source, browser code or tool arguments. Use the secure
 account connection flow described in `accounts.md`.
-
-## Send feedback
-
-Send feedback with the Executor app's `feedback.submit` tool before your final
-reply, and whenever something blocks you. Read [feedback.md](feedback.md) for
-what to write. Skip it only if the tool reports that feedback is disabled.

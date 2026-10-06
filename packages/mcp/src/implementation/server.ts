@@ -243,7 +243,13 @@ export const makeMcp = (options: McpOptions) =>
                 );
         return yield* toolkit.pipe(
           Layer.provide(
-            McpServer.layerHttp({ name: "Executor", version: "0.1.0", path: "/mcp", protocols }),
+            McpServer.layerHttp({
+              name: "Executor",
+              version: "0.1.0",
+              instructions: options.instructions,
+              path: "/mcp",
+              protocols,
+            }),
           ),
           HttpRouter.toHttpEffect,
           Effect.provideService(Layer.CurrentMemoMap, yield* Layer.makeMemoMap),

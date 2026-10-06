@@ -9,6 +9,7 @@ import {
   accountProblemBlocks,
 } from "./ui-account-notice.ts";
 import { appPrivateHeaders } from "./ui-auth.ts";
+import { deploymentDocument } from "./ui-document.ts";
 import { appFailureBootstrap } from "./ui-errors.ts";
 
 /**
@@ -61,9 +62,12 @@ export const appDocument = <E, R>(options: {
       telemetry === undefined
         ? ""
         : `<meta name="executor-build" content="${attribute(telemetry.version)}"><meta name="executor-environment" content="${attribute(telemetry.environment)}">`;
-    const boot = `${metadata}<base href="/_executor/assets/${attribute(options.deployment)}/"><script type="application/json" id="executor-context">${context}</script>${appFailureBootstrap}${notice === undefined || notice.problems.length === 0 ? "" : accountNoticeBootstrap(notice)}<script src="/_executor/watch.js" defer></script>`;
+    const boot = `${metadata}<script type="application/json" id="executor-context">${context}</script>${appFailureBootstrap}${notice === undefined || notice.problems.length === 0 ? "" : accountNoticeBootstrap(notice)}<script src="/_executor/watch.js" defer></script>`;
     return HttpServerResponse.text(
-      new TextDecoder().decode(document.body).replace("<!--executor-ui-->", boot),
+      deploymentDocument(new TextDecoder().decode(document.body), options.deployment).replace(
+        "<!--executor-ui-->",
+        boot,
+      ),
       { contentType: "text/html", headers: appPrivateHeaders },
     );
   });

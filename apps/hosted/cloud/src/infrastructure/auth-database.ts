@@ -1,13 +1,22 @@
 /** The hosted auth database is Postgres; other SQL drivers do not belong in this Worker. */
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { RuntimeContext } from "alchemy";
+import { HostedAppSessions, hostedAppSessions } from "@executor-js/hosted-server/app-ui";
+import { RuntimeContext } from "alchemy";
 import { makeExecutionMemo } from "alchemy/Runtime/ExecutionMemo";
-import { openPostgresPool } from "alchemy/SQL/PostgresDriver";
-import { Context, Effect, Layer, Option, Schema, Tracer } from "effect";
-import { Kysely, PostgresDialect, type PostgresPool, type QueryId } from "kysely";
-import type { Pool } from "pg";
-import { cloudDatabaseConnection } from "./database.ts";
-import { ObjectDatabase } from "./object-database.ts";
+import { Context, Effect, Exit, Layer, Option, Schema, Scope, Tracer } from "effect";
+import { SqlClient } from "effect/unstable/sql";
+import {
+  CompiledQuery,
+  Kysely,
+  PostgresAdapter,
+  PostgresIntrospector,
+  PostgresQueryCompiler,
+  type DatabaseConnection,
+  type Driver,
+  type QueryId,
+  type QueryResult,
+} from "kysely";
+import { cloudInvocationDatabase, InvocationDatabase } from "./invocation-database.ts";
 
 const DriverCode = Schema.Struct({
   code: Schema.String.check(Schema.isPattern(/^(?:[0-9A-Z]{5}|E[A-Z_]{2,40})$/)),
@@ -17,11 +26,13 @@ class AuthDatabaseFailed extends Schema.TaggedError<AuthDatabaseFailed>()("AuthD
 }) {}
 
 /**
- * The invocation whose Promise work is calling Better Auth: its own pool, the
- * background tasks it must keep alive, and the context and span its SQL reports to.
+ * The invocation whose Promise work is calling Better Auth: the SQL client it shares with the
+ * executor, the scope its reservations belong to, the background tasks it must keep alive, and
+ * the context and span its SQL reports to.
  */
 interface AuthInvocation {
-  readonly pool: Pool;
+  readonly sql: SqlClient.SqlClient;
+  readonly scope: Scope.Scope;
   readonly pending: Array<Promise<unknown>>;
   readonly context: Context.Context<never>;
   readonly parent: Option.Option<Tracer.AnySpan>;
@@ -30,7 +41,7 @@ interface AuthInvocation {
 /**
  * Better Auth and its Kysely instance live for the isolate, but workerd sockets
  * belong to one invocation. Every call into Better Auth runs inside
- * {@link AuthDatabaseService.bind}, and each connection comes from that caller's pool.
+ * {@link AuthDatabaseService.bind}, and each connection comes from that caller's client.
  */
 const invocation = new AsyncLocalStorage<AuthInvocation>();
 
@@ -41,18 +52,136 @@ const current = () => {
   return store;
 };
 
+/** The invocation's context, with the span that issued the call as parent when one was bound. */
+const callerContext = ({ context, parent }: AuthInvocation) =>
+  Option.match(parent, {
+    onNone: () => context,
+    onSome: (span) => Context.add(context, Tracer.ParentSpan, span),
+  });
+
+const RawResult = Schema.Struct({
+  command: Schema.String,
+  rowCount: Schema.Number,
+  rows: Schema.Array(Schema.Record(Schema.String, Schema.Unknown)),
+  fields: Schema.Array(Schema.Struct({ name: Schema.String, dataTypeId: Schema.Number })),
+});
+
+/** PostgreSQL `int8` and `int8[]`, which node-postgres returns as strings. */
+const int8Types = new Set([20, 1016]);
+
+const int8Text = (value: unknown): unknown =>
+  typeof value === "bigint" ? value.toString() : Array.isArray(value) ? value.map(int8Text) : value;
+
+const quoted = (text: string) => `"${text.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+
 /**
- * Hands Kysely the calling invocation's pool. Closing is a no-op: each
- * invocation's pool closes with its event scope. Without a `Client` constructor,
- * Kysely cancels an aborted query over the same invocation's pool; Better Auth
- * does not abort queries.
+ * Better Auth was written against node-postgres, which sends every parameter as untyped text
+ * and lets the server infer its type. The native client binds JavaScript numbers, booleans and
+ * dates with concrete types, so convert them the way node-postgres does before binding.
  */
-const invocationPool: PostgresPool = {
-  connect: () => Promise.resolve().then(() => current().pool.connect()),
-  end: () => Promise.resolve(),
-  get options() {
-    return current().pool.options;
+const textParameter = (value: unknown): unknown => {
+  if (value === null || value === undefined) return null;
+  if (value instanceof Uint8Array) return value;
+  if (value instanceof Date) return value.toISOString();
+  if (Array.isArray(value)) return arrayLiteral(value);
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+};
+
+const arrayLiteral = (values: ReadonlyArray<unknown>): string =>
+  `{${values
+    .map((value) => {
+      if (value === null || value === undefined) return "NULL";
+      if (Array.isArray(value)) return arrayLiteral(value);
+      if (value instanceof Uint8Array) return quoted(`\\x${Buffer.from(value).toString("hex")}`);
+      return quoted(String(textParameter(value)));
+    })
+    .join(",")}}`;
+
+/** One Kysely checkout: a connection reserved from the invocation's client until released. */
+class ReservedConnection implements DatabaseConnection {
+  constructor(
+    private readonly connection: Effect.Success<SqlClient.SqlClient["reserve"]>,
+    private readonly owner: AuthInvocation,
+    readonly release: Effect.Effect<void>,
+  ) {}
+
+  executeQuery<R>(query: CompiledQuery): Promise<QueryResult<R>> {
+    return Effect.runPromiseWith(callerContext(this.owner))(
+      Effect.suspend(() =>
+        this.connection.executeRaw(query.sql, query.parameters.map(textParameter)),
+      ).pipe(
+        // Each query already records `auth.sql.timing`; the native wire span would repeat it.
+        Effect.withTracerEnabled(false),
+        // Reject with the server's error fields (`code`, `constraint`), as node-postgres does.
+        Effect.mapError((error) =>
+          error.reason.cause instanceof Error ? error.reason.cause : error,
+        ),
+        Effect.flatMap(Schema.decodeUnknownEffect(RawResult)),
+        Effect.map(({ command, rowCount, rows, fields }) => {
+          const int8 = fields.filter(({ dataTypeId }) => int8Types.has(dataTypeId));
+          return {
+            rows: (int8.length === 0
+              ? rows
+              : rows.map((row) => {
+                  const converted = { ...row };
+                  for (const { name } of int8) converted[name] = int8Text(row[name]);
+                  return converted;
+                })) as Array<R>,
+            ...(["INSERT", "UPDATE", "DELETE", "MERGE"].includes(command)
+              ? { numAffectedRows: BigInt(rowCount) }
+              : {}),
+          };
+        }),
+      ),
+    );
+  }
+
+  async *streamQuery<R>(query: CompiledQuery): AsyncIterableIterator<QueryResult<R>> {
+    yield await this.executeQuery<R>(query);
+  }
+}
+
+const transactionControl = (connection: DatabaseConnection, sql: string) =>
+  connection.executeQuery(CompiledQuery.raw(sql)).then(() => undefined);
+
+/**
+ * Kysely's driver over the invocation's shared client. Each checkout reserves one connection
+ * for itself, including a whole transaction, so Better Auth never joins or commits an executor
+ * transaction. Releasing returns the connection to the client's pool.
+ */
+const invocationDriver: Driver = {
+  init: () => Promise.resolve(),
+  acquireConnection: () => {
+    const owner = current();
+    return Effect.runPromiseWith(callerContext(owner))(
+      Effect.gen(function* () {
+        const scope = yield* Scope.fork(owner.scope, "sequential");
+        const connection = yield* owner.sql.reserve.pipe(
+          Scope.provide(scope),
+          Effect.onError(() => Scope.close(scope, Exit.void)),
+        );
+        return new ReservedConnection(connection, owner, Scope.close(scope, Exit.void));
+      }),
+    );
   },
+  beginTransaction: (connection, settings) =>
+    transactionControl(
+      connection,
+      [
+        "begin",
+        settings.isolationLevel === undefined ? "" : `isolation level ${settings.isolationLevel}`,
+        settings.accessMode ?? "",
+      ].join(" "),
+    ),
+  commitTransaction: (connection) => transactionControl(connection, "commit"),
+  rollbackTransaction: (connection) => transactionControl(connection, "rollback"),
+  releaseConnection: (connection) =>
+    connection instanceof ReservedConnection
+      ? Effect.runPromise(connection.release)
+      : Promise.resolve(),
+  // Each invocation's client closes with its event scope.
+  destroy: () => Promise.resolve(),
 };
 
 /**
@@ -62,7 +191,12 @@ const invocationPool: PostgresPool = {
 const timedAuthDatabase = () => {
   const started = new WeakMap<QueryId, number>();
   return new Kysely<unknown>({
-    dialect: new PostgresDialect({ pool: invocationPool }),
+    dialect: {
+      createDriver: () => invocationDriver,
+      createAdapter: () => new PostgresAdapter(),
+      createIntrospector: (db) => new PostgresIntrospector(db),
+      createQueryCompiler: () => new PostgresQueryCompiler(),
+    },
     plugins: [
       {
         transformQuery: ({ queryId, node }) => {
@@ -75,13 +209,7 @@ const timedAuthDatabase = () => {
     log: (event) => {
       const start = started.get(event.query.queryId);
       started.delete(event.query.queryId);
-      const { context, parent } = current();
-      return Effect.runPromiseWith(
-        Option.match(parent, {
-          onNone: () => context,
-          onSome: (span) => Context.add(context, Tracer.ParentSpan, span),
-        }),
-      )(
+      return Effect.runPromiseWith(callerContext(current()))(
         (event.level === "error"
           ? Effect.fail(
               new AuthDatabaseFailed({
@@ -125,7 +253,7 @@ export interface AuthDatabaseService {
   /** Better Auth's background tasks join the invocation that started them. */
   readonly background: (task: Promise<unknown>) => void;
   /**
-   * Bind Promise work to this invocation's pool and the calling span, so its SQL
+   * Bind Promise work to this invocation's client and the calling span, so its SQL
    * uses this event's socket and its timing spans become children of the caller.
    */
   readonly bind: Effect.Effect<<A>(run: () => A) => A, never, RuntimeContext>;
@@ -134,6 +262,33 @@ export interface AuthDatabaseService {
 export class AuthDatabase extends Context.Service<AuthDatabase, AuthDatabaseService>()(
   "executor/cloud/AuthDatabase",
 ) {}
+
+/**
+ * App sessions whose Better Auth reads bind the calling operation's invocation when each
+ * operation runs, not when the service is built. A layer builds in its own child of the event
+ * scope, so binding there kept a second execution memo, and a second SQL client, beside the one
+ * the executor uses in the same event; it also parented every auth query to the layer build.
+ */
+export const appSessionsPerCall = (
+  adapters: Effect.Effect<Parameters<typeof hostedAppSessions>[0], never, RuntimeContext>,
+): HostedAppSessions["Service"] => {
+  const sessions = adapters.pipe(
+    Effect.map((context) => hostedAppSessions(context, globalThis.crypto)),
+    Effect.provide(RuntimeContext.phantom),
+  );
+  return HostedAppSessions.of({
+    organization: (find) => Effect.flatMap(sessions, (live) => live.organization(find)),
+    access: (principal, target) =>
+      Effect.flatMap(sessions, (live) => live.access(principal, target)),
+    begin: (target, returnTo) => Effect.flatMap(sessions, (live) => live.begin(target, returnTo)),
+    pending: (request) => Effect.flatMap(sessions, (live) => live.pending(request)),
+    grant: (request, target, principal) =>
+      Effect.flatMap(sessions, (live) => live.grant(request, target, principal)),
+    complete: (target, request, code, proof) =>
+      Effect.flatMap(sessions, (live) => live.complete(target, request, code, proof)),
+    current: (target, token) => Effect.flatMap(sessions, (live) => live.current(target, token)),
+  });
+};
 
 /** An object whose methods run as work bound by {@link AuthDatabaseService.bind}. */
 export const boundAuthAdapter = <A extends object>(adapter: A, bind: <B>(run: () => B) => B): A =>
@@ -147,37 +302,37 @@ export const boundAuthAdapter = <A extends object>(adapter: A, bind: <B>(run: ()
   });
 
 /**
- * One Kysely instance per isolate. Each Worker invocation opens and closes its own pool; calls
- * into a Durable Object use the object's held pool.
+ * One Kysely instance per isolate. Each invocation's queries use the SQL client the executor
+ * uses in the same Worker event or Durable Object call, so they reuse its connections.
  */
-export const cloudAuthDatabase = Layer.effect(
+const authDatabase = Layer.effect(
   AuthDatabase,
   Effect.gen(function* () {
-    const connection = yield* cloudDatabaseConnection;
+    const database = yield* InvocationDatabase;
     const resources = yield* makeExecutionMemo(
       Effect.gen(function* () {
-        // A Durable Object lends its held pool. Otherwise Alchemy's request-owned pg pool,
-        // closed when the event settles.
-        const object = yield* Effect.serviceOption(ObjectDatabase);
-        const pool = Option.isSome(object)
-          ? yield* object.value.auth
-          : yield* openPostgresPool(Effect.succeed(yield* connection.connectionString));
+        // Building a client opens no connection; a malformed URL is a deployment defect.
+        const sql = Context.get(yield* Effect.orDie(database), SqlClient.SqlClient);
+        const scope = yield* Effect.scope;
         const pending: Array<Promise<unknown>> = [];
-        // Added after the pool, so it runs first: background SQL still has its socket.
+        // Added after the client, so it runs first: background SQL still has its socket.
         yield* Effect.addFinalizer(() => Effect.promise(() => Promise.allSettled(pending)));
-        return { pool, pending };
+        return { sql, scope, pending };
       }),
     );
     return AuthDatabase.of({
       options: { db: timedAuthDatabase(), type: "postgres", transaction: true },
       background: (task) => current().pending.push(task),
       bind: Effect.gen(function* () {
-        const { pool, pending } = yield* resources;
+        const { sql, scope, pending } = yield* resources;
         const parent = yield* Effect.option(Effect.currentParentSpan);
         // This trusted host callback needs the complete invocation context.
         const context = yield* Effect.context<never>();
-        return <A>(run: () => A) => invocation.run({ pool, pending, context, parent }, run);
+        return <A>(run: () => A) => invocation.run({ sql, scope, pending, context, parent }, run);
       }),
     });
   }),
 );
+
+/** Better Auth and the executor's shared client: provide this once where both are built. */
+export const cloudAuthDatabase = authDatabase.pipe(Layer.provideMerge(cloudInvocationDatabase));

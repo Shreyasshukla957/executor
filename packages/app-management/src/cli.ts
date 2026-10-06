@@ -37,6 +37,7 @@ import {
   SourceError,
   SourceFilePath,
   SourceFiles,
+  SourceRevision,
   type App,
 } from "@executor-js/sdk/core";
 import { packageFile } from "@executor-js/app-templates";
@@ -79,9 +80,10 @@ const commit = (purpose: string) =>
     Flag.withSchema(SourceCommit),
     Flag.withDescription(`Full 40-character Git commit ${purpose}`),
   );
+const ignoredSource = [".git", "node_modules", ".DS_Store"];
 const files = Flag.Path("files", { pathType: "either", mustExist: true }).pipe(
   Flag.withDescription(
-    'Complete app source: a directory read recursively (skipping .git and node_modules), or a JSON file containing [{"path": "index.ts", "content": "..."}]. The source must include a root index.ts',
+    `Complete app source: a directory read recursively (skipping ${ignoredSource.join(", ")}), or a JSON file containing [{"path": "index.ts", "content": "..."}]. The source must include a root index.ts`,
   ),
 );
 const publication = {
@@ -206,7 +208,6 @@ const print =
     Schema.encodeEffect(Schema.toCodecJson(schema))(value).pipe(
       Effect.flatMap((json) => Console.log(JSON.stringify(json, null, 2))),
     );
-const ignoredSource = new Set([".git", "node_modules", ".DS_Store"]);
 /** Read a JSON source list, or every file under a directory with POSIX paths relative to it. */
 const readFiles = (location: string) =>
   Effect.gen(function* () {
@@ -222,7 +223,7 @@ const readFiles = (location: string) =>
       Effect.gen(function* () {
         const directory = path.join(location, ...relative);
         const entries = (yield* fs.readDirectory(directory))
-          .filter((entry) => !ignoredSource.has(entry))
+          .filter((entry) => !ignoredSource.includes(entry))
           .sort();
         const nested = yield* Effect.forEach(entries, (entry) =>
           Effect.gen(function* () {
@@ -242,6 +243,8 @@ const readFiles = (location: string) =>
       });
     return yield* Schema.decodeUnknownEffect(SourceFiles)(yield* walk([]));
   });
+/** A commit prints only its new revision; the caller already holds the files it sent. */
+const Committed = Schema.Struct({ revision: SourceRevision });
 /** Skill lookups print the host's result for all deployed apps, one catalog, or one document. */
 const SkillListing = Schema.Struct({
   catalogs: Schema.Array(AppSkillCatalog),
@@ -486,7 +489,7 @@ export const appsCommand = (platform: string) =>
         ),
       }).pipe(
         Command.withDescription(
-          "Save a complete new source snapshot as a commit without deploying it",
+          "Save a complete new source snapshot as a commit without deploying it. Prints the new revision; deploy its commit with executor apps deploy",
         ),
         Command.withHandler((args) =>
           Effect.gen(function* () {
@@ -496,9 +499,8 @@ export const appsCommand = (platform: string) =>
                 .commit({
                   params: { ...tenant, app: args.app },
                   payload: { expected: args.expected, files, message: args.message },
-                  responseMode: "decoded-and-response",
                 })
-                .pipe(Effect.flatMap(printResponse)),
+                .pipe(Effect.flatMap(({ revision }) => print(Committed)({ revision }))),
             );
           }),
         ),
@@ -614,7 +616,7 @@ export const appsCommand = (platform: string) =>
         ),
         name: Flag.String("name").pipe(
           Flag.withSchema(AppSkillName),
-          Flag.withDescription("Skill name to read, for example app-authoring. Requires --app"),
+          Flag.withDescription("Skill name to read, for example executor. Requires --app"),
           Flag.optional,
         ),
         file: Flag.String("file").pipe(
@@ -626,12 +628,16 @@ export const appsCommand = (platform: string) =>
         ),
       }).pipe(
         Command.withDescription(
-          "List or read app skills served by the host. Start with --app executor --name app-authoring before writing an app",
+          "List or read app skills served by the host. Start with --app executor --name executor, then read its app-authoring skill before writing an app",
         ),
         Command.withHandler(readSkills),
       ),
       Command.make("credential", {
-        action: Argument.Literals("action", ["get", "store", "erase"]),
+        action: Argument.Literals("action", ["get", "store", "erase"]).pipe(
+          Argument.withDescription(
+            "Operation Git passes to the helper. get supplies the signed-in session for this host's Git paths; store and erase are ignored",
+          ),
+        ),
       }).pipe(
         Command.withDescription("Git credential helper; set credential.useHttpPath=true"),
         Command.withHandler(({ action }) =>

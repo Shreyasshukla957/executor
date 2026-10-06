@@ -21,6 +21,10 @@ deliberate exception is the absolute `https://v2.executor.sh` link on the index
 page: it points at the hosted dashboard, which is not a docs page, so it must
 not pick up the base. `blume audit` reports it as a warning for that reason.
 
+Do not name a content directory `build`, `dist`, `coverage` or another
+build-output name. Rift workspaces omit those directories even when Git tracks
+them, so a commit from a workspace deletes the pages inside.
+
 `blume.config.ts` owns the sidebar: the group labels, the order, and which pages
 appear. A page that is not listed there is not in the navigation. Put images and
 other static files in `public/`.
@@ -144,6 +148,10 @@ depends on the loader's queue, so check it if Blume changes its adapter.
 - `bun run docs:validate` — `blume validate`. Checks every internal, anchor and
   asset link. Errors on a broken page link. Runs offline and takes a second, so
   run it after any edit that adds or moves a link.
+- `bun run site:links` — after `bun run hosted:cloud:site:build`, resolves every
+  same-origin link in the composed site (marketing, docs, sidebar) the way the
+  Worker serves it. CI runs it in the `check` job. It catches what `validate`
+  misses: sidebar entries and component `href`s that point at a missing page.
 - `bun run docs:audit` — `blume audit` over the built site. SEO and site-health
   checks: titles, descriptions, canonicals, headings, orphan pages, the sitemap.
   Build first. It fails on errors only; warnings are advisory.

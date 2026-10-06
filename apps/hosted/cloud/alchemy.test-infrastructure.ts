@@ -47,6 +47,8 @@ export default Alchemy.Stack(
       "AXIOM_ORG_ID",
       "EXECUTOR_APP_DOMAIN_ZONE",
       "CLOUD_PLACEMENT_REGION",
+      "OAUTH_PROXY_PRODUCTION_URL",
+      "AUTH_EMAIL_DOMAIN",
     ] as const)
       yield* GitHub.Variable(name, {
         ...target,
@@ -59,10 +61,22 @@ export default Alchemy.Stack(
       "PLANETSCALE_API_TOKEN",
       "PLANETSCALE_API_TOKEN_ID",
       "AXIOM_TOKEN",
+      "GOOGLE_CLIENT_ID",
+      "GOOGLE_CLIENT_SECRET",
+      "OAUTH_PROXY_SECRET",
+      "CONTEXT_DEV_API_KEY",
     ] as const)
       yield* GitHub.Secret(name, { ...target, name, value: yield* Config.Redacted(name) }).pipe(
         retain(),
       );
+    // GitHub reserves the GITHUB_ prefix in Actions secrets. Login clients are shared with
+    // the existing OAuth proxy; previews still own their signing and encryption secrets.
+    for (const name of ["GITHUB_CLIENT_ID", "GITHUB_CLIENT_SECRET"] as const)
+      yield* GitHub.Secret(`Auth${name}`, {
+        ...target,
+        name: `AUTH_${name}`,
+        value: yield* Config.Redacted(name),
+      }).pipe(retain());
     return { projectId: project.projectId };
   }),
 );

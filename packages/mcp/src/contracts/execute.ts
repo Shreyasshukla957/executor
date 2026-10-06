@@ -59,8 +59,9 @@ export const AppProfileRequired = UserFacingError.define({
 });
 
 /**
- * An app was still listing its tools when discovery stopped waiting for it, such as an app whose
- * server accepts connections and never answers.
+ * An app was still listing its tools when discovery stopped waiting for it: a large or slow app,
+ * or one whose server accepts connections and never answers. A listing that was running keeps
+ * running in the background, so a slow but healthy app loads in a later execution.
  */
 export const AppDiscoveryTimedOut = UserFacingError.define({
   tag: "AppDiscoveryTimedOut",
@@ -68,12 +69,13 @@ export const AppDiscoveryTimedOut = UserFacingError.define({
   fields: { app: Schema.String, elapsedMs: Schema.Number },
   presentation: ({ elapsedMs }) => ({
     title: "App tools did not load in time",
-    description: `This app timed out after ${elapsedMs}ms while listing its tools, so it is unavailable in this execution. Other apps are not affected.`,
+    description: `Listing this app's tools timed out after ${elapsedMs}ms in this execution, so its tools are unavailable here. A listing that was still running continues in the background, so a slow app usually loads in a later execution. Other apps are not affected.`,
     retryable: true,
     recovery: {
-      action: "Check that the app's upstream server is reachable, then run execute again.",
+      action:
+        "Run execute again shortly. If the app keeps timing out, check that its upstream server responds.",
       instructions:
-        "Tell the user this app's tools could not be listed in time; its server may be offline or overloaded. Its tools cannot be called in this execution. Other apps remain usable.",
+        "This app's tools were still loading when this execution stopped waiting for them. Retry in a new execute after a few seconds instead of treating the app as broken. If it is still unavailable after several attempts, tell the user its server may be offline or overloaded. Other apps remain usable.",
     },
   }),
 });
@@ -181,7 +183,7 @@ export const defaultMcpLimits: McpLimits = {
 /** Execute programs over the host-provided app catalog. */
 export const ExecuteTool = McpTool.make("execute", {
   description:
-    "Run a JavaScript program over Executor apps. Discover and read the Executor app's app-authoring skill through the skills tool before creating apps. Start with return await tools.search({query: 'Executor'}). Search returns exact callable paths and TypeScript signatures. Each configured app has its own app-slug namespace and saved accounts. Discover again in a new execute after configuration changes. Use await, Promise.all and return only needed data. For user credentials, discover Executor's account connection tool (accountConnect.issue locally, accounts.connect on hosted) and give the user its browser link; never ask for secrets in chat or search their files for tokens. No imports, fetch, process or filesystem globals. Apps load when a program uses their namespace or searches them; failed/incomplete apps among those are reported in unavailableApps. If approval-required or input-required is returned, show the elicitation to the user, collect its requested fields, then call resume with the returned requestId and response.action (accept, decline, or cancel). The program waits in memory; do not execute its source again. External effects are not rolled back on error or cancellation.",
+    "Run a JavaScript program over Executor apps; find their tools with tools.search inside it. First read the Executor app's executor skill with the skills tool. Never ask the user for secrets in chat; accounts connect through Executor's secure links. If approval-required or input-required is returned, show it to the user and call resume with their answer; never run the program's source again. External effects are not rolled back on error or cancellation. If Executor itself blocks you, send feedback with the Executor app's feedback.submit tool.",
   dependencies: [HttpServerRequest.HttpServerRequest],
   parameters: ExecuteInput,
   success: McpExecutionResult,
@@ -191,7 +193,7 @@ export const ExecuteTool = McpTool.make("execute", {
 /** Native-mode execution obtains policy decisions through server-initiated MCP requests. */
 export const NativeExecuteTool = McpTool.make("execute", {
   description:
-    "Run a JavaScript program over Executor apps. Discover and read the Executor app's app-authoring skill through the skills tool before creating apps. Use tools.search to discover callable paths. Tool approvals and tool input open the MCP client's native prompt; execute waits for the response and continues the same program. No separate resume call is needed. Decline or cancel fails a policy-guarded call; a running tool receives the action and decides how to handle it. Earlier tool calls may already have completed; never rerun the program automatically after an error.",
+    "Run a JavaScript program over Executor apps; find their tools with tools.search inside it. First read the Executor app's executor skill with the skills tool. Never ask the user for secrets in chat; accounts connect through Executor's secure links. Approvals and tool input open the MCP client's own prompt, and execute continues the same program. Earlier tool calls may already have completed and are not rolled back; never rerun the program automatically after an error. If Executor itself blocks you, send feedback with the Executor app's feedback.submit tool.",
   dependencies: [HttpServerRequest.HttpServerRequest, McpSchema.McpRequestContext],
   parameters: ExecuteInput,
   success: McpExecutionResult,

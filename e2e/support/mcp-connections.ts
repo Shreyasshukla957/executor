@@ -40,10 +40,11 @@ const Grants = Schema.Array(
  * Run the authorization-code flow for one resource as a signed-in browser session, using the
  * endpoints' JSON redirect mode instead of rendering the consent page. The authorization code
  * goes to a loopback URL that is never contacted; the consent response carries it.
+ * An undefined resource sends no RFC 8707 `resource` parameter, as some MCP clients do.
  */
 export const consentTo = (
   session: Session,
-  resource: string,
+  resource: string | undefined,
   headers: Record<string, string> = {},
 ) =>
   Effect.gen(function* () {
@@ -70,6 +71,7 @@ export const consentTo = (
       registered,
     );
     const verifier = randomBytes(32).toString("base64url");
+    const resourceField: Record<string, string> = resource === undefined ? {} : { resource };
     const query = new URLSearchParams({
       response_type: "code",
       client_id: clientId,
@@ -77,7 +79,7 @@ export const consentTo = (
       code_challenge: createHash("sha256").update(verifier).digest("base64url"),
       code_challenge_method: "S256",
       scope: "mcp offline_access",
-      resource,
+      ...resourceField,
       state: randomBytes(16).toString("hex"),
     });
     const opened = yield* api.request(
@@ -95,6 +97,7 @@ export const consentTo = (
         status: undefined,
         refused: next.searchParams.get("error"),
         clientId,
+        consentResources: undefined,
         tokens: Effect.die("The authorization request was refused"),
       };
     const consentPage = next;
@@ -120,7 +123,7 @@ export const consentTo = (
                 code: code ?? "",
                 code_verifier: verifier,
                 redirect_uri: redirect,
-                resource,
+                ...resourceField,
               }),
             ),
           );
@@ -130,7 +133,14 @@ export const consentTo = (
       );
       return Redacted.make((yield* Schema.decodeUnknownEffect(Tokens)(exchanged)).access_token);
     });
-    return { status: consented.status, refused: null, clientId, tokens };
+    return {
+      status: consented.status,
+      refused: null,
+      clientId,
+      /** The resources the consent page was asked to approve. */
+      consentResources: consentPage.searchParams.getAll("resource"),
+      tokens,
+    };
   });
 
 /** Revoke every grant this session issued to the given clients, even after a failed scenario. */

@@ -4,7 +4,7 @@ import { ErrorCode, McpError as ProtocolError } from "@modelcontextprotocol/sdk/
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { Effect, Schema } from "effect";
 import { McpError, ProcessConfig } from "../contracts/mcp.ts";
-import { mcpClient, mcpJsonSchemaValidator } from "./mcp-client.ts";
+import { answeredError, mcpClient, mcpJsonSchemaValidator } from "./mcp-client.ts";
 import { adaptMcpTools } from "./mcp-tools.ts";
 
 // The client may start closing on an initialization failure. Join that same cleanup in finally.
@@ -30,14 +30,17 @@ class OwnedTransport extends StdioClientTransport {
   }
 }
 
-const failure = (phase: McpError["phase"], error: unknown) =>
-  new McpError({
+const failure = (phase: McpError["phase"], error: unknown) => {
+  const upstream = answeredError(error);
+  return new McpError({
     phase,
     reason:
       error instanceof ProtocolError && error.code === ErrorCode.RequestTimeout
         ? "timeout"
         : "request",
+    ...(upstream === undefined ? {} : { upstream }),
   });
+};
 
 function withClient<A, E>(
   config: ProcessConfig,

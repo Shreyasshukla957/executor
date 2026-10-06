@@ -494,7 +494,7 @@ export const compileJsonSchemaDecoder = (document: JsonObject) =>
  * without making each one self-contained up front. Construction runs no Effect: an app
  * evaluation constructs one of these for every imported schema.
  */
-const lazyDecoder = (document: () => JsonObject) => {
+const lazyCompiledDecoder = (document: () => JsonObject) => {
   const read = once(document);
   // Reuse only this tool's compiled decoder. Every app evaluation still obtains
   // fresh account-specific metadata; no catalog or credentials are cached here.
@@ -519,10 +519,17 @@ const lazyDecoder = (document: () => JsonObject) => {
         Effect.flatMap((schema) => SchemaParser.decodeUnknownEffect(schema)(input, options)),
       ),
   );
-  return withLazyJsonSchemaDocument(decoder, read);
+  return { decoder: withLazyJsonSchemaDocument(decoder, read), compile };
 };
+const lazyDecoder = (document: () => JsonObject) => lazyCompiledDecoder(document).decoder;
 export const lazyJsonSchemaDecoder = (document: () => JsonObject) =>
   Effect.sync(() => lazyDecoder(document));
+/**
+ * A lazy decoder and the compilation it decodes with. Running `compile` first lets a caller
+ * reject an unsupported schema before a side effect whose result the decoder will check.
+ */
+export const preparedJsonSchemaDecoder = (document: JsonObject) =>
+  lazyCompiledDecoder(() => document);
 
 const isJsonValue = EffectSchema.is(EffectSchema.Json);
 

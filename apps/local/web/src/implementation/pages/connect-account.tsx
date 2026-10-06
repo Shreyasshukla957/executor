@@ -17,7 +17,7 @@ import {
 } from "../../contracts/account-connections.ts";
 import { faviconUrl } from "@executor-js/ui/contracts/icons";
 import { Button } from "@executor-js/ui/components/button";
-import { Failure } from "../components/common.tsx";
+import { ConnectionLinkFailure } from "../components/common.tsx";
 import { AccountForm } from "@executor-js/ui/dashboard/account-form";
 import { OAuthFields } from "./oauth-fields.tsx";
 
@@ -40,7 +40,7 @@ export function ConnectAccountPage() {
             <p>Ask your agent for a link to connect this account.</p>
           </>
         ) : AsyncResult.isFailure(result) ? (
-          <Failure cause={result.cause} />
+          <ConnectionLinkFailure cause={result.cause} />
         ) : !AsyncResult.isSuccess(result) || !result.value ? (
           <h1 className="text-[22px] font-semibold tracking-[-0.035em] leading-[1.35] [&>span]:text-muted-foreground [&>span]:text-[13px] [&>span]:font-mono [&>span]:font-normal [&>span]:ml-[8px] [&>span]:align-middle">
             Loading connection…
@@ -48,7 +48,7 @@ export function ConnectAccountPage() {
         ) : (
           <>
             {result.value.completion && Result.isFailure(result.value.completion) && (
-              <Failure cause={Cause.fail(result.value.completion.failure)} />
+              <ConnectionLinkFailure cause={Cause.fail(result.value.completion.failure)} />
             )}
             <ConnectionForm
               key={entry.connection}
@@ -118,11 +118,11 @@ function ConnectionForm({
       <AccountForm
         provider={connection.provider}
         {...(connection.reconnectAccount ? { account: connection.reconnectAccount } : {})}
-        Failure={Failure}
+        Failure={ConnectionLinkFailure}
         submitLabel="Connect account"
         disabled={pending}
         onPendingChange={setPending}
-        submit={(input: AccountSubmission) => submit({ payload: { ...grant, ...input } })}
+        submit={(input: AccountSubmission) => submit({ ...grant, ...input })}
         onSaved={(account) => setState({ status: "completed", account })}
         oauth={(props) => (
           <OAuthFields
@@ -134,7 +134,7 @@ function ConnectionForm({
           />
         )}
       />
-      {error && <Failure cause={error} />}
+      {error && <ConnectionLinkFailure cause={error} />}
       <p className="account-connect-privacy flex items-center justify-center gap-1.5 [margin:22px_0_8px]">
         <HugeiconsIcon icon={LockKeyholeIcon} strokeWidth={2} aria-hidden size={13} />
         Credentials go directly to Executor.

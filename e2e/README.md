@@ -85,6 +85,25 @@ group with SIGKILL, running none of its shutdown, to model a crash.
 Sleep timers and duration measurements stay real. This tests
 minute-based scheduling without adding a minute of sleep to each scenario.
 
+### Legacy storage
+
+Some upgrade bugs only arise from rows that an older version wrote and no current
+public surface can create. A scenario that needs such rows declares
+`legacyStorage: true` in `test-plan.ts` and calls `legacyStorage` from
+`support/legacy-storage.ts`. The runner stops that scenario's product, applies the
+parameterized SQL to its own PGlite database in one transaction, returns each
+statement's rows, and leaves the product stopped. `serverControl("start")` then
+boots the current server over that state, as an upgrade would. Statement errors
+roll back the whole write.
+
+Use it only for legacy or upgrade-era data, and for reading rows that exist only
+in storage. Create everything else through the product, as usual. The boundary
+check rejects any use outside a declared scenario. Only scenarios and the runner
+may import the module, and it is the only file allowed a database driver. The
+control route refuses undeclared scenarios at runtime. Self-host and Local
+support it. Cloud scenarios must be N/A: they share one Worker and database,
+which the runner cannot stop, and seeded rows would reach every case.
+
 Each case owns its fixtures. Self-host runs signup and invitations against a new
 process and PGlite directory. Local uses its own process, database and pairing key.
 Cloud shares one Worker and database while each case owns a random organization
@@ -224,6 +243,9 @@ network in `100.64.0.0/10`, gives the container a fixed address there and maps
 uses that name, and `EXECUTOR_APPS_ALLOW_PRIVATE_FETCH` is unset. After
 first-admin setup, an API key calls the built-in Executor app through `/mcp`. An
 authored app then checks that it cannot fetch the container's private address.
+The same case points `EXECUTOR_REGISTRY_URL` at a synthetic registry and checks
+that the public app catalog, running in workerd, refuses redirects and reports
+status, invalid-response, forwarded and network failures distinctly.
 The runner reaches the server through a port published on `127.0.0.1` in the
 range 4431-4439. It sends each request with the tailnet `Host` header through
 `node:http`, because Node's `fetch` replaces that header. This works with Docker

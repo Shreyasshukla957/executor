@@ -19,9 +19,7 @@ import {
   ElicitationReply,
   FormElicitation,
 } from "../elicitation.ts";
-import { McpError } from "../mcp.ts";
 import { OAuth2Config } from "./oauth.ts";
-import { ProviderError } from "../provider-error.ts";
 import { OperationSchedule } from "../schedules.ts";
 import { AccountId, JsonObject, JsonValue } from "../schema.ts";
 import { AppSkills, SkillLoadFailed } from "../skills.ts";
@@ -34,6 +32,26 @@ import {
   WorkflowRpcCommand,
   WorkflowRunId,
 } from "../workflows.ts";
+
+/** Protocol 1's provider failure, as released: a reason, an HTTP status and the account used. */
+export class ProviderError extends Schema.TaggedError<ProviderError>()("ProviderError", {
+  reason: Schema.Literals(["unauthorized", "forbidden", "rate_limited", "unavailable", "rejected"]),
+  status: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 100, maximum: 599 }))),
+  accountId: Schema.optional(AccountId),
+}) {}
+
+/** Protocol 1's MCP failure, as released: a phase, a reason and an HTTP status. */
+export class McpError extends Schema.TaggedError<McpError>()("McpError", {
+  phase: Schema.Literals(["connect", "discover", "call", "schema", "transport"]),
+  reason: Schema.Literals([
+    "request",
+    "unauthorized",
+    "invalid_response",
+    "timeout",
+    "invalid_input",
+  ]),
+  status: Schema.optional(Schema.Number),
+}) {}
 
 /** Protocol 1's workflow failure: a reason code only, as released. */
 export class WorkflowFailure extends Schema.TaggedError<WorkflowFailure>()("WorkflowFailure", {

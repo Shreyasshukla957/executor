@@ -6,7 +6,7 @@ import { JsonObject, type JsonValue } from "../contracts/schema.ts";
 import { wrap } from "./schema.ts";
 
 export interface CatalogCacheOptions {
-  /** App/build scope, optionally narrowed to the current account. */
+  /** The app's cache. An account's catalog is kept in that account's scope. */
   readonly cache?: AppCache;
   /** Reuse metadata for this duration. Defaults to five minutes. */
   readonly freshFor?: Duration.Input;
@@ -15,6 +15,36 @@ export interface CatalogCacheOptions {
   /** Await a fresh revision at an explicit logical connection or refresh boundary. */
   readonly revalidate?: boolean;
 }
+/**
+ * Whose catalog a remote router reads. A public server takes neither field. Credential headers
+ * come only with the account they belong to, so an authenticated catalog always has its account.
+ */
+export type CatalogAccount =
+  | { readonly account?: undefined; readonly headers?: undefined }
+  | {
+      /** The selected account, as `accounts.<slot>` provides it. */
+      readonly account: { readonly id: string };
+      /** Headers for this account's requests, such as its credentials. */
+      readonly headers?: Readonly<Record<string, string>>;
+    };
+
+/**
+ * The cache an account's catalog lives in: the account's own scope, which token renewals keep.
+ * Credentials never enter a key. Headers without an account, or an account the app was not
+ * given, fail with `invalid`.
+ */
+export const catalogScope = <E>(
+  options: CatalogCacheOptions & CatalogAccount,
+  invalid: () => E,
+): Effect.Effect<AppCache | undefined, E> => {
+  const { account, cache, headers } = options;
+  if (account === undefined)
+    return headers === undefined ? Effect.succeed(cache) : Effect.fail(invalid());
+  if (cache === undefined) return Effect.succeed(undefined);
+  // The cache refuses an account that is not one of the app's selected accounts.
+  return Effect.try({ try: () => cache.forAccount(account), catch: invalid });
+};
+
 const schema = <A>(decoder: Schema.Decoder<A>) => wrap(decoder, false);
 /** `header` describes the whole catalog, such as an MCP server's instructions, in the same revision. */
 const Manifest = Schema.Struct({
@@ -33,7 +63,9 @@ const invoke = <A>(work: () => Promise<A>) =>
   Effect.tryPromise({ try: work, catch: (error) => error });
 
 export const catalogCache = <A extends { readonly name: string }, S>(
-  options: CatalogCacheOptions & {
+  options: Omit<CatalogCacheOptions, "cache"> & {
+    /** The scope from `catalogScope`; undefined keeps discovery invocation-local. */
+    readonly cache: AppCache | undefined;
     readonly prefix: readonly JsonValue[];
     readonly schema: Schema.Decoder<A>;
     /** Schema-free projection stored beside the full pages, so browsing never reads schemas. */

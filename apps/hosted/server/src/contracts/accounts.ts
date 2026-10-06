@@ -1,5 +1,6 @@
 import { ProfileId, ProfileErrors } from "@executor-js/sdk/core";
 import { RequiredAction } from "./authorization.ts";
+import { requireAccount } from "./account-grants.ts";
 import { ConnectionDestination } from "./resource-access.ts";
 import { AccountWorkflowsActive } from "@executor-js/sdk/core";
 import { AccountWebhooksActive } from "@executor-js/sdk/core";
@@ -109,7 +110,7 @@ export const HostedAccounts = HttpApiGroup.make("accounts")
       params: { ...params, account: AccountId },
       success: HostedAccountDetail,
       error: [StorageError, AccountNotFound, ProviderNotFound],
-    }).annotate(RequiredAction, "read"),
+    }).pipe(requireAccount.inspect),
   )
   .add(
     HttpApiEndpoint.post("checkCredentials", `${prefix}/apps/:app/credential-checks`, {
@@ -134,14 +135,14 @@ export const HostedAccounts = HttpApiGroup.make("accounts")
       params: { ...params, account: AccountId },
       success: AccountHealth,
       error: [StorageError, AccountNotFound, OrganizationForbidden],
-    }).annotate(RequiredAction, "run"),
+    }).pipe(requireAccount.use),
   )
   .add(
     HttpApiEndpoint.post("reconnect", `${prefix}/accounts/:account/connections`, {
       params: { ...params, account: AccountId },
       success: AccountConnection,
       error: [...connectionErrors, AccountSelectionInvalid],
-    }).annotate(RequiredAction, "manage"),
+    }).pipe(requireAccount.reconnect),
   )
   .add(
     HttpApiEndpoint.delete("disconnect", `${prefix}/accounts/:account`, {
@@ -154,7 +155,7 @@ export const HostedAccounts = HttpApiGroup.make("accounts")
         AccountNotFound,
         OrganizationForbidden,
       ],
-    }).annotate(RequiredAction, "manage"),
+    }).pipe(requireAccount.delete),
   )
   .add(
     HttpApiEndpoint.patch("update", `${prefix}/accounts/:account`, {
@@ -168,7 +169,7 @@ export const HostedAccounts = HttpApiGroup.make("accounts")
       }),
       success: Account,
       error: [StorageError, AccountNotFound, OrganizationForbidden],
-    }).annotate(RequiredAction, "manage"),
+    }).pipe(requireAccount.rename),
   )
   .add(
     HttpApiEndpoint.get("oauthSetup", `${prefix}/providers/:provider/oauth/:method/setup`, {
@@ -193,7 +194,7 @@ export const HostedAccounts = HttpApiGroup.make("accounts")
     HttpApiEndpoint.get("connection", `${prefix}/connections/:connection`, {
       params: connection,
       success: HostedAccountConnection,
-      error: connectionErrors,
+      error: [...connectionErrors, AccountConnectionTargetChanged],
     }).annotate(RequiredAction, "manage"),
   )
   .add(
@@ -252,6 +253,7 @@ export const HostedOAuthCallbacks = HttpApiGroup.make("oauthCallback")
       success: HostedOAuthCallback,
       error: [
         ...connectionErrors,
+        AccountConnectionTargetChanged,
         CredentialsError,
         OAuthCompletionFailed,
         AuthenticationUnavailable,

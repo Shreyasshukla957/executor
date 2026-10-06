@@ -13,6 +13,7 @@ import { query, transaction, type Query } from "./database.ts";
 import { lockApp } from "./apps.ts";
 import { storedProfile } from "./profiles.ts";
 import type { makeProfiles } from "./profiles.ts";
+import type { makeSchedules } from "./schedules.ts";
 import type { makeTools } from "./tools.ts";
 
 const canonical = (value: Json): string =>
@@ -36,6 +37,8 @@ export const makeProfileSetup = (
     readonly webhookDefinitions: Executor["webhooks"]["definitions"];
     /** Stored-state check for a selected account whose sign-in must reconnect. */
     readonly accountNeedingReconnect: ReturnType<typeof makeTools>["accountNeedingReconnect"];
+    /** Evaluates the active deployment for this profile and removes undeclared schedules. */
+    readonly reconcileSchedules: ReturnType<typeof makeSchedules>["reconcile"];
   },
 ) => {
   const now = Clock.currentTimeMillis;
@@ -212,7 +215,8 @@ export const makeProfileSetup = (
                     failure = "cleanup";
                   }
                 }
-              const declaredSchedules = yield* resources.schedules.definitions(input);
+              // Settings of schedules the active deployment no longer declares are deleted.
+              const declaredSchedules = yield* resources.reconcileSchedules(input);
               for (const schedule of declaredSchedules) {
                 const previous = schedules.find((item) => item.name === schedule.name);
                 yield* resources.schedules.configure({
@@ -224,17 +228,6 @@ export const makeProfileSetup = (
                   approvalMode: previous?.approvalMode ?? "automatic",
                 });
               }
-              for (const schedule of schedules)
-                if (
-                  schedule.enabled &&
-                  !declaredSchedules.some((item) => item.name === schedule.name)
-                )
-                  yield* resources.schedules.configure({
-                    ...input,
-                    name: schedule.name,
-                    actor: current.subject,
-                    enabled: false,
-                  });
             }).pipe(Effect.timeout("90 seconds"), Effect.result);
             if (Result.isFailure(attempt)) {
               status = current.status === "removing" ? "removing" : "failed";

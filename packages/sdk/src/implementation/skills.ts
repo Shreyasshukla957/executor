@@ -1,7 +1,7 @@
 import { storedApp, storedDeployment } from "./apps.ts";
-import { evaluationFailure, snapshot as invocation } from "./tools.ts";
+import { snapshot as invocation } from "./tools.ts";
 import { AppSkills } from "apps/contracts";
-import { AppEvaluationFailed } from "../contracts/tools.ts";
+import { AppEvaluationFailed, evaluationFailure } from "../contracts/tools.ts";
 import { AppNotDeployed } from "../contracts/apps.ts";
 /** Skill reads project one authorized runtime catalog, or a retained pre-capability folder. */
 import { Crypto, Effect, Encoding, Schema } from "effect";

@@ -14,6 +14,8 @@
  *   version already on npm is only compared, so rerunning a deploy is idempotent.
  * - `--allow-unpublished`: pull requests only warn about an unpublished bump, because merging to
  *   `main` publishes it. A published version whose content differs still fails.
+ * - `--await`: the production deploy runs beside the job that publishes. It waits for the registry
+ *   to serve the version, then compares as above. It never publishes.
  */
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -35,6 +37,7 @@ import {
 const registry = "https://registry.npmjs.org";
 const allowUnpublished = process.argv.includes("--allow-unpublished");
 const publish = process.argv.includes("--publish");
+const awaitPublication = process.argv.includes("--await");
 const Published = Schema.Struct({
   version: Schema.String,
   dist: Schema.Struct({ tarball: Schema.String, integrity: Schema.String }),
@@ -74,7 +77,15 @@ NodeRuntime.runMain(
       Effect.flatMap(Schema.decodeUnknownEffect(Tags)),
     );
 
-    const existing = yield* lookup.pipe(
+    const existing = yield* (
+      awaitPublication
+        ? lookup.pipe(
+            Effect.timeout(15_000),
+            Effect.tapError(() => Console.log(`Waiting for npm to serve apps@${version}`)),
+            Effect.retry({ schedule: Schedule.spaced(10_000), times: 60 }),
+          )
+        : lookup
+    ).pipe(
       Effect.map((published) => ({ published })),
       Effect.catchTag("NotServed", (missing) => Effect.succeed({ missing })),
     );

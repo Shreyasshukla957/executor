@@ -10,6 +10,7 @@ import type { ServerConfig } from "../contracts/config.ts";
 import { LocalMcpUnauthorized, type LocalMcpOAuth } from "./mcp-oauth.ts";
 /** Local access and documentation I/O for the shared MCP implementation. */
 import { makeMcp, appTargets, type McpBackend, type McpLimits } from "@executor-js/mcp";
+import { executorIntro } from "@executor-js/app-templates/executor";
 import {
   ElicitationFailed,
   type Executor,
@@ -89,6 +90,7 @@ export const localMcp = (
           Effect.flatMap(RequestBackend, (b) => b.authorizeElicitation(input)),
       },
       caller: Caller,
+      instructions: executorIntro,
       limits,
       protocols: [McpProtocol.v2026_07_28, McpProtocol.v2025_11_25],
     });

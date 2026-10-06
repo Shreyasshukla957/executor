@@ -6,7 +6,11 @@ import {
   organizationIconContentType,
 } from "@executor-js/hosted-server/organization-icon";
 import { SqlError } from "effect/unstable/sql";
-import { OrganizationLogo, organizationSlugMaxLength } from "@executor-js/hosted-server";
+import {
+  OrganizationLogo,
+  organizationHandle,
+  organizationSlugMaxLength,
+} from "@executor-js/hosted-server";
 import {
   TeamIconOwner,
   CompanyLookup,
@@ -36,14 +40,7 @@ const emailTeamName = (email: string) => {
   );
 };
 const teamSlug = (name: string) =>
-  name
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, organizationSlugMaxLength - 7)
-    .replace(/-+$/g, "") || "team";
+  organizationHandle(name, organizationSlugMaxLength - 7) || "team";
 
 /** Retry an idempotent setup only after the failed SQL transaction has released its connection. */
 export const recoverSetupConnection = <A, E, R>(operation: Effect.Effect<A, E, R>) =>

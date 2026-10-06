@@ -19,7 +19,7 @@ Ask what I want to do. Start with the smallest useful version. Explain what it w
 
 Help me sign in at ${siteOrigin}/login and connect Executor to you over MCP. If your client needs a restart to load its tools, tell me and wait until they are available.
 
-Read Executor's app-authoring guide through its skills tool. Check what this Executor host supports. Use its management tools to build and deploy the app. Connect any required accounts through the secure connection flow and select them for the app. Never ask me to paste credentials into this chat or put them in source code.
+Read the Executor app's executor skill through Executor's skills tool, then its app-authoring skill. Check what this Executor host supports. Use its management tools to build and deploy the app. Connect any required accounts through the secure connection flow and select them for the app. Never ask me to paste credentials into this chat or put them in source code.
 
 Explain what the app can read or change, and ask before actions that send, delete, or publish anything. Verify the result with a safe call. Keep its source so I can ask you or another agent to change it later. Add features only when they serve the task I asked for.
 

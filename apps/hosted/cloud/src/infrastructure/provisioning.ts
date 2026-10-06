@@ -21,6 +21,7 @@ import { AppDomainController } from "./app-domain-controller-worker.ts";
 import { billingLive } from "../implementation/billing.ts";
 import { BillingMeter } from "../contracts/billing-meter.ts";
 import { cloudAnalytics } from "../implementation/product-analytics.ts";
+import { cloudSchedules } from "./schedules.ts";
 
 /** Each committed lifecycle action has its own workflow, so unrelated failures do not block setup. */
 export class Provisioning extends Cloudflare.Workflow<Provisioning>()(
@@ -34,6 +35,8 @@ export class Provisioning extends Cloudflare.Workflow<Provisioning>()(
     const domains = yield* AppDomainCoordinator.from(AppDomainController);
     const meter = yield* BillingMeter.pipe(Effect.provide(yield* billingLive.pipe(Effect.orDie)));
     const analytics = yield* cloudAnalytics;
+    // Default installation and member setup save profiles; wake their setup once committed.
+    const schedules = yield* cloudSchedules;
     const services: ProvisioningServices = {
       requireVerifiedEmail: true,
       user: (id) =>
@@ -67,6 +70,7 @@ export class Provisioning extends Cloudflare.Workflow<Provisioning>()(
                   );
                 }).pipe(
                   Effect.provide(executor),
+                  Effect.provide(schedules.layer),
                   Effect.scoped,
                   Effect.provideContext(context),
                   Effect.orDie,

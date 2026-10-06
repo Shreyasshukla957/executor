@@ -5,8 +5,14 @@ import { parse as parseYamlStrictly } from "yaml";
 import { CORE_SCHEMA, load as loadYaml } from "js-yaml";
 import type { AppCache, CacheLoadContext } from "../contracts/cache.ts";
 import { cacheLimits } from "@executor-js/app-cache/contracts";
-import { OpenapiOperation, OpenapiError, type OpenapiToolsOptions } from "../contracts/openapi.ts";
+import {
+  OpenapiOperation,
+  OpenapiError,
+  isOpenapiReadMethod,
+  type OpenapiToolsOptions,
+} from "../contracts/openapi.ts";
 import { JsonObject, JsonValue } from "../contracts/schema.ts";
+import { OpenapiCompileError, OpenapiSkippedOperation } from "../contracts/openapi-compile.ts";
 import type { HostedTool, HostedToolSummary } from "../contracts/host.ts";
 import { compileOpenApiDocument } from "./openapi-compile.ts";
 import { yieldToRuntime } from "./runtime-yield.ts";
@@ -26,7 +32,8 @@ import { fromPromise, toPromise } from "./authoring.ts";
 import { createRequest } from "./openapi-request.ts";
 
 /**
- * A published revision and how many parts of each kind it stored. `meta` describes the document
+ * A published revision and how many parts of each kind it stored. `skipped` holds the declared
+ * operations compilation left out, by the name each would have. `meta` describes the document
  * for its router: its info and tag descriptions.
  */
 const Manifest = Schema.Struct({
@@ -34,6 +41,7 @@ const Manifest = Schema.Struct({
   summaries: Schema.Number,
   operations: Schema.Number,
   definitions: Schema.Number,
+  skipped: Schema.Number,
   meta: Schema.optionalKey(RouterMeta),
 });
 
@@ -204,7 +212,7 @@ const invalid = () => new OpenapiError({ reason: "invalid_definition" });
  * Stored revision format. Bump it whenever compilation changes stored operations, such as their
  * names, or the layout of their parts, so a revision cached by an earlier framework is never served.
  */
-const format = "openapi-v3";
+const format = "openapi-v4";
 /** One write command carries as many parts as the cache accepts, with room for its envelope. */
 const writeEntries = cacheLimits.batchEntries;
 const writeBytes = cacheLimits.batchBytes - 500_000;
@@ -289,6 +297,12 @@ export interface OpenapiSourceOptions extends Omit<
   readonly allowedOrigin: string;
   readonly securitySchemes: Readonly<Record<string, JsonObject>>;
   readonly baseUrl?: string;
+  /**
+   * A path inserted between the server and every operation's path, for a definition that omits a
+   * leading segment, such as `/projects/{project}`. Each `{name}` becomes a required string path
+   * parameter of every tool, unless the operation already declares it without placing it.
+   */
+  readonly pathPrefix?: string;
   readonly freshFor?: Duration.Input;
   readonly staleFor?: Duration.Input;
   /**
@@ -442,6 +456,7 @@ export const liveOpenapiRouter = (options: OpenapiSourceOptions): RouterDeclarat
             source: options.source,
             allowedOrigin: options.allowedOrigin,
             baseUrl: options.baseUrl,
+            pathPrefix: options.pathPrefix,
             securitySchemes: options.securitySchemes,
             patches: options.patches,
             fallbackSecurity: options.fallbackSecurity,
@@ -500,6 +515,7 @@ export const liveOpenapiRouter = (options: OpenapiSourceOptions): RouterDeclarat
             ? {}
             : { fallbackSecurity: options.fallbackSecurity }),
           ...(options.baseUrl === undefined ? {} : { baseUrl: options.baseUrl }),
+          ...(options.pathPrefix === undefined ? {} : { pathPrefix: options.pathPrefix }),
         },
       );
       return { revision, meta, compiled };
@@ -515,10 +531,15 @@ export const liveOpenapiRouter = (options: OpenapiSourceOptions): RouterDeclarat
         compiled.operations.map((operation) => [operation.name, operation] as const),
       );
       const definitions = bucketize(Object.entries(compiled.definitions));
+      const skipped =
+        compiled.skipped.length === 0
+          ? []
+          : bucketize(compiled.skipped.map((operation) => [operation.name, operation] as const));
       const parts: { kind: string; name: number; value: JsonValue }[] = [
         ...summaries.map((value, name) => ({ kind: "summaries", name, value })),
         ...operations.map((value, name) => ({ kind: "operations", name, value })),
         ...definitions.map((value, name) => ({ kind: "definitions", name, value })),
+        ...skipped.map((value, name) => ({ kind: "skipped", name, value })),
       ];
       // Each write carries as many parts as one cache command accepts. Publication is last,
       // under the cache loader lease.
@@ -551,6 +572,7 @@ export const liveOpenapiRouter = (options: OpenapiSourceOptions): RouterDeclarat
           summaries: summaries.length,
           operations: operations.length,
           definitions: definitions.length,
+          skipped: skipped.length,
           ...(meta === undefined ? {} : { meta }),
         },
         batches,
@@ -678,6 +700,30 @@ export const liveOpenapiRouter = (options: OpenapiSourceOptions): RouterDeclarat
             : yield* Schema.decodeUnknownEffect(OpenapiOperation)(value),
       };
     });
+  /**
+   * `undefined` when a stored part is missing and `{ value: undefined }` when compilation did not
+   * leave out an operation of that name. A left-out operation fails with why, so reading or calling
+   * a tool the definition declares but the importer could not represent explains its absence.
+   */
+  const leftOutFor = (manifest: typeof Manifest.Type, name: string) =>
+    Effect.gen(function* () {
+      if (manifest.skipped === 0) return { value: undefined };
+      const [bucket] = yield* read(
+        manifest.revision,
+        "skipped",
+        [bucketOf(name, manifest.skipped)],
+        Bucket,
+      );
+      if (bucket === undefined) return undefined;
+      const value = Object.hasOwn(bucket, name) ? bucket[name] : undefined;
+      if (value === undefined) return { value: undefined };
+      const operation = yield* Schema.decodeUnknownEffect(OpenapiSkippedOperation)(value);
+      return yield* new OpenapiCompileError({
+        code: operation.code,
+        reason: operation.reason,
+        skipped: [operation],
+      });
+    });
   // Every operation, in the document's order, which the summaries keep.
   const operationsFor = (manifest: typeof Manifest.Type) =>
     Effect.gen(function* () {
@@ -741,7 +787,7 @@ export const liveOpenapiRouter = (options: OpenapiSourceOptions): RouterDeclarat
     const kinds = options.kinds ?? {};
     return Object.hasOwn(kinds, key)
       ? (kinds[key] ?? "mutation")
-      : ["GET", "HEAD", "OPTIONS"].includes(op.method)
+      : isOpenapiReadMethod(op.method)
         ? "query"
         : "mutation";
   };
@@ -786,7 +832,7 @@ export const liveOpenapiRouter = (options: OpenapiSourceOptions): RouterDeclarat
           if (operation === undefined) {
             const found = yield* operationFor(manifest, name);
             if (found === undefined) return undefined;
-            if (found.value === undefined) return { value: undefined };
+            if (found.value === undefined) return yield* leftOutFor(manifest, name);
             operation = found.value;
           }
           const definitions = memo?.definitions ?? (yield* definitionsFor(manifest, operation));
@@ -840,7 +886,7 @@ export const liveOpenapiRouter = (options: OpenapiSourceOptions): RouterDeclarat
         Effect.gen(function* () {
           const found = yield* operationFor(manifest, name);
           if (found === undefined) return undefined;
-          if (found.value === undefined) return { value: undefined };
+          if (found.value === undefined) return yield* leftOutFor(manifest, name);
           const operation = found.value;
           if (!createRequest(options).available(operation, options.account))
             return { value: undefined };

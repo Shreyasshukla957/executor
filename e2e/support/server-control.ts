@@ -5,15 +5,10 @@ import { Target } from "./platform.ts";
 import { Evidence } from "./evidence.ts";
 
 /** Control calls never touch a shared developer preview or production service. */
-export const serverControl = (
-  action: "start" | "stop" | "restart" | "kill" | "clock/advance" | "data-steps",
-  expectedStatus: 200 | 500 = 200,
-  body?: { readonly milliseconds: number } | { readonly mode: "report" | "apply" },
-) =>
+export const controlRequest = (path: string, expectedStatus: number, body?: unknown) =>
   Effect.gen(function* () {
     const target = yield* Target,
-      client = yield* HttpClient.HttpClient,
-      evidence = yield* Evidence;
+      client = yield* HttpClient.HttpClient;
     const origin = yield* (
       target.controlOrigin === undefined
         ? Config.String("EXECUTOR_E2E_CONTROL_ORIGIN")
@@ -35,22 +30,35 @@ export const serverControl = (
         ),
       ),
     );
+    return yield* Effect.scoped(
+      Effect.gen(function* () {
+        const request = HttpClientRequest.post(`${origin}/${path}`).pipe(
+          HttpClientRequest.bearerToken(target.apiKey),
+        );
+        const response = yield* client.execute(
+          body === undefined ? request : yield* HttpClientRequest.bodyJson(request, body),
+        );
+        const text = yield* response.text;
+        // Control responses carry no credentials; a failed fixture explains itself.
+        if (response.status !== expectedStatus)
+          return yield* Effect.die(
+            `Product control ${path} returned ${response.status}, expected ${expectedStatus}${text === "" ? "" : `: ${text.slice(0, 500)}`}`,
+          );
+        return text;
+      }),
+    );
+  });
+
+/** Stop, start, restart or kill the product, advance its stopped clock or set its data-step mode. */
+export const serverControl = (
+  action: "start" | "stop" | "restart" | "kill" | "clock/advance" | "data-steps",
+  expectedStatus: 200 | 500 = 200,
+  body?: { readonly milliseconds: number } | { readonly mode: "report" | "apply" },
+) =>
+  Effect.gen(function* () {
+    const evidence = yield* Evidence;
     yield* evidence.step(
       `Product process ${action}`,
-      Effect.scoped(
-        Effect.gen(function* () {
-          const request = HttpClientRequest.post(`${origin}/${action}`).pipe(
-            HttpClientRequest.bearerToken(target.apiKey),
-          );
-          const response = yield* client.execute(
-            body === undefined ? request : yield* HttpClientRequest.bodyJson(request, body),
-          );
-          if (response.status !== expectedStatus)
-            return yield* Effect.die(
-              `Product process ${action} returned ${response.status}, expected ${expectedStatus}`,
-            );
-          yield* response.text;
-        }),
-      ),
+      controlRequest(action, expectedStatus, body).pipe(Effect.asVoid),
     );
   });

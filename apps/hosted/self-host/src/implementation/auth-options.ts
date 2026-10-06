@@ -54,7 +54,7 @@ export const selfHostAuthOptions = (
     emailAndPassword: { enabled: true, disableSignUp: true },
     plugins: [
       organization({ disableOrganizationDeletion: true, allowUserToCreateOrganization: false }),
-      ...base.plugins.filter((plugin) => plugin.id !== "organization"),
+      ...base.plugins,
       genericOAuth({
         config:
           settings.sso === null

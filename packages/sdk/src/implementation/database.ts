@@ -7,12 +7,12 @@ import type { ExecutorDatabase } from "./storage.ts";
 export type Query = ReturnType<typeof database>;
 /** Select the latest migrated storage schema. */
 export const database = (storage: ExecutorDatabase) => storage.orm("4.0.5");
-/** Run a lazy native query without leaking SQL or driver details. */
+/**
+ * Run a lazy native query without leaking SQL or driver details. The query's own
+ * FumaDB span covers the same interval, so this boundary adds no span of its own.
+ */
 export const query = <A, E, R>(work: () => Effect.Effect<A, E, R>) =>
-  Effect.suspend(work).pipe(
-    Effect.withSpan("storage.query"),
-    Effect.mapError(() => new StorageError()),
-  );
+  Effect.suspend(work).pipe(Effect.mapError(() => new StorageError()));
 /** Preserve native Effect failures and cancellation through the SQL transaction. */
 export const transaction = <A, E, R>(db: Query, work: (tx: Query) => Effect.Effect<A, E, R>) =>
   db.transaction(Effect.suspend(() => work(db))).pipe(

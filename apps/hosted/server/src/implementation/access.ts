@@ -1,9 +1,13 @@
-import { AppNotDeployed, DeploymentNotFound, StorageError } from "@executor-js/sdk/core";
+import {
+  AccountNotFound,
+  AppNotDeployed,
+  DeploymentNotFound,
+  StorageError,
+} from "@executor-js/sdk/core";
 import {
   requireAppAccess,
-  requireAppAccessAs,
-  requireAccountAccess,
-  requireAccountAccessAs,
+  requireCurrentAppAccess,
+  accountAccesses,
   currentResourceAuthority,
   type ResourceAuthority,
 } from "./resource-policy.ts";
@@ -16,7 +20,11 @@ import type {
   SelectedAccounts,
 } from "@executor-js/sdk/core";
 import { Effect } from "effect";
-import { CurrentOrganization, OrganizationForbidden } from "../contracts/organization.ts";
+import {
+  CurrentOrganization,
+  OrganizationForbidden,
+  organizationOwner,
+} from "../contracts/organization.ts";
 
 /** Membership was checked by middleware; administrative actions require the current role. */
 export const requireOrganizationAdmin = Effect.gen(function* () {
@@ -39,22 +47,34 @@ export const adminOwner = Effect.map(
 );
 
 /** Account use requires its independent sharing policy as well as the SDK tenant check. */
-export const checkAccounts = (executor: Executor, owner: OwnerId, accounts: SelectedAccounts) =>
-  Effect.flatMap(currentResourceAuthority, (actor) =>
-    checkAccountsAs(actor, executor, owner, accounts),
-  );
-const checkAccountsAs = (
+export const checkAccounts = (owner: OwnerId, accounts: SelectedAccounts) =>
+  Effect.flatMap(currentResourceAuthority, (actor) => checkAccountsAs(actor, owner, accounts));
+/**
+ * Account policies are read in one statement and checked in selection order. A policy row
+ * exists only for an account the actor's organization owns, so it also stands in for the
+ * SDK's owned-account read.
+ */
+export const checkAccountsAs = (
   actor: ResourceAuthority,
-  executor: Executor,
   owner: OwnerId,
   accounts: SelectedAccounts,
 ) =>
   Effect.gen(function* () {
-    for (const selection of Object.values(accounts)) {
-      for (const account of typeof selection === "string" ? [selection] : selection) {
-        yield* requireAccountAccessAs(actor, account, "use");
-        yield* executor.accounts.get({ owner, account });
-      }
+    const selected = Object.values(accounts).flatMap((selection) =>
+      typeof selection === "string" ? [selection] : selection,
+    );
+    if (selected.length === 0) return;
+    const policies = new Map(
+      (yield* accountAccesses([...new Set(selected)], actor)).map((access) => [
+        access.account,
+        access,
+      ]),
+    );
+    for (const account of selected) {
+      const access = policies.get(account);
+      if (access === undefined || !access.canUse) return yield* new OrganizationForbidden();
+      if (owner !== organizationOwner(actor.organization))
+        return yield* new AccountNotFound({ account });
     }
   });
 /**
@@ -63,12 +83,11 @@ const checkAccountsAs = (
  */
 export const selectedApp = (executor: Executor, owner: OwnerId, app: AppId, profile?: ProfileId) =>
   Effect.gen(function* () {
-    const actor = yield* currentResourceAuthority;
-    yield* requireAppAccessAs(actor, app, "use");
+    const { actor } = yield* requireCurrentAppAccess(app, "use");
     const current = yield* executor.apps.get({ owner, app });
     if (profile !== undefined) {
       const selected = yield* ownProfileAs(actor, executor, owner, app, profile);
-      yield* checkAccountsAs(actor, executor, owner, selected.accounts);
+      yield* checkAccountsAs(actor, owner, selected.accounts);
     }
     return current;
   });
@@ -92,7 +111,7 @@ export const ownProfile = (executor: Executor, owner: OwnerId, app: AppId, profi
   Effect.flatMap(currentResourceAuthority, (actor) =>
     ownProfileAs(actor, executor, owner, app, profile),
   );
-const ownProfileAs = (
+export const ownProfileAs = (
   actor: ResourceAuthority,
   executor: Executor,
   owner: OwnerId,
@@ -120,7 +139,7 @@ export const selectedProfile = (
   Effect.gen(function* () {
     const actor = yield* currentResourceAuthority;
     const selected = yield* ownProfileAs(actor, executor, owner, app, profile);
-    yield* checkAccountsAs(actor, executor, owner, selected.accounts);
+    yield* checkAccountsAs(actor, owner, selected.accounts);
     return selected;
   });
 /** App-only resources require app management; profile resources require their subject. */
@@ -149,9 +168,6 @@ export const appManagerOwner = (app: AppId) =>
 /** Metadata reads include separate management access, without selecting credentials. */
 export const appReaderOwner = (app: AppId) =>
   requireAppAccess(app, "read").pipe(Effect.andThen(currentOwner));
-/** Personal ownership and shared-account management are resolved by account policy. */
-export const accountManagerOwner = (account: import("@executor-js/sdk/core").AccountId) =>
-  requireAccountAccess(account, "manage").pipe(Effect.andThen(currentOwner));
 
 /** Pending approvals retain their original accounts even if current app bindings later change. */
 export const checkInvocationAccounts = (
@@ -163,7 +179,6 @@ export const checkInvocationAccounts = (
     if (invocation.profile !== undefined)
       yield* ownProfile(executor, owner, invocation.app, invocation.profile);
     yield* checkAccounts(
-      executor,
       owner,
       Object.fromEntries(
         Object.entries(invocation.accounts).map(([slot, selected]) => [

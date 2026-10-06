@@ -1,5 +1,6 @@
 /** Evaluated app declarations and tool listings are metadata, served stale-while-revalidate. */
-import type { Deferred, Effect } from "effect";
+import type { Effect } from "effect";
+import type { Handoff } from "../implementation/handoff.ts";
 
 /**
  * Ages count from when the read that produced a result began, which is no earlier than the
@@ -28,11 +29,12 @@ export const declarationFreshness = {
  * no reader; a reader that waits keeps it running, so a slow app can always be listed by a caller
  * prepared to wait. It defaults to 45 s and never exceeds `maxStaleMillis`: ages count from when an
  * evaluation started, so a listing that takes longer than that could never be served. A host whose
- * background work has a shorter lifetime sets it below that lifetime, so a stalled listing ends as
- * a remembered timeout rather than an interruption.
+ * background work ends sooner stops the evaluation then, and that stop is remembered as a timeout
+ * too, so such a host keeps this default and a listing gets all the time the host gives it.
  *
- * A slow failure is remembered for `freshMillis` after it failed: a listing that timed out or was
- * stopped after `loadMillis`, or one that failed after at least `slowFailureMillis`. Reads with a
+ * A slow failure is remembered for `freshMillis` after it failed: a listing that timed out, was
+ * stopped after `loadMillis` or when the host's background work ended, or failed after at least
+ * `slowFailureMillis`. Reads with a
  * wait bound in that window, such as MCP discovery, report it at once while one background
  * evaluation retries; a success replaces it. Reads without a wait bound, such as the dashboard,
  * evaluate again, so a recovered upstream shows on their next read however slowly the remembered
@@ -108,10 +110,14 @@ export interface PendingLoad {
    * bound; later readers with a bound are told at once rather than wait for it again.
    */
   overdue: boolean;
-  /** Completes when the last reader stops waiting, for an evaluation that may then be stopped. */
-  readonly unwatched: Deferred.Deferred<void>;
-  /** Completes with what the evaluation left for its readers, however it ended. */
-  readonly done: Deferred.Deferred<unknown>;
+  /**
+   * Settles when the last reader stops waiting, for an evaluation that may then be stopped.
+   * Readers and the evaluation may belong to different requests, so these are handoffs, which
+   * resume each waiter in its own request, never Effect Deferreds.
+   */
+  readonly unwatched: Handoff<void>;
+  /** Settles with what the evaluation left for its readers, however it ended. */
+  readonly done: Handoff<unknown>;
 }
 
 /**
@@ -171,6 +177,8 @@ export interface DurableDeclarations {
  * Starts work beside the current request and keeps it alive after the response, within the
  * host's lifetime for that request or server. It can share the request's resources, such as a
  * database connection. Succeeds with false when the host no longer accepts work, so the caller
- * can release what it reserved. Failures are the work's own responsibility.
+ * can release what it reserved. Failures are the work's own responsibility. The host interrupts
+ * accepted work only when that lifetime ends, never because the request that started it no
+ * longer waits for it.
  */
 export type BackgroundWork = (work: Effect.Effect<void>) => Effect.Effect<boolean>;

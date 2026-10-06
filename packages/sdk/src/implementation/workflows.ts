@@ -84,11 +84,31 @@ const safe = <A>(
     }),
   );
 
+/**
+ * Hand a committed queued run to the native engine. The run row is already durable, so a transient
+ * engine failure leaves it queued for the next status read or the reconciliation job to dispatch,
+ * and the caller still receives the run it created. Reports whether the engine accepted it.
+ */
+const dispatch = (backend: WorkflowRuntime, run: WorkflowRunId) =>
+  backend.start(run).pipe(
+    Effect.as(true),
+    Effect.catchIf(
+      (error) => error.reason === "engine" && error.retryable,
+      () =>
+        Effect.annotateCurrentSpan("executor.workflow.dispatch", "deferred").pipe(
+          Effect.andThen(
+            Effect.logWarning("Workflow dispatch deferred to reconciliation", { run }),
+          ),
+          Effect.as(false),
+        ),
+    ),
+  );
+
 /** Compose lifecycle operations and private execution callbacks without acquiring resources. */
 export const makeWorkflowRuns = (
   storage: ExecutorDatabase,
   runtime: Runtime,
-  resolveAccount: ReturnType<typeof makeOAuth>["resolve"],
+  resolveAccount: ReturnType<typeof makeOAuth>["resolveSelected"],
   credentials: Credentials,
   crypto: Crypto.Crypto,
   declarations: Declarations,
@@ -353,7 +373,8 @@ export const makeWorkflowRuns = (
         // native dispatch. A status read reconciles that gap without waiting for cron.
         const current = yield* read(row.id);
         if (terminal(current)) return yield* view(current);
-        if (current.status === "queued") yield* backend.start(row.id);
+        if (current.status === "queued" && !(yield* dispatch(backend, row.id)))
+          return yield* view(current);
         state = yield* backend.status(row.id);
       }
       if (state.status === "complete") {
@@ -421,12 +442,21 @@ export const makeWorkflowRuns = (
         const state = inherited ?? (yield* snapshot(db, input));
         const bound = yield* resolve(state, resolveAccount, lifecycle);
         const parsed = yield* safe(
-          runtime.workflow({
-            app: input.app,
-            build: state.deployment.build,
-            ...bound,
-            command: { operation: "workflow-validate", name: input.workflow, input: input.input },
-          }),
+          runtime
+            .workflow({
+              app: input.app,
+              build: state.deployment.build,
+              ...bound,
+              command: { operation: "workflow-validate", name: input.workflow, input: input.input },
+            })
+            .pipe(
+              // The app rejects input with its own WorkflowFailure. A build that could not load or
+              // answer is the host's failure, not the caller's input.
+              Effect.catchTags({
+                RuntimeBuildUnavailable: () => Effect.fail(failure("engine", true)),
+                RuntimeProtocolFailed: () => Effect.fail(failure("engine", true)),
+              }),
+            ),
           "input",
         );
         const encrypted = yield* credentials.encrypt(
@@ -506,7 +536,7 @@ export const makeWorkflowRuns = (
       if (retained.name !== input.workflow || stable(payload.request) !== stable(input.input))
         return yield* failure("conflict");
       yield* Effect.annotateCurrentSpan("executor.run.id", retained.id);
-      if (!terminal(retained)) yield* backend.start(retained.id);
+      if (!terminal(retained)) yield* dispatch(backend, retained.id);
       return yield* view(yield* read(retained.id));
     }).pipe(Effect.withSpan("workflow.start", { attributes: { "executor.app.id": input.app } }));
   const terminate = (input: typeof WorkflowTarget.Type) =>

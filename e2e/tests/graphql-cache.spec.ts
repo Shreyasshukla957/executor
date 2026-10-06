@@ -161,8 +161,8 @@ import { graphqlRouter } from "apps/graphql";
 const provider = defineProvider({ name: "GraphQL fixture", auth: { key: secrets({ label: "Variant", fields: object({ token: string() }) }) } });
 export default defineApp({ accounts: ${accounts ? "{ service: provider.many() }" : "{}"} }, async ctx => {
   const options = account => ({ url: ${JSON.stringify(url)}, signal: ctx.signal,
-    ${cached ? "cache: account ? ctx.cache.forAccount(account) : ctx.cache," : ""}
-    ...(account ? { accountId: account.id, headers: { "X-Fixture-Variant": account.fields.token } } : {}),
+    ${cached ? "cache: ctx.cache," : ""}
+    ...(account ? { account, headers: { "X-Fixture-Variant": account.fields.token } } : {}),
   });
   const tools = ${accounts ? "await accountRouter(ctx.accounts.service, account => graphqlRouter(options(account)), { signal: ctx.signal })" : "await graphqlRouter(options(undefined))"};
   return { tools: router({

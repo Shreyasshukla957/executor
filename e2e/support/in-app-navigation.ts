@@ -16,10 +16,17 @@ export const openInApp = (label: string, path: string) =>
     );
   });
 
-/** A dashboard page that reads no app, account or resource data. */
-const neutralPage = (path: string) => {
-  const organization = /^\/org\/([^/?#]+)/.exec(path)?.[1];
-  return organization === undefined ? "/connect" : `/org/${organization}/connect`;
+/**
+ * A dashboard page that reads no app, account or resource data. Hosted pages start from their
+ * organization's Connect page; account pages name that organization in their `organization`
+ * search parameter, because only dashboard routes are served as dashboard documents (Cloud serves
+ * other paths as static assets). The local dashboard has no organizations and serves `/connect`.
+ */
+const neutralPage = (destination: URL) => {
+  const organization =
+    /^\/org\/([^/?#]+)/.exec(destination.pathname)?.[1] ??
+    destination.searchParams.get("organization");
+  return organization === null ? "/connect" : `/org/${organization}/connect`;
 };
 
 /**
@@ -29,16 +36,12 @@ const neutralPage = (path: string) => {
 export const openThroughBrowser = (label: string, path: string) =>
   Effect.gen(function* () {
     const browser = yield* Browser;
-    const origin = new URL(path, "http://dashboard.invalid");
+    const destination = new URL(path, "http://dashboard.invalid");
+    const local = destination.origin === "http://dashboard.invalid";
     yield* browser.use(`${label}: start from another page`, (page) =>
       page.goto(
-        origin.origin === "http://dashboard.invalid"
-          ? neutralPage(path)
-          : new URL(neutralPage(origin.pathname), origin).href,
+        local ? neutralPage(destination) : new URL(neutralPage(destination), destination).href,
       ),
     );
-    yield* openInApp(
-      label,
-      origin.origin === "http://dashboard.invalid" ? path : origin.pathname + origin.search,
-    );
+    yield* openInApp(label, local ? path : destination.pathname + destination.search);
   });

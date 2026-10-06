@@ -1,0 +1,40 @@
+---
+export const prerender = true;
+import RailLayout from "../layouts/RailLayout.astro";
+
+// The Worker serves this document, with a 404 status, for any page outside the
+// documentation that no route or asset matches. The documentation has its own.
+const links = [
+  { href: "/", label: "Home", detail: "What Executor is and how to start." },
+  { href: "/docs", label: "Documentation", detail: "Connect accounts, use MCP, build apps." },
+  { href: "/apps", label: "Apps", detail: "Browse apps you can install." },
+  { href: "/blog", label: "Blog", detail: "Notes from building Executor." },
+];
+---
+
+<RailLayout title="Page not found — Executor" description="This page does not exist." noindex>
+  <article class="doc max-w-180 [margin-inline:auto] [padding:4rem_1.5rem_6rem] min-[640px]:[padding:4.5rem_2.5rem_7rem] min-[1024px]:max-w-none min-[1024px]:[margin-inline:0] min-[1024px]:[padding-inline:0] max-[719.98px]:[padding:2.25rem_1.25rem_4rem]">
+    <header class="min-[1024px]:max-w-180">
+      <p class="font-mono text-[11px] uppercase tracking-[0.14em] [color:var(--color-ink-3)] mb-[0.75rem]">404</p>
+      <h1 class="text-[clamp(1.6rem,_2.6vw,_2.1rem)] font-semibold tracking-[-0.02em] leading-[1.22] text-ink mb-[1rem]">Page not found</h1>
+      <p class="text-[17px] leading-[1.6] [color:var(--color-ink-2)] [text-wrap:pretty] mb-[1.6rem]">
+        Nothing lives at <code class="font-mono text-[15px] text-ink" data-missing-path></code>. It may have moved, or the link may be wrong.
+      </p>
+    </header>
+    <ul class="grid border-t border-t-rule min-[1024px]:max-w-180">
+      {
+        links.map((link) => (
+          <li>
+            <a href={link.href} class="grid gap-[0.2rem] [padding:1rem_0] border-b border-b-rule no-underline [color:var(--color-ink-2)]">
+              <span class="text-[17px] font-semibold text-ink">{link.label}</span>
+              <span class="text-[15px] leading-[1.55]">{link.detail}</span>
+            </a>
+          </li>
+        ))
+      }
+    </ul>
+  </article>
+  <script is:inline>
+    document.querySelector("[data-missing-path]").textContent = location.pathname;
+  </script>
+</RailLayout>

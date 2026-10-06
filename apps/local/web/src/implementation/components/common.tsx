@@ -8,7 +8,11 @@ import { Button } from "@executor-js/ui/components/button";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { AlertCircleIcon } from "@hugeicons/core-free-icons";
 import type { FailureProps } from "@executor-js/ui/contracts/dashboard";
-import { failureMessage, type DashboardError } from "../../contracts/errors.ts";
+import {
+  connectionLinkRecovery,
+  failureMessage,
+  type DashboardError,
+} from "../../contracts/errors.ts";
 import { Link } from "@tanstack/react-router";
 export {
   ProviderIcon,
@@ -18,7 +22,15 @@ export {
   SectionHeading,
 } from "@executor-js/ui/dashboard/common";
 /** Render the local product's typed failures without exposing transport or credential data. */
-export function Failure({ cause, retry, retrying }: FailureProps<DashboardError>) {
+export function Failure({
+  cause,
+  retry,
+  retrying,
+  recovery,
+}: FailureProps<DashboardError> & {
+  /** The page's own next step, when it cannot offer the one the error's recovery names. */
+  readonly recovery?: string | undefined;
+}) {
   const error = Cause.findErrorOption(cause);
   if (Option.isSome(error) && Schema.is(AppProviderFailed)(error.value))
     return (
@@ -43,6 +55,7 @@ export function Failure({ cause, retry, retrying }: FailureProps<DashboardError>
         error={error.value}
         action={reconnect}
         context="While completing this action in Executor."
+        recovery={recovery}
         retry={retry}
         retrying={retrying}
       />
@@ -61,5 +74,19 @@ export function Failure({ cause, retry, retrying }: FailureProps<DashboardError>
           </Button>
         ))}
     </Alert>
+  );
+}
+/** Failures on a connection link page, where only the agent that sent the link can start again. */
+export function ConnectionLinkFailure({ cause, retry, retrying }: FailureProps<DashboardError>) {
+  return (
+    <Failure
+      cause={cause}
+      retry={retry}
+      retrying={retrying}
+      recovery={Option.match(Cause.findErrorOption(cause), {
+        onSome: connectionLinkRecovery,
+        onNone: () => undefined,
+      })}
+    />
   );
 }

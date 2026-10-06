@@ -42,6 +42,7 @@ import {
   DialogFooter,
 } from "../components/dialog.tsx";
 import { Popover, PopoverContent, PopoverTrigger } from "../components/popover.tsx";
+import { Skeleton } from "../components/skeleton.tsx";
 import { PageFrame, PageHeader } from "./page.tsx";
 import { QueryView } from "./context.tsx";
 import { ProviderIcon } from "./common.tsx";
@@ -180,7 +181,11 @@ export function ScopedConnectionsPage<E, EL extends E, ES extends E, ER extends 
               </div>
               {installation}
             </section>
-            <QueryView<readonly ConnectionView[], E> query={connections} Failure={Failure}>
+            <QueryView<readonly ConnectionView[], E>
+              query={connections}
+              Failure={Failure}
+              pending={<ConnectionListSkeleton />}
+            >
               {(items) =>
                 items.length === 0 ? (
                   <p className="mt-8 text-[13px] text-muted-foreground">
@@ -337,6 +342,29 @@ export function ScopedConnectionsPage<E, EL extends E, ES extends E, ER extends 
         </DialogContent>
       </Dialog>
     </PageFrame>
+  );
+}
+
+/** Shares the scoped list's heading and row rhythm so loading does not reflow the page. */
+function ConnectionListSkeleton() {
+  return (
+    <section role="status" aria-label="Loading scoped connections" className="mt-10">
+      <div aria-hidden className="mb-2 flex h-6 items-center">
+        <Skeleton className="h-3 w-28" />
+      </div>
+      <div aria-hidden className="divide-y border-y">
+        {["w-36", "w-24"].map((width) => (
+          <div key={width} className="flex items-center gap-4 px-1 py-3">
+            <div className="min-w-0 flex-1 space-y-2 py-px">
+              <Skeleton className={`h-3 ${width}`} />
+              <Skeleton className="h-2.5 w-48 max-w-[60%]" />
+            </div>
+            <Skeleton className="h-2.5 w-10" />
+          </div>
+        ))}
+      </div>
+      <span className="sr-only">Loading scoped connections…</span>
+    </section>
   );
 }
 

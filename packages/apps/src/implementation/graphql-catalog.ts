@@ -3,7 +3,12 @@ import { cacheKey } from "@executor-js/app-cache";
 import { Effect, Schema } from "effect";
 import { GraphqlError, GraphqlToolsOptions, GraphqlToolDefinition } from "../contracts/graphql.ts";
 import type { DynamicRouter } from "../contracts/router.ts";
-import { catalogCache, type CatalogCacheOptions } from "./catalog-cache.ts";
+import {
+  catalogCache,
+  catalogScope,
+  type CatalogAccount,
+  type CatalogCacheOptions,
+} from "./catalog-cache.ts";
 import { graphqlClientEffect, graphqlDefinitions, adaptGraphqlTool } from "./graphql.ts";
 import { protocolOperations, type OperationKinds } from "./protocol-operations.ts";
 import { nativeOperation } from "./operations.ts";
@@ -17,21 +22,28 @@ const GraphqlToolSummary = GraphqlToolDefinition.mapFields(({ name, kind, descri
 }));
 type GraphqlToolSummary = typeof GraphqlToolSummary.Type;
 
-export interface GraphqlCatalogOptions extends GraphqlToolsOptions, CatalogCacheOptions {}
+/** An endpoint, the account whose schema it is, and the metadata policy. */
+export type GraphqlCatalogOptions = Omit<GraphqlToolsOptions, "accountId" | "headers"> &
+  CatalogCacheOptions &
+  CatalogAccount;
 
 export const graphqlCatalog = (options: GraphqlCatalogOptions, kinds: OperationKinds) =>
   Effect.gen(function* () {
-    const parsed = yield* Schema.decodeUnknownEffect(GraphqlToolsOptions)(options).pipe(
-      Effect.mapError(() => new GraphqlError({ phase: "discover", reason: "invalid_input" })),
-    );
-    const headers: Record<string, string> = {};
-    new Headers(parsed.headers).forEach((value, name) => {
-      headers[name] = value;
-    });
-    const id = yield* cacheKey({ url: parsed.url, headers, accountId: parsed.accountId ?? null });
+    const invalid = () => new GraphqlError({ phase: "discover", reason: "invalid_input" });
+    const parsed = yield* Schema.decodeUnknownEffect(GraphqlToolsOptions)({
+      url: options.url,
+      accountId: options.account?.id,
+      headers: options.headers,
+      signal: options.signal,
+      timeoutMs: options.timeoutMs,
+    }).pipe(Effect.mapError(invalid));
+    // The account's scope separates credentials, so the endpoint alone identifies its schema.
+    const cache = yield* catalogScope(options, invalid);
+    const id = yield* cacheKey({ url: parsed.url });
     const client = yield* graphqlClientEffect(parsed);
     const catalog = yield* catalogCache({
       ...options,
+      cache,
       prefix: ["graphql-catalog-v2", id],
       schema: GraphqlToolDefinition,
       summary: {

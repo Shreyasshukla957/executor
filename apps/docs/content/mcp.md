@@ -17,7 +17,9 @@ The transport is streamable HTTP. See
 ## The tools
 
 The endpoint does not expose one MCP tool per app tool. However many apps you
-add, the tool list stays the same size.
+add, the tool list stays the same size. When a client connects, the server's
+MCP instructions introduce Executor to the agent. They are the Executor app's
+`executor` skill, which points to its `code-mode` and `app-authoring` skills.
 
 - **`skills`** reads the instructions an app ships. Call `skills({})` for a list
   of what is visible, `skills({ app: "support-inbox" })` for one app's skills,

@@ -65,6 +65,8 @@ layer(HostedLive, { excludeTestServices: true })("Workspace source", (it) => {
             readonly method: string;
             readonly completedSpan?: string;
           },
+          // Background spans the assertions read; a response can arrive before they end.
+          background: ReadonlyArray<string> = [],
         ) =>
           Effect.gen(function* () {
             const request = received ?? (yield* evidence.requests).at(-1);
@@ -82,7 +84,8 @@ layer(HostedLive, { excludeTestServices: true })("Workspace source", (it) => {
                     ({ span }) =>
                       span.operationName ===
                       (reuse ? "source.repository.token.acquire" : "source.repository.initialize"),
-                  ))
+                  )) &&
+                background.every((name) => named(result.data, name).length > 0)
                   ? Effect.succeed(result)
                   : Effect.fail(new Error("Missing completed workspace request trace")),
               ),
@@ -150,7 +153,12 @@ layer(HostedLive, { excludeTestServices: true })("Workspace source", (it) => {
         }
         expect(yield* read(path)).toEqual(initial);
         // Cloud serves the stored commit; its only Git use is the background head check.
-        const existing = yield* trace("existing", true);
+        const existing = yield* trace(
+          "existing",
+          true,
+          undefined,
+          cloud ? ["source.workspace.cache.revalidate", "source.git.refs"] : [],
+        );
         expect(named(existing, "source.workspace.read")).toHaveLength(1);
         expect(operations(existing)).not.toContain("source.initial.read");
         if (cloud) {

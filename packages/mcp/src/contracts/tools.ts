@@ -30,6 +30,8 @@ export interface McpOptions {
   readonly browser?: BrowserDelivery;
   /** Additional product identity partition. The validated HTTP MCP session ID is included when the protocol has sessions. */
   readonly caller?: Effect.Effect<string>;
+  /** Sent as the server instructions when a client connects. Hosts send the Executor app's intro. */
+  readonly instructions: string;
   readonly limits: McpLimits;
   readonly protocols: readonly [McpProtocol.ProtocolAdapter, ...McpProtocol.ProtocolAdapter[]];
 }

@@ -96,6 +96,9 @@ const fixture = () =>
               serverInfo: { name: "Cache fixture", version: "1" },
             });
           }
+          // The outbound network must swap a credential handle for the account's real token.
+          if (request.headers.authorization?.includes("exsec_"))
+            return HttpServerResponse.empty({ status: 401 });
           const variant = request.headers["x-fixture-variant"];
           const prefix = variant ? `${variant}_` : "";
           if (message.method === "tools/list") {
@@ -166,7 +169,7 @@ const control = (origin: string, data?: Schema.Json) =>
     return yield* response.json.pipe(Effect.flatMap(Schema.decodeUnknownEffect(Stats)));
   });
 
-const source = (url: string, cached: boolean, accounts: boolean) => [
+const source = (url: string, cached: boolean, accounts: boolean, unbound = false) => [
   {
     path: "package.json",
     content: JSON.stringify({ dependencies: withApps({ "@modelcontextprotocol/sdk": "1.30.0" }) }),
@@ -174,13 +177,15 @@ const source = (url: string, cached: boolean, accounts: boolean) => [
   {
     path: "index.ts",
     content: `
-import { defineApp, defineProvider, accountRouter, secrets, object, string, query, router } from "apps";
+import { defineApp, defineProvider, accountRouter, secrets, object, plain, string, query, router } from "apps";
 import { mcpRouter } from "apps/mcp";
-const provider = defineProvider({ name: "Cache fixture", auth: { key: secrets({ label: "Variant", fields: object({ token: string() }) }) } });
+// Declared hosts give app code a fresh token handle on every call; the account's catalog must still hit.
+const provider = defineProvider({ name: "Cache fixture", hosts: ${JSON.stringify([new URL(url).host])}, auth: { key: secrets({ label: "Variant", fields: object({ variant: plain(string()), token: string() }) }) } });
 export default defineApp({ accounts: ${accounts ? "{ service: provider.many() }" : "{}"} }, async ctx => {
   const options = account => ({ url: ${JSON.stringify(url)}, signal: ctx.signal,
-    ${cached ? "cache: account ? ctx.cache.forAccount(account) : ctx.cache," : ""}
-    ...(account ? { accountId: account.id, headers: { "X-Fixture-Variant": account.fields.token } } : {}),
+    ${cached ? "cache: ctx.cache," : ""}
+    ${unbound ? 'headers: { Authorization: "Bearer unbound" },' : ""}
+    ...(account ? { account, headers: { "X-Fixture-Variant": account.fields.variant, Authorization: "Bearer " + account.fields.token } } : {}),
   });
   const tools = ${accounts ? "await accountRouter(ctx.accounts.service, account => mcpRouter(options(account)), { signal: ctx.signal })" : "await mcpRouter(options(undefined))"};
   return { tools: router({
@@ -195,14 +200,14 @@ export default defineApp({ accounts: ${accounts ? "{ service: provider.many() }"
   },
 ];
 
-const deploy = (url: string, cached: boolean, accounts = false) =>
+const deploy = (url: string, cached: boolean, accounts = false, unbound = false) =>
   Effect.gen(function* () {
     const api = yield* Api;
     const actors = yield* Actors;
     const prefix = `/api/organizations/${actors.organization.id}`;
     const response = yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
       name: `MCP cache ${randomUUID().slice(0, 8)}`,
-      files: source(url, cached, accounts),
+      files: source(url, cached, accounts, unbound),
     });
     expect(response.status).toBe(200);
     const id = (yield* body(App, response)).id;
@@ -237,7 +242,7 @@ layer(HostedLive, { excludeTestServices: true })("MCP cache", (it) => {
             app.api.request(app.actors.owner, "DELETE", `${app.prefix}/accounts/${id}`),
           ).pipe(Effect.orDie),
         );
-        const connect = (token: string) =>
+        const connect = (variant: string) =>
           Effect.gen(function* () {
             const connection = yield* body(
               Resource,
@@ -252,7 +257,11 @@ layer(HostedLive, { excludeTestServices: true })("MCP cache", (it) => {
                 app.actors.owner,
                 "POST",
                 `${app.prefix}/connections/${connection.id}/submit`,
-                { method: "key", label: "Synthetic variant", fields: { token } },
+                {
+                  method: "key",
+                  label: "Synthetic variant",
+                  fields: { variant, token: randomUUID() },
+                },
               ),
             );
             ids.push(account.id);
@@ -410,6 +419,18 @@ layer(HostedLive, { excludeTestServices: true })("MCP cache", (it) => {
         expect((yield* app.call("fixture_0000", { message: "old schema" })).status).toBe(422);
         expect((yield* control(origin)).counters.call).toBe(calls);
         expect((yield* app.call("revision_1")).status).toBe(404);
+
+        // Credentials come only with their account: headers without one are refused before
+        // the server is contacted, so an unbound credential never keys or fills a shared catalog.
+        const unbound = yield* deploy(`${origin}/mcp`, true, false, true);
+        const before = (yield* control(origin)).counters;
+        const refused = yield* unbound.call("fixture_0000");
+        expect(refused.status).toBe(502);
+        expect(
+          (yield* body(Schema.Struct({ mcp: Schema.Struct({ reason: Schema.String }) }), refused))
+            .mcp.reason,
+        ).toBe("invalid_input");
+        expect((yield* control(origin)).counters).toEqual(before);
       }),
     ),
   );

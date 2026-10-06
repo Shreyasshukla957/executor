@@ -29,6 +29,13 @@ import {
 } from "effect/unstable/http";
 import type { Target } from "./platform.ts";
 import { startAnalyticsCollector } from "./analytics-collector.ts";
+import {
+  applyLegacyStatements,
+  LegacyResults,
+  LegacyStatements,
+  productDatabase,
+} from "./legacy-storage.ts";
+import { scenarios } from "../test-plan.ts";
 
 class ServerFailed extends Schema.TaggedError<ServerFailed>()("ServerFailed", {
   message: Schema.String,
@@ -287,6 +294,48 @@ export const startManagedServer = (
           );
         }),
       ),
+      HttpRouter.add(
+        "POST",
+        "/storage/legacy",
+        Effect.gen(function* () {
+          const request = yield* HttpServerRequest.HttpServerRequest;
+          if (request.headers.authorization !== `Bearer ${Redacted.value(target.apiKey)}`)
+            return HttpServerResponse.empty({ status: 401 });
+          // Only scenarios that declare this in the reviewed test plan may write rows directly.
+          const declared = Object.values(scenarios).some(
+            (scenario) =>
+              scenario.title === target.scenarioLabel &&
+              "legacyStorage" in scenario &&
+              scenario.legacyStorage === true,
+          );
+          if (!declared || target.metadata.target === "cloud")
+            return HttpServerResponse.empty({ status: 403 });
+          const database = productDatabase(env.EXECUTOR_DATA_DIR, target.metadata.target);
+          const body = yield* request.json.pipe(
+            Effect.flatMap(
+              Schema.decodeUnknownEffect(Schema.Struct({ statements: LegacyStatements })),
+            ),
+          );
+          // Hold the lifecycle gate so no product generation can open the database meanwhile.
+          const rows = yield* gate.withPermits(1)(
+            stop.pipe(Effect.andThen(applyLegacyStatements(database, body.statements))),
+          );
+          return HttpServerResponse.text(
+            yield* Schema.encodeEffect(Schema.fromJsonString(LegacyResults))(rows),
+          );
+        }).pipe(
+          Effect.catch((error) =>
+            Effect.succeed(
+              error._tag === "LegacyStatementFailed"
+                ? HttpServerResponse.text(
+                    `Statement ${error.index} failed and was rolled back: ${error.message}`,
+                    { status: 500 },
+                  )
+                : HttpServerResponse.empty({ status: 500 }),
+            ),
+          ),
+        ),
+      ),
       HttpRouter.add("POST", "/start", control("start")),
       HttpRouter.add("POST", "/stop", control("stop")),
       HttpRouter.add("POST", "/restart", control("restart")),
@@ -306,7 +355,11 @@ export const startManagedServer = (
     return { controlOrigin: `http://127.0.0.1:${server.address.port}`, origin };
   });
 
-const startIsolatedSelfHost = (target: typeof Target.Service, entry: "product" | "development") =>
+const startIsolatedSelfHost = (
+  target: typeof Target.Service,
+  entry: "product" | "development",
+  environment: Readonly<Record<string, string>> = {},
+) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const port =
@@ -330,6 +383,7 @@ const startIsolatedSelfHost = (target: typeof Target.Service, entry: "product" |
     const server = yield* startManagedServer(
       { ...target, directory, metadata: { ...target.metadata, origin, target: "self-host" } },
       entry,
+      environment,
     );
     return server.origin;
   });
@@ -339,5 +393,7 @@ export const startDevelopmentServer = (target: typeof Target.Service) =>
   startIsolatedSelfHost(target, "development");
 
 /** Start an unconfigured product instance; the scenario scope owns its process and fresh data. */
-export const startFreshSelfHost = (target: typeof Target.Service) =>
-  startIsolatedSelfHost(target, "product");
+export const startFreshSelfHost = (
+  target: typeof Target.Service,
+  environment: Readonly<Record<string, string>> = {},
+) => startIsolatedSelfHost(target, "product", environment);

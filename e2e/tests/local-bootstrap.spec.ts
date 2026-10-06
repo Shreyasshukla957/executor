@@ -115,6 +115,8 @@ const packagedCli = (options: {
           return value === undefined ? [] : [[key, value] as const];
         }),
       ),
+      // Release scenarios never send product analytics, even from a build with a baked key.
+      DO_NOT_TRACK: "1",
       EXECUTOR_DATA_DIR: directory,
       EXECUTOR_PORT: String(port),
       EXECUTOR_ENVIRONMENT: "e2e",

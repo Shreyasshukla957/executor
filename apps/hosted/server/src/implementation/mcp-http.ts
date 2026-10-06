@@ -12,6 +12,7 @@ import {
   mcpResourceMetadataUrl,
 } from "@executor-js/mcp-auth";
 import { defaultMcpLimits, makeMcp, type McpBackend, type McpOptions } from "@executor-js/mcp";
+import { executorIntro } from "@executor-js/app-templates/executor";
 import { Context, Effect, Option, Schema } from "effect";
 import { ElicitationFailed } from "@executor-js/sdk/core";
 import { McpProtocol } from "effect/unstable/ai";
@@ -76,6 +77,7 @@ export const makeHostedMcp = (beforeExecute?: McpOptions["beforeExecute"]) =>
     backend: requestBackend,
     ...(beforeExecute === undefined ? {} : { beforeExecute }),
     caller: RequestCaller,
+    instructions: executorIntro,
     limits: defaultMcpLimits,
     browser: {
       url: (address) =>

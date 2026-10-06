@@ -40,7 +40,7 @@ layer(HostedLive, { excludeTestServices: true })("Framework discovery", (it) => 
         const { client, execute, queries, profile } = yield* frameworkSession;
         // These public reads share no results. Start them together while keeping
         // each real MCP request and its live catalog evaluation.
-        const [discovered, imported, current, found, guide] = yield* Effect.all(
+        const [discovered, imported, current, found, entry, guide] = yield* Effect.all(
           [
             execute('return await tools.search({query: "framework", limit: 20});'),
             execute('return await tools.search({query: "context.get", limit: 1});').pipe(
@@ -69,6 +69,13 @@ layer(HostedLive, { excludeTestServices: true })("Framework discovery", (it) => 
                 ),
               ),
             ),
+            client.use("Read the short entry skill", (client, signal) =>
+              client.callTool(
+                { name: "skills", arguments: { app: "executor", name: "executor" } },
+                undefined,
+                { signal },
+              ),
+            ),
             client.use("Read the small authoring router", (client, signal) =>
               client.callTool(
                 { name: "skills", arguments: { app: "executor", name: "app-authoring" } },
@@ -77,7 +84,7 @@ layer(HostedLive, { excludeTestServices: true })("Framework discovery", (it) => 
               ),
             ),
           ],
-          { concurrency: 5 },
+          { concurrency: 6 },
         );
         yield* evidence.json("framework-tool-discovery.json", discovered);
         const tools = yield* Schema.decodeUnknownEffect(
@@ -133,6 +140,11 @@ layer(HostedLive, { excludeTestServices: true })("Framework discovery", (it) => 
         expect(hook.entry.signatures.join(" ")).toContain("data: A | undefined");
         expect(hook.entry.signatures.join(" ")).toContain("pending: boolean");
         expect(update.entry.signatures.join(" ")).toContain("OptimisticUpdate<Input>");
+        // Agents start at the short entry skill, which names the deeper skills to read.
+        const intro = yield* Schema.decodeUnknownEffect(Document)(entry.structuredContent);
+        expect(intro.content).toContain("`code-mode`");
+        expect(intro.content).toContain("`app-authoring`");
+        expect(intro.content.split("\n").length).toBeLessThan(50);
         const router = yield* Schema.decodeUnknownEffect(Document)(guide.structuredContent);
         expect(router.content).toContain("[ui.md](ui.md)");
         expect(router.content.split("\n").length).toBeLessThan(90);

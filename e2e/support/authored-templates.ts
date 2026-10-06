@@ -113,8 +113,8 @@ export const authoredAppFiles = (
 export default defineApp({ accounts: ${accountsDeclaration} }, async ({ accounts, cache, signal }) => ({
   tools: await ${wrap(`${helper}({
     url: ${serialize(`${origin}/${kind}`)},
-    cache: ${authenticated ? "cache.forAccount(account)" : "cache"},
-    ${authenticated ? "accountId: account.id," : ""}
+    cache,
+    ${authenticated ? "account," : ""}
     ${headers}
     signal,
   })`)},
@@ -147,8 +147,8 @@ import { provider } from "./provider.ts";
 export default defineApp({ accounts: { service: provider.many() } }, async ({ accounts, cache, signal }) => ({
   tools: await accountRouter(accounts.service, async (account) => mcpRouter({
     url: ${serialize(url)},
-    cache: cache.forAccount(account),
-    accountId: account.id,
+    account,
+    cache,
     headers: { Authorization: "Bearer " + account.fields.access_token },
     signal,
   }), { signal }),
@@ -161,6 +161,7 @@ export default defineApp({ accounts: { service: provider.many() } }, async ({ ac
 
 export const provider = defineProvider({
   name: ${serialize(name)},
+  hosts: ${serialize([new URL(url).host])},
   auth: { oauth: oauth2({ discover: ${serialize(url)} }) },
 });
 `,

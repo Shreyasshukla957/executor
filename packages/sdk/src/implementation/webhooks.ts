@@ -53,7 +53,7 @@ const PrivateState = Schema.Struct({
 export const makeWebhooks = (
   storage: ExecutorDatabase,
   runtime: Runtime,
-  resolveAccount: ReturnType<typeof makeOAuth>["resolve"],
+  resolveAccount: ReturnType<typeof makeOAuth>["resolveSelected"],
   credentials: Credentials,
   crypto: Crypto.Crypto,
   origin: string | undefined,

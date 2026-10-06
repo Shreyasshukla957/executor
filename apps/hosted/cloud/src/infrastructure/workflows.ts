@@ -188,11 +188,17 @@ export const cloudWorkflows: Effect.Effect<WorkflowRuntime, never, Cloudflare.Wo
         }),
       terminate: (run) =>
         Effect.gen(function* () {
-          const current = yield* status(run);
-          if (["missing", "complete", "errored", "terminated"].includes(current.status)) return;
+          const finished = (state: WorkflowBackendState) =>
+            ["missing", "complete", "errored", "terminated"].includes(state.status);
+          if (finished(yield* status(run))) return;
           const namespace = yield* binding;
-          const instance = yield* safe(native(() => namespace.get(run)));
-          yield* safe(native(() => instance.terminate()));
+          const terminated = yield* safe(
+            native(async () => (await namespace.get(run)).terminate()),
+          ).pipe(Effect.result);
+          // The run can finish between the status read and the native call, which then refuses
+          // to terminate the finished instance. Only a run that is still active failed to stop.
+          if (Result.isFailure(terminated) && !finished(yield* status(run)))
+            return yield* terminated.failure;
         }),
     } satisfies WorkflowRuntime;
   });

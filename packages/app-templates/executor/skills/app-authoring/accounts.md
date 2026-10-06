@@ -314,7 +314,9 @@ Completing a targeted request saves the account and selects it for the named pro
 one transaction. A `.many()` target appends without duplicates. Other selections
 are kept. If a single-account selection or the requirement changed during sign-in,
 completion returns `AccountConnectionTargetChanged` without saving credentials;
-inspect the profile and request a new link.
+inspect the profile and request a new link. A pending link whose app was redeployed
+with a different provider for that requirement, such as an API key instead of OAuth,
+returns the same error when read or opened. Request a new link after such a deploy.
 
 To save an account without selecting it for any app, pass `provider` instead:
 

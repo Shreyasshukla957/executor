@@ -2,7 +2,6 @@ import { folderSkillsEffect } from "./skill-files.ts";
 import { AppSkills, SkillFile, SkillLoadFailed } from "../contracts/skills.ts";
 import { accountProviderError, httpProviderError, parseProviderError } from "./provider-error.ts";
 import { ResponseStatusError } from "../contracts/http.ts";
-import { McpError } from "../contracts/mcp.ts";
 import { OpenapiResponseError } from "../contracts/api-response-error.ts";
 import { toPromise } from "./authoring.ts";
 import type { WorkflowControls, WorkflowReads } from "../contracts/workflows.ts";
@@ -79,6 +78,8 @@ import {
   boundFailureMessage,
   describeFailure,
   failureDetail,
+  leavingProviderError,
+  parseMcpError,
 } from "./failure-detail.ts";
 
 /** Either catalog detail on the wire; summaries are descriptions without schemas. */
@@ -103,10 +104,10 @@ const evaluationSafe = <A>(work: Effect.Effect<A, unknown>, secrets: readonly st
       const provider = parseProviderError(error);
       const skills = parseSkillLoadFailed(error);
       // An MCP server that cannot be reached is not an invalid app definition; keep its safe fields.
-      const mcp = parseMcpError(error);
+      const mcp = parseMcpError(error, secrets);
       return Effect.fail(
         Option.isSome(provider)
-          ? provider.value
+          ? leavingProviderError(provider.value, secrets, "discover")
           : Option.isSome(skills)
             ? skills.value
             : Option.isSome(mcp)
@@ -780,10 +781,12 @@ function dispatch(
               const error = Cause.squash(cause);
               const provider = parseProviderError(error);
               const response = Schema.decodeUnknownOption(OpenapiResponseError)(error);
+              // An MCP server's failure is not the app's own error; keep its server's answer.
+              const mcp = parseMcpError(error, secrets);
               const failure = Schema.decodeUnknownOption(ElicitationFailed)(error);
               return Effect.fail(
                 Option.isSome(provider)
-                  ? provider.value
+                  ? leavingProviderError(provider.value, secrets, "call")
                   : Option.isSome(response)
                     ? new OpenapiResponseError({
                         code: response.value.code,
@@ -793,9 +796,11 @@ function dispatch(
                           ? {}
                           : { recovery: response.value.recovery }),
                       })
-                    : Option.isSome(failure)
-                      ? failure.value
-                      : new HostOperationFailed(failureDetail(error, secrets)),
+                    : Option.isSome(mcp)
+                      ? mcp.value
+                      : Option.isSome(failure)
+                        ? failure.value
+                        : new HostOperationFailed(failureDetail(error, secrets)),
               );
             }),
             Effect.withSpan("app.operation.execute", {
@@ -884,10 +889,11 @@ function checkAccount(
         const classified = Option.isSome(status)
           ? Option.fromNullishOr(httpProviderError(status.value.status))
           : parseProviderError(error);
+        const secrets = accountSecrets(context.accounts);
         return Effect.fail(
           Option.isSome(classified)
-            ? accountProviderError(classified.value, account.id)
-            : new HostOperationFailed(failureDetail(error, accountSecrets(context.accounts))),
+            ? leavingProviderError(accountProviderError(classified.value, account.id), secrets)
+            : new HostOperationFailed(failureDetail(error, secrets)),
         );
       }),
       Effect.withSpan("app.account.check"),
@@ -913,14 +919,6 @@ const parseSkillLoadFailed = (error: unknown): Option.Option<SkillLoadFailed> =>
           ...(message ? { message } : {}),
           ...(status === undefined ? {} : { status }),
         }),
-    ),
-  );
-
-const parseMcpError = (error: unknown): Option.Option<McpError> =>
-  Schema.decodeUnknownOption(McpError)(error).pipe(
-    Option.map(
-      ({ phase, reason, status }) =>
-        new McpError({ phase, reason, ...(status === undefined ? {} : { status }) }),
     ),
   );
 
@@ -974,6 +972,19 @@ export const createAppHandler =
             toolError = true;
           },
         }),
+        // Name what failed on the span; the bounded message stays in the reply only.
+        Effect.tapError((error) =>
+          (error._tag === "HostEvaluationFailed" ||
+            error._tag === "HostOperationFailed" ||
+            error._tag === "HostDeclarationInvalid") &&
+          error.errorName !== undefined
+            ? Effect.annotateCurrentSpan({
+                "error.type": error.errorName,
+                ...(error.source === undefined ? {} : { "executor.failure.source": error.source }),
+                ...(error.code === undefined ? {} : { "executor.failure.code": error.code }),
+              })
+            : Effect.void,
+        ),
         Effect.withSpan(`app.${command.operation}`),
       );
       if (toolError)

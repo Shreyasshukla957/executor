@@ -1,6 +1,6 @@
 {
   "name": "apps",
-  "version": "0.0.1-beta.19",
+  "version": "0.0.1-beta.26",
   "private": true,
   "description": "TypeScript apps with typed tools, accounts, storage, and UI.",
   "type": "module",
@@ -35,6 +35,7 @@
   },
   "dependencies": {
     "@cfworker/json-schema": "4.1.1",
+    "@csstools/css-tokenizer": "4.0.2",
     "@effect/sql-sqlite-do": "https://pkg.pr.new/Effect-TS/effect/@effect/sql-sqlite-do@c7d1ffff31a3e2ae0b0b0796b742bddeb797269d",
     "@executor-js/app-cache": "workspace:*",
     "@executor-js/app-data": "workspace:*",
@@ -44,6 +45,7 @@
     "effect": "https://pkg.pr.new/Effect-TS/effect/effect@c7d1ffff31a3e2ae0b0b0796b742bddeb797269d",
     "js-yaml": "5.4.2",
     "openapi-server-url-templating": "1.3.0",
+    "parse5": "8.0.0",
     "swagger-client": "3.38.2",
     "yaml": "^2.8.2"
   },

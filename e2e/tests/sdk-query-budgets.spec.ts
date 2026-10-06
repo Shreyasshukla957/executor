@@ -180,18 +180,20 @@ layer(HostedLive, { excludeTestServices: true })("SDK query budgets", (it) => {
             "Ten accounts need one joined app read, one profile read and one account batch",
           )
           .toBe(3);
-        const memberReads = yield* telemetry
-          .query(invocationTrace)
-          .pipe(
-            Effect.map(
-              (result) =>
-                result.data.filter(
-                  ({ span }) =>
-                    span.operationName === "sql.execute" &&
-                    String(span.tags["db.query.text"] ?? "").includes("from member where"),
-                ).length,
-            ),
-          );
+        const memberReads = yield* telemetry.query(invocationTrace).pipe(
+          Effect.map(
+            (result) =>
+              result.data.filter(
+                ({ span }) =>
+                  span.operationName === "sql.execute" &&
+                  // The membership row is read on its own or as the first table of the app
+                  // policy read; account policies check it inside their own statement.
+                  /\bfrom member (?:m\s+left join|where)\b/.test(
+                    String(span.tags["db.query.text"] ?? "").replace(/\s+/g, " "),
+                  ),
+              ).length,
+          ),
+        );
         yield* evidence.json("invocation-member-reads.json", {
           traceId: invocationTrace,
           count: memberReads,

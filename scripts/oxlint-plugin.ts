@@ -198,11 +198,109 @@ const noSharedWaitInWorkerInitialization = defineRule({
   }),
 });
 
+/** The named type of `x as T`, `<T>x` or `x satisfies T`, including `ns.T`. */
+const assertedTypeName = (type: ESTree.TSType) => {
+  if (type.type !== "TSTypeReference") return undefined;
+  const name = type.typeName;
+  if (name.type === "Identifier") return name.name;
+  if (name.type === "TSQualifiedName") return name.right.name;
+  return undefined;
+};
+
+const noProofForgery = defineRule({
+  meta: {
+    type: "problem",
+    docs: { description: "Mint authorization proofs only in their proofs module." },
+    messages: {
+      forged:
+        "{{name}} is evidence that a policy check passed. Obtain it from the proofs module that runs the check instead of asserting the type.",
+    },
+  },
+  create: (context) => {
+    const check = (node: ESTree.TSAsExpression | ESTree.TSTypeAssertion) => {
+      const name = assertedTypeName(node.typeAnnotation);
+      if (name !== undefined && name.endsWith("Proof"))
+        context.report({ node, messageId: "forged", data: { name } });
+    };
+    return { TSAsExpression: check, TSTypeAssertion: check };
+  },
+});
+
+/** Calls along a fluent chain such as `endpoint.annotate(...).pipe(...)`, outermost first. */
+function* chainCalls(node: ESTree.Node): Generator<ESTree.CallExpression> {
+  let current: ESTree.Node = node;
+  while (current.type === "CallExpression") {
+    yield current;
+    const callee: ESTree.Node = current.callee;
+    if (callee.type !== "MemberExpression") return;
+    current = callee.object;
+  }
+}
+
+/** The outermost call of the fluent chain that `node` belongs to. */
+const chainRoot = (node: ESTree.CallExpression) => {
+  let current: ESTree.Node = node;
+  for (;;) {
+    const member: ESTree.Node | null = current.parent;
+    if (member?.type !== "MemberExpression" || member.object !== current) return current;
+    const call: ESTree.Node | null = member.parent;
+    if (call?.type !== "CallExpression" || call.callee !== member) return current;
+    current = call;
+  }
+};
+
+const isMethodCall = (node: ESTree.CallExpression, method: string, argument: RegExp) =>
+  node.callee.type === "MemberExpression" &&
+  !node.callee.computed &&
+  node.callee.property.type === "Identifier" &&
+  node.callee.property.name === method &&
+  node.arguments[0]?.type === "Identifier" &&
+  argument.test(node.arguments[0].name);
+
+/** `.pipe(..., requireAccount.<action>, ...)` */
+const pipesRequireAccount = (node: ESTree.CallExpression) =>
+  node.callee.type === "MemberExpression" &&
+  node.callee.property.type === "Identifier" &&
+  node.callee.property.name === "pipe" &&
+  node.arguments.some(
+    (argument) =>
+      argument.type === "MemberExpression" &&
+      argument.object.type === "Identifier" &&
+      argument.object.name === "requireAccount",
+  );
+
+const accountMiddlewareThroughHelper = defineRule({
+  meta: {
+    type: "problem",
+    docs: { description: "Declare account endpoints only through requireAccount." },
+    messages: {
+      bare: "Use endpoint.pipe(requireAccount.<action>): it checks that the endpoint decodes an `account` path parameter, which {{name}} reads.",
+      action:
+        "requireAccount sets this endpoint's RequiredAction from its account middleware; do not annotate it separately.",
+    },
+  },
+  create: (context) => ({
+    CallExpression(node) {
+      if (isMethodCall(node, "middleware", /^RequireAccount[A-Z]/)) {
+        const argument = node.arguments[0];
+        if (argument?.type === "Identifier")
+          context.report({ node, messageId: "bare", data: { name: argument.name } });
+        return;
+      }
+      if (!isMethodCall(node, "annotate", /^RequiredAction$/)) return;
+      if ([...chainCalls(chainRoot(node))].some(pipesRequireAccount))
+        context.report({ node, messageId: "action" });
+    },
+  }),
+});
+
 export default definePlugin({
   meta: { name: "executor" },
   rules: {
     "no-module-level-mutable-state": noModuleLevelMutableState,
     "no-manual-effect-runtime-in-tests": noManualEffectRuntimeInTests,
     "no-shared-wait-in-worker-initialization": noSharedWaitInWorkerInitialization,
+    "no-proof-forgery": noProofForgery,
+    "account-middleware-through-helper": accountMiddlewareThroughHelper,
   },
 });

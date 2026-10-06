@@ -32,8 +32,7 @@ import {
   hostedOAuthCallback,
   hostedWebhookCallback,
   catalogLive,
-  requireUserLive,
-  requireOrganizationLive,
+  hostedMiddlewareLive,
   mcpProtectedResource,
   mcpAuthorizationServer,
   apiChallenge,
@@ -69,6 +68,7 @@ import { cloudEntryApi, cloudEntryDocument, resolveCloudEntry } from "./implemen
 import { browserReturnTo } from "@executor-js/hosted-server/browser/contracts";
 import { HttpServerRequest } from "effect/unstable/http";
 import { homepage } from "./implementation/homepage.ts";
+import { withNotFoundDocument } from "./implementation/not-found.ts";
 import { openAiAppsChallenge } from "./implementation/openai-apps-challenge.ts";
 import {
   cloudDashboard,
@@ -76,21 +76,24 @@ import {
   organizationRoot,
 } from "./implementation/dashboard.ts";
 import { withHostPipeline } from "@executor-js/dashboard-start/in-process";
-import dashboardRoutes from "@executor-js/hosted-cloud-web/routes" with { type: "json" };
+import { dashboardBatchPath } from "@executor-js/dashboard-start/batch";
+import { workerFirstRoutes } from "./contracts/worker-first-routes.ts";
 import { postHogBindings } from "./infrastructure/posthog.ts";
 import { cloudAnalytics } from "./implementation/product-analytics.ts";
-import { sentryWorkerBuild } from "./infrastructure/sentry-build.ts";
+import { workerBuild } from "./infrastructure/worker-build.ts";
 import { reportCloudFailure } from "./implementation/error-reporting.ts";
 import { sentryBindings } from "./infrastructure/sentry.ts";
 import { cloudErrorTunnel } from "./implementation/error-tunnel.ts";
 import { cloudSentry } from "./implementation/error-reporting.ts";
-import { cloudOrigin } from "./infrastructure/stage.ts";
+import { cloudOrigin, customDomain } from "./infrastructure/stage.ts";
 import { appDataSupervisors } from "./infrastructure/app-data.ts";
 import { cloudDevelopment } from "./contracts/development.ts";
 import { requestServices } from "@executor-js/hosted-server";
 import { recordRequestRejections, requestTiming } from "@executor-js/telemetry/http";
 
 import { Api } from "./infrastructure/api-worker.ts";
+import { Dashboard } from "./infrastructure/dashboard-worker.ts";
+import { cloudSourceFormatter } from "./infrastructure/source-formatter.ts";
 export { Api } from "./infrastructure/api-worker.ts";
 
 export default Api.make(
@@ -119,9 +122,9 @@ export default Api.make(
         ...sentry.env,
         ...(yield* billingBindings),
       },
-      build: sentryWorkerBuild("api"),
+      build: workerBuild("api"),
       // Auth callbacks and the dashboard share the configured canonical origin.
-      ...(origin === undefined ? {} : { domain: origin.hostname }),
+      ...(origin === undefined ? {} : { domain: yield* customDomain(origin) }),
       // Opt in per deployment; the database's cloud region is a proximity hint,
       // not a Cloudflare data center or a change to local development routing.
       ...(dev
@@ -145,25 +148,11 @@ export default Api.make(
           ? site.outdir.pipe(Output.map((directory) => path.resolve(directory)))
           : site.outdir,
         hash: site.hash.output,
+        // A miss reaches the Worker, which serves 404.html; see `not-found.ts`.
         notFoundHandling: "none",
         // Preserve TanStack paths after an internal index.html rewrite.
         htmlHandling: "none",
-        // An allowlist, so everything else is served from the assets. The
-        // documentation under /docs and /docs/* is static and must stay off
-        // this list.
-        runWorkerFirst: [
-          "/",
-          // The Worker renders every dashboard document; see `cloudflare-routes.ts`. Its
-          // `/org/*` rule also covers each organization's `/org/*/mcp` endpoint.
-          ...dashboardRoutes,
-          "/api",
-          "/api/*",
-          "/health",
-          "/openapi.json",
-          "/mcp",
-          "/git/*",
-          "/.well-known/*",
-        ],
+        runWorkerFirst: workerFirstRoutes,
       },
     };
   }),
@@ -197,6 +186,8 @@ export default Api.make(
     // here, so a failure is only logged.
     const installTeam = (job: string) =>
       provisionTeamNow(job).pipe(
+        // The installation saves default profiles; their setup starts at once, not on a later wake.
+        Effect.provide(schedules.layer),
         Effect.timeoutOption("15 seconds"),
         Effect.withSpan("job.provisioning.install"),
         Effect.catch(() => Effect.logWarning("Team installation left to its workflow", { job })),
@@ -261,6 +252,7 @@ export default Api.make(
       Effect.catch(() => Effect.logWarning("App repository recovery failed")),
     );
     const appDomains = yield* cloudAppDomains;
+    const dashboard = cloudDashboard(yield* Cloudflare.Workers.bindWorker(Dashboard));
     const appUi = hostedAppUi(
       appAddresses(auth.origin, yield* cloudAppUiBase.pipe(Effect.orDie)),
       appDomains.status,
@@ -325,6 +317,7 @@ export default Api.make(
     );
     const api = cloudApi(document).pipe(
       Layer.provide(frameworkDocumentation(authoring)),
+      HttpRouter.provideRequest(yield* cloudSourceFormatter),
       Layer.provide(appUi.dashboard),
       Layer.provide(requestServices(auth.appSessions).layer),
       HttpRouter.provideRequest(catalogLive(document.document, egress)),
@@ -332,8 +325,7 @@ export default Api.make(
       Layer.provide(billing),
       Layer.provide(removals),
       Layer.provide(onboarding),
-      Layer.provide(requireUserLive),
-      Layer.provide(requireOrganizationLive),
+      Layer.provide(hostedMiddlewareLive),
       HttpRouter.provideRequest(executor),
       Layer.provide(auth.identity),
       Layer.provide(auth.apiIdentity),
@@ -353,15 +345,18 @@ export default Api.make(
     const apiRequest = Effect.suspend(
       () => (apiHandle ??= Effect.runSync(Effect.provideContext(buildApi, apiServices))),
     );
-    // Register the API's own paths here, so routing precedence is unchanged.
-    const apiRoutes = Layer.mergeAll(
-      HttpRouter.add("GET", "/openapi.json", apiRequest),
+    // Register the API's own paths here, so routing precedence is unchanged. One layer adds
+    // them all: a layer per endpoint cost a fresh isolate's first request a layer build each.
+    const apiRoutes = HttpRouter.addAll([
+      HttpRouter.route("GET", "/openapi.json", apiRequest),
+      // A page's reads, started together in the browser, run here in one isolate.
+      HttpRouter.route("POST", dashboardBatchPath, apiRequest),
       ...Object.values(ExecutorCloudApi.groups).flatMap((group) =>
         Object.values(group.endpoints).map((endpoint) =>
-          HttpRouter.add(endpoint.method, endpoint.path, dispatchAfterWrites(apiRequest)),
+          HttpRouter.route(endpoint.method, endpoint.path, dispatchAfterWrites(apiRequest)),
         ),
       ),
-    );
+    ]);
     const mcpRoutes = Layer.mergeAll(
       HttpRouter.add("*", "/mcp", mcp.http),
       HttpRouter.add("*", "/org/:organization/mcp", mcp.http),
@@ -398,7 +393,7 @@ export default Api.make(
                 new Headers(request.headers),
               ),
             ),
-            cloudDashboard,
+            dashboard,
           ),
         ).pipe(HttpRouter.provideRequest(onboarding)),
       ),
@@ -410,17 +405,17 @@ export default Api.make(
       HttpRouter.add("*", "/api/:channel/*", analytics.proxy),
       HttpRouter.add("POST", "/api/:channel/submit", errorTunnel),
       browserTelemetry.pipe(HttpRouter.provideRequest(auth.identity)),
-      HttpRouter.add("GET", "/", homepage(auth.cookiePrefix, analytics.hero, cloudDashboard(null))),
+      HttpRouter.add("GET", "/", homepage(auth.cookiePrefix, analytics.hero, dashboard(null))),
       HttpRouter.add("GET", "/org/:organizationSlug", organizationRoot),
       ...dashboardPageRoutes.map((route) =>
         route === "/app-auth"
           ? // Resolved on the server so opening an app never renders an intermediate page.
-            HttpRouter.add("GET", route, appUi.signIn(cloudDashboard(null))).pipe(
+            HttpRouter.add("GET", route, appUi.signIn(dashboard(null))).pipe(
               Layer.provide(requestServices(auth.appSessions).layer),
               HttpRouter.provideRequest(executor),
               HttpRouter.provideRequest(auth.identity),
             )
-          : HttpRouter.add("GET", route, cloudDashboard(null)),
+          : HttpRouter.add("GET", route, dashboard(null)),
       ),
       HttpRouter.add("*", "/api/webhooks/:appId/:subscriptionId", hostedWebhookCallback).pipe(
         HttpRouter.provideRequest(executor),
@@ -454,6 +449,7 @@ export default Api.make(
     );
     return {
       fetch: handle.pipe(
+        withNotFoundDocument,
         Effect.tapCause(reportCloudFailure),
         Effect.catchTag("AuthenticationUnavailable", () =>
           Effect.succeed(HttpServerResponse.empty({ status: 503 })),

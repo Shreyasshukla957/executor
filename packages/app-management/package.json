@@ -10,6 +10,7 @@
     "./contracts": "./src/contracts/api.ts",
     "./data-steps": "./src/data-steps.ts",
     "./source-display": "./src/implementation/source-display.ts",
+    "./source-format": "./src/implementation/source-format.ts",
     "./contracts/source-display": "./src/contracts/source-display.ts"
   },
   "dependencies": {

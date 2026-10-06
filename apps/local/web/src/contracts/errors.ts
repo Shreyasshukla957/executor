@@ -292,6 +292,19 @@ const errorMessage = Match.type<DashboardError>().pipe(
       ),
   }),
 );
+const newConnectionLink = () => "Ask your agent for a new connection link.";
+/**
+ * A connection link page cannot start account setup itself, so a request it can no longer finish
+ * needs a new link from the agent instead of the error's dashboard recovery.
+ */
+export const connectionLinkRecovery = Match.type<DashboardError>().pipe(
+  Match.tags({
+    AccountConnectionNotFound: newConnectionLink,
+    AccountConnectionClosed: newConnectionLink,
+    AccountConnectionTargetChanged: newConnectionLink,
+  }),
+  Match.orElse(() => undefined),
+);
 /** Unexpected defects receive safe copy without printing arbitrary cause values. */
 export const failureMessage = (cause: Cause.Cause<DashboardError>): FailureMessage =>
   Option.match(Cause.findErrorOption(cause), {

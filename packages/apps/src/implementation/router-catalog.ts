@@ -11,11 +11,10 @@ import {
   HostedToolSummary,
   type HostRouterError,
 } from "../contracts/host.ts";
-import { McpError } from "../contracts/mcp.ts";
 import type { AppOperation } from "../contracts/operations.ts";
 import type { AppRouter, DynamicRouter, RouterMeta } from "../contracts/router.ts";
 import { SkillLoadFailed, skillFormatLimits, type AppSkillSource } from "../contracts/skills.ts";
-import { failureDetail } from "./failure-detail.ts";
+import { failureDetail, leavingProviderError, parseMcpError } from "./failure-detail.ts";
 import { parseProviderError } from "./provider-error.ts";
 import { joinPath, mergeMeta } from "./router.ts";
 import { skillFromFiles } from "./skill-files.ts";
@@ -28,7 +27,7 @@ import type { OperationSchedule } from "../contracts/schedules.ts";
  */
 export const safeFailure = (error: unknown, secrets: readonly string[]): HostRouterError => {
   const provider = parseProviderError(error);
-  if (Option.isSome(provider)) return provider.value;
+  if (Option.isSome(provider)) return leavingProviderError(provider.value, secrets, "discover");
   const skills = Schema.decodeUnknownOption(SkillLoadFailed)(error);
   if (Option.isSome(skills)) {
     const { reason, message, status } = skills.value;
@@ -38,11 +37,8 @@ export const safeFailure = (error: unknown, secrets: readonly string[]): HostRou
       ...(status === undefined ? {} : { status }),
     });
   }
-  const mcp = Schema.decodeUnknownOption(McpError)(error);
-  if (Option.isSome(mcp)) {
-    const { phase, reason, status } = mcp.value;
-    return new McpError({ phase, reason, ...(status === undefined ? {} : { status }) });
-  }
+  const mcp = parseMcpError(error, secrets);
+  if (Option.isSome(mcp)) return mcp.value;
   if (Schema.is(HostDeclarationInvalid)(error)) return error;
   return new HostEvaluationFailed(failureDetail(error, secrets));
 };

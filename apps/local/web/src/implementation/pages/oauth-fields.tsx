@@ -23,7 +23,7 @@ import {
 } from "../../contracts/account-connections.ts";
 import { openConnectionOAuth } from "../account-connections.ts";
 import { openOAuth } from "../oauth.ts";
-import { Failure } from "../components/common.tsx";
+import { ConnectionLinkFailure, Failure } from "../components/common.tsx";
 
 /** Local owns agent handoff grants, reconnect behavior, and the browser return intent. */
 export function OAuthFields({
@@ -61,7 +61,7 @@ export function OAuthFields({
         <SharedFields<OAuthStartResult & { readonly connection?: AccountConnectionId }, OAuthError>
           providerName={provider.definition.name}
           {...(account ? { account } : {})}
-          Failure={Failure}
+          Failure={connection ? ConnectionLinkFailure : Failure}
           setup={setup}
           setupAction={action}
           disabled={disabled}
@@ -79,7 +79,7 @@ export function OAuthFields({
           }}
           start={(client: OAuthSubmission) =>
             connection
-              ? startConnection({ payload: { ...connection, method, ...client } })
+              ? startConnection({ ...connection, method, ...client })
               : account
                 ? reconnect({ params: { account: account.id }, payload: client })
                 : start({ payload: { provider: provider.id, method, ...client } })

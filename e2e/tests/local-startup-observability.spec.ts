@@ -36,6 +36,8 @@ layer(TestLive, { excludeTestServices: true })("Local startup diagnostics", (it)
               extendEnv: false,
               env: {
                 PATH: process.env.PATH ?? "",
+                // Release scenarios never send product analytics, even from a build with a baked key.
+                DO_NOT_TRACK: "1",
                 EXECUTOR_API_KEY: secret,
                 EXECUTOR_ENCRYPTION_KEY: randomBytes(32).toString("hex"),
                 EXECUTOR_DATA_DIR: directory,

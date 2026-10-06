@@ -119,7 +119,7 @@ export const makeSchedules = (
       );
       const settings = yield* parse(Schema.Array(ScheduleSettings), saved);
       const declared = yield* tools.scheduled({ app: input.app, profile: input.profile });
-      const results: AppSchedule[] = declared.map((schedule) => ({
+      const results: AppSchedule[] = declared.items.map((schedule) => ({
         ...schedule,
         app: input.app,
         settings: settings.find((setting) => setting.name === schedule.name) ?? null,
@@ -155,7 +155,29 @@ export const makeSchedules = (
         if (terminal(status)) {
           const current = yield* readRun(run.id);
           if (current.revision !== run.revision || current.status !== status) return;
-          const settings = yield* readSettings(run.scheduleId);
+          const completed = {
+            id: run.id,
+            scheduleId: run.scheduleId,
+            app: run.app,
+            owner: run.owner,
+            status,
+            startedAt: run.startedAt,
+            finishedAt,
+          };
+          const saved = yield* query(() =>
+            db.findFirst("schedules", { where: (b) => b("id", "=", run.scheduleId) }),
+          );
+          // An activation removed this schedule while the run was in flight. Its history goes
+          // with it, as it did for the schedule's earlier runs.
+          if (saved === null) {
+            yield* query(() =>
+              db.deleteMany("scheduledRuns", {
+                where: (b) => b.and(b("id", "=", run.id), b("revision", "=", run.revision)),
+              }),
+            );
+            return completed;
+          }
+          const settings = yield* parse(ScheduleSettings, saved);
           const nextAt =
             settings.nextAt !== null && settings.nextAt <= finishedAt && settings.enabled
               ? yield* nextOccurrence(settings.timing, finishedAt).pipe(
@@ -180,15 +202,7 @@ export const makeSchedules = (
               set: { activeRun: null },
             }),
           );
-          return {
-            id: run.id,
-            scheduleId: run.scheduleId,
-            app: run.app,
-            owner: run.owner,
-            status,
-            startedAt: run.startedAt,
-            finishedAt,
-          };
+          return completed;
         }
       }),
     ).pipe(
@@ -214,6 +228,78 @@ export const makeSchedules = (
       ),
       Effect.catchTag("ScheduleNotFound", () => Effect.void),
     );
+  /**
+   * Delete the saved settings of every schedule the active deployment no longer declares, with
+   * their run history. Only a successful evaluation removes anything: a broken app or an account
+   * that cannot be used fails here and keeps every saved setting.
+   */
+  const reconcile = (input: { app: AppId; profile?: ProfileId | undefined }) =>
+    Effect.gen(function* () {
+      const declared = yield* tools.scheduled({ app: input.app, profile: input.profile });
+      const names = new Set(declared.items.map((schedule) => schedule.name));
+      yield* transaction(db, () =>
+        Effect.gen(function* () {
+          const app = yield* lockApp(db, { app: input.app });
+          // A later activation reconciles against its own declarations.
+          if (app.activeDeployment !== declared.deployment) return;
+          const rows = yield* query(() =>
+            db.findMany("schedules", {
+              where: (b) =>
+                b.and(
+                  b("app", "=", app.id),
+                  input.profile === undefined
+                    ? b("profile", "is", null)
+                    : b("profile", "=", input.profile),
+                ),
+            }),
+          );
+          const settings = yield* parse(Schema.Array(ScheduleSettings), rows);
+          for (const setting of settings) {
+            if (names.has(setting.name)) continue;
+            // A waiting approval would run a call the source no longer schedules, so it is
+            // withdrawn. A running mutation finishes; finish then removes its record.
+            const runs = yield* query(() =>
+              db.findMany("scheduledRuns", {
+                where: (b) => b.and(b("scheduleId", "=", setting.id), b("status", "!=", "running")),
+              }),
+            ).pipe(Effect.flatMap((rows) => parse(Schema.Array(StoredScheduledRun), rows)));
+            for (const run of runs)
+              if (run.requestId !== null && !terminal(run.status)) {
+                const requestId = run.requestId;
+                yield* query(() =>
+                  db.deleteMany("toolApprovals", {
+                    where: (b) => b.and(b("id", "=", requestId), b("status", "=", "pending")),
+                  }),
+                );
+              }
+            yield* query(() =>
+              db.deleteMany("scheduledRuns", {
+                where: (b) => b.and(b("scheduleId", "=", setting.id), b("status", "!=", "running")),
+              }),
+            );
+            yield* query(() =>
+              db.deleteMany("schedules", { where: (b) => b("id", "=", setting.id) }),
+            );
+          }
+        }),
+      );
+      return declared.items;
+    }).pipe(
+      Effect.withSpan("sdk.schedules.reconcile", {
+        attributes: { "executor.app.id": input.app, "executor.profile.id": input.profile },
+      }),
+    );
+  /** Reconcile the app's own schedules after an activation, when it has any. */
+  const activated = (app: AppId) =>
+    Effect.gen(function* () {
+      const saved = yield* query(() =>
+        db.findFirst("schedules", {
+          select: ["id"],
+          where: (b) => b.and(b("app", "=", app), b("profile", "is", null)),
+        }),
+      );
+      if (saved !== null) yield* reconcile({ app });
+    });
   const getApproval = (input: typeof ScheduleInputs.approval.Type) =>
     Effect.gen(function* () {
       const run = yield* readRun(input.run, input.owner);
@@ -762,16 +848,42 @@ export const makeSchedules = (
                       }),
                     );
                   } else {
-                    yield* query(() =>
-                      db.updateMany("scheduledRuns", {
-                        where: (b) => b.and(b("id", "=", claim.id), b("status", "=", "running")),
-                        set: {
-                          status: "awaiting-approval",
-                          requestId: response.requestId,
-                          expiresAt: new Date(response.expiresAt),
-                        },
+                    // Serialized with reconcile by the app lock: a schedule removed while this
+                    // run started never leaves an approval waiting for review.
+                    const waiting = yield* transaction(db, () =>
+                      Effect.gen(function* () {
+                        yield* lockApp(db, { app: setting.app });
+                        const saved = yield* query(() =>
+                          db.findFirst("schedules", {
+                            select: ["id"],
+                            where: (b) =>
+                              b.and(b("id", "=", setting.id), b("activeRun", "=", claim.id)),
+                          }),
+                        );
+                        if (saved === null) return false;
+                        yield* query(() =>
+                          db.updateMany("scheduledRuns", {
+                            where: (b) =>
+                              b.and(b("id", "=", claim.id), b("status", "=", "running")),
+                            set: {
+                              status: "awaiting-approval",
+                              requestId: response.requestId,
+                              expiresAt: new Date(response.expiresAt),
+                            },
+                          }),
+                        );
+                        return true;
                       }),
                     );
+                    if (!waiting)
+                      yield* complete(
+                        claim,
+                        yield* tools.resume({
+                          requestId: response.requestId,
+                          owner: setting.owner,
+                          response: { action: "decline" },
+                        }),
+                      );
                   }
                 }).pipe(
                   // The account's sign-in ended during this run. That is an account state the
@@ -826,5 +938,5 @@ export const makeSchedules = (
         );
       }),
   };
-  return { operations, dispatcher };
+  return { operations, dispatcher, reconcile, activated };
 };

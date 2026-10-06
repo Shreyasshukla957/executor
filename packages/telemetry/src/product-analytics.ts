@@ -230,7 +230,7 @@ const IngestionHost = Schema.String.check(
 );
 
 /**
- * Resolve the destination, or none. Release builds bake `EXECUTOR_POSTHOG_KEY` and
+ * Resolve the destination, or none. Release builds bake `EXECUTOR_POSTHOG_PUBLIC_KEY` and
  * `EXECUTOR_POSTHOG_HOST`; other builds send nothing. Under `NODE_ENV=test` only the loopback
  * collector on `EXECUTOR_ANALYTICS_TEST_PORT` is used, so tests never reach PostHog.
  */
@@ -246,7 +246,9 @@ export const analyticsDestination = Effect.gen(function* () {
       flushInterval: "1 second",
     } satisfies AnalyticsDestination;
   }
-  const key = (yield* Config.String("EXECUTOR_POSTHOG_KEY").pipe(Config.withDefault(""))).trim();
+  const key = (yield* Config.String("EXECUTOR_POSTHOG_PUBLIC_KEY").pipe(
+    Config.withDefault(""),
+  )).trim();
   const host = (yield* Config.String("EXECUTOR_POSTHOG_HOST").pipe(Config.withDefault(""))).trim();
   if (key === "" || Option.isNone(Schema.decodeUnknownOption(IngestionHost)(host)))
     return undefined;

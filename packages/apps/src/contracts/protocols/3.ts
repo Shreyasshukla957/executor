@@ -13,9 +13,7 @@ import { CacheCommand, CacheReply } from "@executor-js/app-cache/contracts";
 import { DatabaseFieldReserved, DatabaseLimitExceeded } from "@executor-js/app-data/contracts";
 import { OpenapiResponseError } from "../api-response-error.ts";
 import { ElicitationFailed, ElicitationReply, FormElicitation } from "../elicitation.ts";
-import { FailureDetail } from "../failure.ts";
-import { McpError } from "../mcp.ts";
-import { ProviderError } from "../provider-error.ts";
+import { FailureCode, FailureMessage, FailureName, FailureSource } from "../failure.ts";
 import { JsonValue } from "../schema.ts";
 import { SkillLoadFailed } from "../skills.ts";
 import {
@@ -39,8 +37,18 @@ import {
   HostToolBlocked,
   HostToolNotFound,
   HostToolPolicyFailed,
+  McpError,
+  ProviderError,
 } from "./1.ts";
 import { SkillCatalogResponse } from "./2.ts";
+
+/** Protocol 3's failure detail, as released: the app error's source, name, code and message. */
+const FailureDetail = {
+  source: Schema.optionalKey(FailureSource),
+  errorName: Schema.optionalKey(FailureName),
+  code: Schema.optionalKey(FailureCode),
+  message: Schema.optionalKey(FailureMessage),
+};
 
 export {
   DeclaredAuthMethod,

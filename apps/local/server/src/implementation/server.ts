@@ -1,3 +1,4 @@
+import { localSourceFormatter } from "@executor-js/app-management/source-format";
 import { publishedSkillRoutes, readExecutorSkills } from "@executor-js/app-templates/executor";
 import { localAppBrowserHandlers } from "./app-browser.ts";
 import { startupPhase } from "./startup-diagnostics.ts";
@@ -380,6 +381,7 @@ export const localApi = (
           Layer.provide(localAppBrowserHandlers(executor)),
           Layer.provide(localMcpConnectionHandlers(executor, oauth)),
           Layer.provide(dashboardApi.access),
+          HttpRouter.provideRequest(localSourceFormatter),
         ),
         HttpApiBuilder.layer(LocalAuthApi).pipe(
           Layer.provide(authHandlers(auth, config)),

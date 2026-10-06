@@ -1,23 +1,28 @@
 import {
   ApiErrorResponse,
   FailureCode,
+  FailureFields,
   FailureMessage,
   FailureName,
+  FailurePhase,
   FailureSource,
   McpError,
   ProviderError,
   SkillLoadFailed,
+  UpstreamError,
 } from "apps/contracts";
 import { ProfileId } from "./shared.ts";
 import { UserFacingError } from "@executor-js/utils/user-facing-error";
 import { ProfileErrors, ProfileRevision } from "./profiles.ts";
 /** Existing tool call seam, using the configured app's saved accounts. Discovery design is deferred. */
-import { Schema } from "effect";
+import { Option, Schema } from "effect";
 import {
   ApprovalElicitation,
   ApprovalResponse,
   ElicitationFailed,
+  HostEvaluationFailed,
   HostedRouter,
+  type HostRouterError,
   HostedTool,
   HostedToolSummary,
   type ElicitationHandler,
@@ -139,24 +144,50 @@ const skillInstructions =
   "The app loads skills from a remote source. Read the app source to find the skill loader and its options. Do not print credentials or raw responses, and do not change accounts. If the factory awaits the loader, tools and skills both fail when that load fails. Declare it with dynamicSkills instead, such as dynamicSkills: dynamicSkills({ list: () => githubSkills(...) }), so only skill reads call it. To stop depending on the remote source, the app can bundle its skill folders and read them with folderSkills. Verify that the Skills and Tools pages load after the repair.";
 
 /**
- * The error an app's own code threw, or the specific app data failure it hit. The message is the
- * app's own text, bounded and with the invocation's account secrets replaced.
+ * The error an app's own code threw, or the specific app data failure it hit. The message, code
+ * and fields are the app's own, bounded and with the invocation's account secrets replaced.
  */
 export const AppFailure = Schema.Struct({
   source: FailureSource,
   errorName: FailureName,
   code: Schema.optional(FailureCode),
   message: FailureMessage,
+  /** The thrown error's own scalar fields, such as `reason` or `pointer`. */
+  fields: Schema.optional(FailureFields),
 });
 export type AppFailure = typeof AppFailure.Type;
 
-/** One line naming who raised the failure and its own message. */
-export const appFailureText = ({ source, errorName, code, message }: AppFailure) =>
+/** The thrown error's fields as `name: value` pairs, each value as JSON. */
+const fieldsText = (fields: FailureFields | undefined) =>
+  fields === undefined
+    ? ""
+    : ` Details: ${Object.entries(fields)
+        .map(([name, value]) => `${name}: ${JSON.stringify(value)}`)
+        .join("; ")}.`;
+
+/** One line naming who raised the failure, its code, its own message and its fields. */
+export const appFailureText = ({ source, errorName, code, message, fields }: AppFailure) =>
   source === "storage"
-    ? `App data failed (${code ?? errorName}): ${message}`
+    ? `${errorName === "CacheError" ? "App cache" : "App data"} failed (${code ?? errorName}): ${message}`
     : source === "service"
       ? `The app's API call failed: ${message}`
-      : `The app threw ${errorName}: ${message}`;
+      : `The app threw ${errorName}${code === undefined ? "" : ` (${code})`}: ${message}${fieldsText(fields)}`;
+
+/** The error a service stated, with its own message quoted after Executor's explanation. */
+const upstreamText = (upstream: UpstreamError | undefined, stated: string) =>
+  upstream === undefined
+    ? ""
+    : ` ${stated} ${upstream.code}${upstream.message === undefined ? "" : `: ${JSON.stringify(upstream.message)}`}.`;
+
+/** The stage of a provider failure, as a clause. */
+const phaseText = (phase: FailurePhase | undefined) =>
+  phase === undefined
+    ? ""
+    : phase === "connect"
+      ? " while connecting"
+      : phase === "call"
+        ? " while calling a tool"
+        : " while listing its tools";
 
 /** Present a skill load failure with the loader's own message. */
 const skillPresentation = ({
@@ -187,29 +218,47 @@ const skillPresentation = ({
   };
 };
 
-/** Present an MCP server failure from its safe phase, reason and HTTP status. */
-const mcpPresentation = ({
+/**
+ * An MCP server's failure: its safe phase, reason and HTTP status, and the JSON-RPC error it
+ * answered with, such as a refusal and how to fix it.
+ */
+export const McpFailure = Schema.Struct({
+  phase: McpError.fields.phase,
+  reason: McpError.fields.reason,
+  status: McpError.fields.status,
+  /** The JSON-RPC error the server answered with, bounded and with account secrets replaced. */
+  upstream: McpError.fields.upstream,
+});
+export type McpFailure = typeof McpFailure.Type;
+
+/** An MCP failure's fields, without keys for absent ones. */
+const mcpFailure = ({ phase, reason, status, upstream }: McpError): McpFailure => ({
   phase,
   reason,
-  status,
-}: {
-  readonly phase: McpError["phase"];
-  readonly reason: McpError["reason"];
-  readonly status?: number | undefined;
-}) => {
+  ...(status === undefined ? {} : { status }),
+  ...(upstream === undefined ? {} : { upstream }),
+});
+
+/** Present an MCP server failure from its safe phase, reason, HTTP status and JSON-RPC error. */
+export const mcpFailurePresentation = ({ phase, reason, status, upstream }: McpFailure) => {
   const http = status === undefined ? "" : ` (HTTP ${status})`;
+  const answered = upstreamText(upstream, "The server answered with JSON-RPC error");
   const stage =
     phase === "connect" || phase === "transport"
       ? "connecting"
       : phase === "call"
         ? "calling a tool"
         : "listing its tools";
-  const instructions = `The app's MCP server failed while ${stage}. Inspect the app's MCP server URL, transport and account requirements from its source or import settings. Do not print credentials or raw responses, and do not change accounts automatically. Verify that the Tools page loads after the repair.`;
+  const verify =
+    phase === "call"
+      ? "Before repeating the call, check whether it already made changes, then verify that it succeeds."
+      : "Verify that the Tools page loads after the repair.";
+  const instructions = `The app's MCP server failed while ${stage}. Inspect the app's MCP server URL, transport and account requirements from its source or import settings. Do not print credentials or raw responses, and do not change accounts automatically. ${verify}`;
   switch (reason) {
     case "timeout":
       return {
         title: "MCP server did not respond",
-        description: `The app’s MCP server did not respond in time while ${stage}.`,
+        description: `The app’s MCP server did not respond in time while ${stage}.${answered}`,
         recovery: {
           action: "Try again later. If this continues, check the MCP server’s status.",
           instructions,
@@ -219,7 +268,7 @@ const mcpPresentation = ({
     case "unauthorized":
       return {
         title: "MCP server rejected the credentials",
-        description: `The app’s MCP server rejected the credentials${http}.`,
+        description: `The app’s MCP server rejected the credentials${http}.${answered}`,
         recovery: {
           action: "Check the account’s credentials. Update its API key or reconnect its sign-in.",
           instructions,
@@ -230,30 +279,52 @@ const mcpPresentation = ({
       return {
         title: "MCP server response not supported",
         // Includes Executor refusing to follow the server to another origin.
-        description: `The app’s MCP server returned a response Executor could not use while ${stage}, such as an unreadable message or an address on another origin.`,
+        description: `The app’s MCP server returned a response Executor could not use while ${stage}, such as an unreadable message or an address on another origin.${answered}`,
         recovery: { action: "Check that the app points at a supported MCP server.", instructions },
         retryable: false,
       };
     case "invalid_input":
-      return {
-        title: "MCP server settings are invalid",
-        description: "The app’s MCP server URL or settings are invalid.",
-        recovery: { action: "Correct the app’s MCP server URL or settings.", instructions },
-        retryable: false,
-      };
+      // A call's input that cannot be sent as the tool's arguments never reached the server.
+      return phase === "call"
+        ? {
+            title: "Tool input not sent",
+            description: "The input could not be sent to the app’s MCP server as tool arguments.",
+            recovery: {
+              action: "Pass the tool an object that matches its input schema.",
+              instructions,
+            },
+            retryable: false,
+          }
+        : {
+            title: "MCP server settings are invalid",
+            description: `The app’s MCP server URL or settings are invalid.${answered}`,
+            recovery: { action: "Correct the app’s MCP server URL or settings.", instructions },
+            retryable: false,
+          };
     case "request":
       // Request Timeout and Too Early ask the client to retry the same request later.
       if (status === 408 || status === 425)
         return {
           title: "MCP server asked to retry",
-          description: `The app’s MCP server could not handle the request yet while ${stage}${http}.`,
+          description: `The app’s MCP server could not handle the request yet while ${stage}${http}.${answered}`,
           recovery: {
             action: "Try again later. If this continues, check the MCP server’s status.",
             instructions,
           },
           retryable: true,
         };
-      return status === undefined
+      if (status !== undefined)
+        return {
+          title: "MCP server refused the request",
+          description: `The app’s MCP server refused the request while ${stage}${http}.${answered}`,
+          recovery: {
+            action: "Check the app’s MCP server URL and access requirements.",
+            instructions,
+          },
+          retryable: false,
+        };
+      // A JSON-RPC error inside a successful response, such as arguments a tool rejects.
+      return upstream === undefined
         ? {
             title: "MCP server unreachable",
             description: `Executor could not reach the app’s MCP server while ${stage}.`,
@@ -264,10 +335,13 @@ const mcpPresentation = ({
             retryable: true,
           }
         : {
-            title: "MCP server refused the request",
-            description: `The app’s MCP server refused the request while ${stage}${http}.`,
+            title: "MCP server returned an error",
+            description: `The app’s MCP server returned an error while ${stage}.${answered}`,
             recovery: {
-              action: "Check the app’s MCP server URL and access requirements.",
+              action:
+                phase === "call"
+                  ? "Read the server’s error, then correct the tool’s input or the server’s access."
+                  : "Read the server’s error, then correct the app’s MCP server settings or access.",
               instructions,
             },
             retryable: false,
@@ -293,18 +367,15 @@ export const AppEvaluationFailed = UserFacingError.define({
     ),
     /** Present when the app's own code threw while loading its definition. */
     failure: Schema.optional(AppFailure),
-    /** Present when the app's MCP server caused the failure. */
-    mcp: Schema.optional(
-      Schema.Struct({
-        phase: McpError.fields.phase,
-        reason: McpError.fields.reason,
-        status: McpError.fields.status,
-      }),
-    ),
+    /**
+     * Present when the app's MCP server failed before a request reached a tool: while connecting,
+     * including the session a tool call opens, or while listing its tools.
+     */
+    mcp: Schema.optional(McpFailure),
   },
   presentation: ({ skills, mcp, failure }) =>
     mcp !== undefined
-      ? mcpPresentation(mcp)
+      ? mcpFailurePresentation(mcp)
       : failure !== undefined
         ? {
             title: "Tools could not be loaded",
@@ -371,6 +442,10 @@ export const AppProviderFailed = UserFacingError.define({
     deployment: DeploymentId,
     reason: ProviderError.fields.reason,
     status: ProviderError.fields.status,
+    /** Whether the service failed while connecting, listing the app's tools or running one. */
+    phase: ProviderError.fields.phase,
+    /** The error code and description the service stated, with account secrets replaced. */
+    upstream: ProviderError.fields.upstream,
     account: Schema.optional(
       Schema.Struct({ id: AccountId, label: Schema.String, provider: Schema.String }),
     ),
@@ -381,17 +456,19 @@ export const AppProviderFailed = UserFacingError.define({
      */
     credentialsRenewed: Schema.optional(Schema.Literal(true)),
   },
-  presentation: ({ reason, status, account, credentialsRenewed }) => {
+  presentation: ({ reason, status, phase, upstream, account, credentialsRenewed }) => {
     const service = account === undefined ? "The connected service" : account.provider;
     const target = account === undefined ? "" : ` for account “${account.label}”`;
-    const http = status === undefined ? "" : ` (HTTP ${status})`;
+    /** The HTTP status, then the phase the failure happened in. */
+    const context = `${status === undefined ? "" : ` (HTTP ${status})`}${phaseText(phase)}`;
+    const reported = upstreamText(upstream, "The service reported");
     const instructions =
       "Use the selected app and profile. Inspect only safe status codes and documented provider error codes. Do not print credentials or raw responses, switch accounts, or change authentication methods automatically. Verify tool discovery and a safe read after the repair. Before repeating a failed operation, check whether it already made changes.";
     switch (reason) {
       case "unavailable":
         return {
           title: "Service temporarily unavailable",
-          description: `${service} returned a server error${http}.`,
+          description: `${service} returned a server error${context}.${reported}`,
           recovery: {
             action: "Try again. If this continues, check the service’s status and server address.",
             instructions: `The upstream returned a server error. Do not replace credentials or change authentication to address a service outage. ${instructions}`,
@@ -402,7 +479,7 @@ export const AppProviderFailed = UserFacingError.define({
         if (credentialsRenewed === true)
           return {
             title: "Access renewed; request not repeated",
-            description: `${service} rejected the credentials${target}${http}. Executor has renewed the account’s access, but did not repeat this change automatically.`,
+            description: `${service} rejected the credentials${target}${context}.${reported} Executor has renewed the account’s access, but did not repeat this change automatically.`,
             recovery: {
               action:
                 "Check whether the change was already made, then try again. The renewed access is used from now on.",
@@ -412,7 +489,7 @@ export const AppProviderFailed = UserFacingError.define({
           };
         return {
           title: "Authentication failed",
-          description: `${service} rejected the credentials${target}${http}.`,
+          description: `${service} rejected the credentials${target}${context}.${reported}`,
           recovery: {
             action:
               "Check the account’s credentials. Update its API key or reconnect its sign-in, then try again.",
@@ -423,7 +500,7 @@ export const AppProviderFailed = UserFacingError.define({
       case "forbidden":
         return {
           title: "Permission required",
-          description: `${service} reported insufficient permission${target}${http}.`,
+          description: `${service} reported insufficient permission${target}${context}.${reported}`,
           recovery: {
             action: "Check the account’s permissions and the service’s access requirements.",
             instructions: `The provider explicitly reported insufficient permission. Do not invent required scopes or organization approval requirements. ${instructions}`,
@@ -433,7 +510,7 @@ export const AppProviderFailed = UserFacingError.define({
       case "rate_limited":
         return {
           title: "Service rate limit reached",
-          description: `${service} is limiting requests${target}${http}.`,
+          description: `${service} is limiting requests${target}${context}.${reported}`,
           recovery: {
             action: "Wait for the service’s rate limit to reset before trying again.",
             instructions: `The provider reported a rate limit. Do not replace credentials to fix it. ${instructions}`,
@@ -443,7 +520,7 @@ export const AppProviderFailed = UserFacingError.define({
       case "rejected":
         return {
           title: "Service rejected the request",
-          description: `${service} refused the request${target}${http}. We could not identify the cause from the available error details.`,
+          description: `${service} refused the request${target}${context}.${reported === "" ? " We could not identify the cause from the available error details." : reported}`,
           recovery: {
             action: "Check the service’s access requirements and rate limits before trying again.",
             instructions: `A forbidden HTTP response alone does not prove invalid credentials, insufficient scopes, SSO restrictions, or a rate limit. ${instructions}`,
@@ -455,6 +532,77 @@ export const AppProviderFailed = UserFacingError.define({
 });
 /** Safe, decoded provider failure with product recovery guidance. */
 export type AppProviderFailed = typeof AppProviderFailed.Type;
+
+/** Builds from before failure details existed send none; keep their generic reason. */
+export const appFailure = ({
+  source,
+  errorName,
+  code,
+  message,
+  fields,
+}: {
+  readonly source?: AppFailure["source"];
+  readonly errorName?: string;
+  readonly code?: string;
+  readonly message?: string;
+  readonly fields?: AppFailure["fields"];
+}) =>
+  source === undefined || errorName === undefined || message === undefined
+    ? Option.none<AppFailure>()
+    : Option.some<AppFailure>({
+        source,
+        errorName,
+        message,
+        ...(code === undefined ? {} : { code }),
+        ...(fields === undefined ? {} : { fields }),
+      });
+
+/**
+ * Keep a skill loader's or MCP server's safe fields, and the error the app's own factory or loader
+ * raised; other evaluation failures stay generic.
+ */
+export const evaluationFailure = (
+  identity: { app: AppId; deployment: DeploymentId },
+  error: unknown,
+  reason = "App evaluation failed",
+) =>
+  new AppEvaluationFailed({
+    app: identity.app,
+    deployment: identity.deployment,
+    reason,
+    ...(Schema.is(SkillLoadFailed)(error)
+      ? {
+          skills: {
+            reason: error.reason,
+            ...(error.message ? { message: error.message } : {}),
+            ...(error.status === undefined ? {} : { status: error.status }),
+          },
+        }
+      : {}),
+    ...(Schema.is(HostEvaluationFailed)(error)
+      ? Option.match(appFailure(error), { onNone: () => ({}), onSome: (failure) => ({ failure }) })
+      : {}),
+    ...(Schema.is(McpError)(error) ? { mcp: mcpFailure(error) } : {}),
+  });
+
+/**
+ * What a router that could not list its tools reports to a caller of the listing, such as MCP
+ * discovery. A provider failure here names no account; a call into the router attributes it to
+ * the selected account.
+ */
+export const routerFailure = (
+  identity: { app: AppId; deployment: DeploymentId },
+  error: HostRouterError,
+) =>
+  Schema.is(ProviderError)(error)
+    ? new AppProviderFailed({
+        ...identity,
+        reason: error.reason,
+        ...(error.status === undefined ? {} : { status: error.status }),
+        ...(error.phase === undefined ? {} : { phase: error.phase }),
+        ...(error.upstream === undefined ? {} : { upstream: error.upstream }),
+      })
+    : evaluationFailure(identity, error);
 
 /** This evaluated app does not expose the named tool. */
 export class ToolNotFound extends Schema.TaggedError<ToolNotFound>()(
@@ -499,13 +647,31 @@ export class ToolCallFailed extends Schema.TaggedError<ToolCallFailed>()(
     response: Schema.optional(ApiErrorResponse),
     /** The app's own error, or the app data failure, that stopped the operation. */
     failure: Schema.optional(AppFailure),
+    /** The app's MCP server refused or failed the tool call, such as with a JSON-RPC error. */
+    mcp: Schema.optional(McpFailure),
   },
   {
     httpApiStatus: 502,
     description:
-      "The tool failed. The reason carries only the app's own bounded error message with account secrets replaced; retry safety is not implied.",
+      "The tool failed. The reason carries only the app's own bounded error message, or its MCP server's bounded JSON-RPC error, with account secrets replaced; retry safety is not implied.",
   },
 ) {}
+
+/**
+ * An MCP failure of an operation. A failure of the tools/call request fails the call; one before
+ * a request reached the tool, such as a refused session, is reported like evaluation failures.
+ */
+export const operationMcpFailure = (
+  identity: { app: AppId; deployment: DeploymentId; tool: ToolName },
+  error: McpError,
+) =>
+  error.phase === "call"
+    ? new ToolCallFailed({
+        ...identity,
+        reason: mcpFailurePresentation(mcpFailure(error)).description,
+        mcp: mcpFailure(error),
+      })
+    : evaluationFailure(identity, error);
 
 /** The tool's approval policy blocked the call before its tool body ran. */
 export class ToolBlocked extends Schema.TaggedError<ToolBlocked>()(
@@ -689,6 +855,7 @@ export const ToolsGroup = HttpApiGroup.make("tools")
         AppNotDeployed,
         DeploymentNotFound,
         AppEvaluationFailed,
+        ToolListingTimedOut,
         AppProviderFailed,
         AccountNotFound,
         AccountRequired,
@@ -713,6 +880,7 @@ export const ToolsGroup = HttpApiGroup.make("tools")
         AppNotDeployed,
         DeploymentNotFound,
         AppEvaluationFailed,
+        ToolListingTimedOut,
         AppProviderFailed,
         AccountNotFound,
         AccountRequired,

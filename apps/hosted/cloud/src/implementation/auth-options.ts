@@ -293,7 +293,7 @@ export const cloudAuthOptions = (
         ],
         onNone: () => [],
       }),
-      ...base.plugins.filter((plugin) => plugin.id !== "organization"),
+      ...base.plugins,
       organization({
         ...(billing === undefined
           ? {}

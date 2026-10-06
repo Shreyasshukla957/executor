@@ -29,7 +29,9 @@ layer(HostedLive, { excludeTestServices: true })("App caching", (it) => {
             `/api/organizations/${actors.organization.id}/connections/${id}/submit`,
             { method: "key", label: "Synthetic cache scope", fields: { token } },
           );
-        for (const token of ["synthetic-cache-a", "synthetic-cache-b"]) {
+        // The third token alone exceeds the cache's 8 KB key limit, like a large OAuth grant.
+        const largeToken = `synthetic-large-${"x".repeat(9000)}`;
+        for (const token of ["synthetic-cache-a", "synthetic-cache-b", largeToken]) {
           const connection = yield* body(
             Resource,
             yield* api.request(actors.owner, "POST", `${path}/connections`, {
@@ -40,9 +42,12 @@ layer(HostedLive, { excludeTestServices: true })("App caching", (it) => {
           const account = yield* body(Resource, yield* submit(connection.id, token));
           accountIds.push(account.id);
         }
-        const [one, two] = accountIds;
-        if (one === undefined || two === undefined)
-          return yield* Effect.die("Expected two accounts");
+        const [one, two, large] = accountIds;
+        if (one === undefined || two === undefined || large === undefined)
+          return yield* Effect.die("Expected three accounts");
+        // Account scopes hold the account's identity, never its credentials.
+        const largeValue = yield* call("private", { id: large });
+        expect(yield* call("private", { id: large })).toBe(largeValue);
         const privateValue = yield* call("private", { id: one });
         expect(yield* call("private", { id: one })).toBe(privateValue);
         expect(yield* call("private", { id: two })).not.toBe(privateValue);

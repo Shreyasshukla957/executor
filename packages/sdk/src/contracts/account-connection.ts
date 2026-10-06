@@ -194,10 +194,10 @@ export const AccountConnectionsGroup = HttpApiGroup.make("accountConnections")
       params: { connection: AccountConnectionId },
       query: { owner: Schema.optional(OwnerId) },
       success: AccountConnection,
-      error: errors,
+      error: [...errors, AccountConnectionTargetChanged],
     }).annotate(
       OpenApi.Description,
-      "Check a connection request: pending, completed with account metadata, cancelled or expired. Credentials are never returned. Do not busy-poll; check after the user finishes. Completed targeted requests have already selected the account for the named profile. Provider-only requests save standalone accounts.",
+      "Check a connection request: pending, completed with account metadata, cancelled or expired. Credentials are never returned. Do not busy-poll; check after the user finishes. Completed targeted requests have already selected the account for the named profile. Provider-only requests save standalone accounts. A pending targeted request whose app no longer requires its provider fails with AccountConnectionTargetChanged; request a new connection.",
     ),
   )
   .add(
@@ -253,7 +253,7 @@ export const AccountConnectionsGroup = HttpApiGroup.make("accountConnections")
     HttpApiEndpoint.post("findOAuth", "/v1/account-connections/oauth/find", {
       payload: FindConnectionOAuth,
       success: AccountConnection,
-      error: [...errors, CredentialsError, OAuthCompletionFailed],
+      error: [...errors, AccountConnectionTargetChanged, CredentialsError, OAuthCompletionFailed],
     }).annotate(
       OpenApi.Description,
       "Find the connection whose pending OAuth sign-in issued the callback's state, for example when the provider's link opened in another browser tab. Hosts must authorize the returned owner and connection before completing it.",

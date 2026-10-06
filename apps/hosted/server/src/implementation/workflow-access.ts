@@ -33,7 +33,7 @@ export const requireWorkflowAccess = (
     if (saved === undefined)
       return yield* new WorkflowFailure({ reason: "not_found", retryable: false });
     if (saved.profile !== null) yield* ownProfile(executor, owner, app, saved.profile);
-    yield* checkAccounts(executor, owner, saved.accounts);
+    yield* checkAccounts(owner, saved.accounts);
     return saved;
   }).pipe(
     Effect.catchTags({ SqlError: () => new StorageError(), SchemaError: () => new StorageError() }),

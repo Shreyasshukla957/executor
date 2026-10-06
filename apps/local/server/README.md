@@ -217,13 +217,15 @@ a cross-process reconnect manager remain separate work.
 - Transport: Streamable HTTP
 - URL: `http://127.0.0.1:4312/mcp`
 - Header: `Authorization: Bearer <EXECUTOR_API_KEY>`
-- Tools: `skills`, for authoring docs; `execute`, with a `code` string
+- Tools: `skills`, for app documents; `execute`, with a `code` string
 
-Before writing an app, discover the Executor app with `skills({})`, then call
-`skills` with `{ app: "executor", name: "app-authoring" }` using its current slug. It returns
-the guide with runnable source, schema helpers, provider accounts and the
-deployment flow. Call it with `{}` to list skills from accessible apps. The guide is an ordinary
-skill file in the Executor app deployment.
+The server sends the Executor app's `executor` skill as its MCP instructions.
+Discover the Executor app with `skills({})`, then read that skill with
+`{ app: "executor", name: "executor" }` using its current slug. It links to
+`code-mode`, which covers calling tools from `execute`, and `app-authoring`,
+which has runnable source, schema helpers, provider accounts and the deployment
+flow. Read `app-authoring` before writing an app. These are ordinary skill files
+in the Executor app deployment.
 
 Start discovery inside `execute` with this code:
 
@@ -263,7 +265,7 @@ already completed are not rolled back when an execution fails or is cancelled.
 - List live tools and invoke them using a snapshot of saved account selections.
 - Activate retained deployments in the same code lineage.
 - Serve MCP execute for app calls and management through the bundled Executor app.
-- Serve a read-only skills tool for deployed app documents, including the Executor app’s authoring guide.
+- Serve a read-only skills tool for deployed app documents, including the Executor app’s `executor`, `code-mode` and `app-authoring` skills.
 - Handle July 2026 and November 2025 MCP requests, with authentication on every request.
 - Serve a local dashboard over the same persisted apps and accounts, with catalog imports and account setup.
 

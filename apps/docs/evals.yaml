@@ -67,7 +67,7 @@ questions:
       - there is no app-wide approval setting
     routes:
       - /concepts/tools-and-approvals
-      - /build/author-an-app
+      - /author-an-app
 
   - id: elicitation-modes
     question: Can I approve tool calls in my browser instead of through the agent?
@@ -108,7 +108,7 @@ questions:
       - queries are declared with query(options, handler)
       - one index.ts file is enough
     routes:
-      - /build/author-an-app
+      - /author-an-app
 
   - id: deploy-an-app
     question: How do I deploy an app?
@@ -118,7 +118,7 @@ questions:
       - there is no executor deploy command
       - the app activates only after the build succeeds
     routes:
-      - /build/author-an-app
+      - /author-an-app
 
   - id: self-host-docker
     question: How do I self-host Executor with Docker, and what must I configure?

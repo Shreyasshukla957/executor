@@ -19,6 +19,7 @@ import { App } from "../support/contracts.ts";
 import { createProfile } from "../support/profiles.ts";
 import { McpClient } from "../support/mcp-client.ts";
 import { McpOAuth } from "../support/mcp-oauth.ts";
+import { outputContractProblems } from "../support/output-contract.ts";
 import { withApps } from "../support/apps-release.ts";
 
 const Wire = Schema.Struct({
@@ -60,6 +61,17 @@ const docsServer = Effect.gen(function* () {
               name,
               description: `Synthetic ${name}`,
               inputSchema: { type: "object", properties: {}, additionalProperties: false },
+              // One tool declares the shape of its structured content; the other declares none.
+              ...(name === "lookup"
+                ? {
+                    outputSchema: {
+                      type: "object",
+                      properties: { tool: { $ref: "#/$defs/Name" } },
+                      required: ["tool"],
+                      $defs: { Name: { type: "string" } },
+                    },
+                  }
+                : {}),
               annotations: { readOnlyHint: true },
             })),
           });
@@ -171,7 +183,9 @@ const Executed = Schema.Struct({
   ),
 });
 const Search = Schema.Struct({
-  items: Schema.Array(Schema.Struct({ path: Schema.String, description: Schema.String })),
+  items: Schema.Array(
+    Schema.Struct({ path: Schema.String, description: Schema.String, signature: Schema.String }),
+  ),
 });
 
 layer(HostedLive, { excludeTestServices: true })("App routers", (it) => {
@@ -425,6 +439,40 @@ export default defineApp({ accounts: {} }, async ({ signal }) => ({
         expect(
           found.items.find((item) => item.path.endsWith(".issues.list"))?.description,
         ).toContain(" / Issues: List open issues");
+        // The type an agent reads from search must accept what the same MCP tool returns.
+        const docsTools = yield* execute(
+          "Search and call the MCP server's tools",
+          `const found = await tools.search({ query: "Synthetic", namespace: ${JSON.stringify(app.slug)} });
+const docs = tools[${JSON.stringify(app.slug)}].docs;
+return { items: found.items, lookup: await docs.lookup({}), pages: await docs.search.pages({}) };`,
+        );
+        const called = yield* Schema.decodeUnknownEffect(
+          Schema.Struct({
+            items: Search.fields.items,
+            lookup: Schema.Json,
+            pages: Schema.Json,
+          }),
+        )(docsTools.execution.value);
+        const signature = (path: string) => {
+          const found = called.items.find((item) => item.path.endsWith(path))?.signature;
+          return found === undefined
+            ? Effect.die(`Missing searched tool ${path}: ${JSON.stringify(called.items)}`)
+            : Effect.succeed(found);
+        };
+        expect(
+          outputContractProblems(
+            yield* signature(".docs.lookup"),
+            called.lookup,
+            "const name: string = value.isError ? '' : value.structuredContent.tool;",
+          ),
+        ).toEqual([]);
+        expect(
+          outputContractProblems(
+            yield* signature(".docs.search.pages"),
+            called.pages,
+            "const name: unknown = value.structuredContent?.tool;",
+          ),
+        ).toEqual([]);
         const failed = yield* execute(
           "Call a tool in the router whose server is down",
           `return await tools[${JSON.stringify(app.slug)}].offline.anything({});`,

@@ -5,6 +5,7 @@
  * return encoded `WorkflowRpcResult`s, and are rebuilt on the runner's side.
  */
 import { Cause, Effect, Redacted, Schema } from "effect";
+import { withRemoteSpan } from "@executor-js/telemetry";
 import {
   ResolvedAccounts,
   WorkflowDuration,
@@ -227,7 +228,15 @@ export const serveAppRunner = (runner: AppRunner): RemoteAppRunner<Effect.Effect
           workflowControls: _controls,
           ...decoded
         } = yield* Schema.decodeUnknownEffect(encodedInvocation)(invocation);
-        return yield* runner.invoke(decoded, yield* localCapabilities(capabilities));
+        // The caller's trace context travels in the invocation's headers; the runner's spans join it.
+        return yield* runner
+          .invoke(decoded, yield* localCapabilities(capabilities))
+          .pipe(
+            withRemoteSpan(
+              new Request("https://app-runner.internal", { headers: decoded.headers }),
+              "runtime.app.serve",
+            ),
+          );
       }).pipe(Effect.ensuring(Effect.sync(() => releaseCapabilities(capabilities)))),
     ),
   declare: (bundle, headers) =>

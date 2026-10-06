@@ -18,7 +18,11 @@ import {
   finishConnection,
   lockConnection,
 } from "./connection-state.ts";
-import { captureConnectionTarget, targetProvider } from "./connection-target.ts";
+import {
+  captureConnectionTarget,
+  requireTargetProvider,
+  targetProvider,
+} from "./connection-target.ts";
 import { query, transaction, type Query } from "./database.ts";
 
 /** Requests survive host restarts. Pending requests expire after thirty minutes. */
@@ -58,20 +62,32 @@ export const makeAccountConnections = (
     expiresAt: row.expiresAt,
     state: row.state,
   });
-  const get = (input: typeof GetAccountConnection.Type) =>
+  /** A connection for an app shows that app's declaration, whose hosts it will grant. */
+  const show = (row: ConnectionRow, shown: Provider | undefined) =>
     Effect.gen(function* () {
-      const row = yield* readConnection(db, input);
       return describe(
         row,
-        // A connection for an app shows that app's declaration, whose hosts it will grant.
-        (row.target === null ? undefined : yield* targetProvider(db, row.target, row.provider)) ??
-          (yield* provider(row.provider)),
+        shown ?? (yield* provider(row.provider)),
         row.reconnectAccount === null
           ? null
           : yield* makeAccounts(db, credentials, crypto, lifecycle).get({
               account: row.reconnectAccount,
               owner: row.owner,
             }),
+      );
+    });
+  /** Ended requests keep showing the provider they used, even after their app changed. */
+  const endedProvider = (row: ConnectionRow) =>
+    row.target === null ? Effect.succeed(undefined) : targetProvider(db, row.target, row.provider);
+  const get = (input: typeof GetAccountConnection.Type) =>
+    Effect.gen(function* () {
+      const row = yield* readConnection(db, input);
+      // A pending request offers only a sign-in its app still accepts.
+      return yield* show(
+        row,
+        row.state.status === "pending"
+          ? yield* requireTargetProvider(db, row)
+          : yield* endedProvider(row),
       );
     });
   return {
@@ -134,7 +150,9 @@ export const makeAccountConnections = (
                 set: { state: { status: "cancelled" }, oauthAttempt: null },
               }),
             );
-          return yield* get(input);
+          // A request whose app has changed can still be cancelled.
+          const cancelled = yield* readConnection(db, input);
+          return yield* show(cancelled, yield* endedProvider(cancelled));
         }),
       ).pipe(Effect.withSpan("sdk.connections.cancel")),
     submit: (input: typeof SubmitAccountConnection.Type) =>
@@ -143,6 +161,7 @@ export const makeAccountConnections = (
           const saved = yield* lockConnection(tx, input, crypto);
           if (saved.state.status === "completed") return saved.state.account;
           const row = yield* requireOpen(input, saved);
+          yield* requireTargetProvider(tx, row);
           const accounts = makeAccounts(tx, credentials, crypto, lifecycle);
           let account;
           if (row.reconnectAccount !== null) {

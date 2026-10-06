@@ -4,6 +4,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Config, Console, Effect, FileSystem, Option, Path, Redacted, Schema } from "effect";
 import { betterAuth } from "better-auth";
 import { testUtils } from "better-auth/plugins";
+import { organization as organizationPlugin } from "better-auth/plugins/organization";
 import { Pool } from "pg";
 import { authOptions } from "@executor-js/hosted-server";
 import { OrganizationSlug } from "@executor-js/hosted-server/organization";
@@ -78,6 +79,8 @@ const provision = Effect.scoped(
         session: { ...base.session, expiresIn: testStageLifetimeMilliseconds / 1000 },
         plugins: [
           ...base.plugins,
+          // Fixture helpers create organizations and members through this plugin.
+          organizationPlugin({ disableOrganizationDeletion: true }),
           {
             ...helpers,
             init(ctx: Parameters<typeof helpers.init>[0]) {

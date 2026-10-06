@@ -17,7 +17,7 @@ import {
 } from "@executor-js/authorization";
 import { AppId } from "@executor-js/sdk/core";
 import { Context } from "effect";
-import { visibleApps, visibleAccounts } from "./resource-policy.ts";
+import { currentResourceAuthority, visibleAccountsAs, visibleAppsAs } from "./resource-policy.ts";
 import { readOrganizationIconUpload } from "./organization-icons.ts";
 import { OrganizationTombstones } from "../contracts/organization-removal.ts";
 import { requireOrganizationAdmin } from "./access.ts";
@@ -153,17 +153,11 @@ export const withOrganizationRequest = <E, R>(
     const principal = yield* auth.current(headers);
     if (principal === null) return yield* new Unauthorized();
     const organization = yield* auth.organization(reference);
-    // The tombstone and membership reads use separate clients and depend only on the
-    // resolved organization, so they overlap. Removal is still reported before membership.
-    const [removed, member] = yield* Effect.all(
-      [
-        Effect.exit(refuseRemoved(organization)),
-        Effect.exit(auth.membership(principal, organization)),
-      ],
-      { concurrency: "unbounded" },
-    );
-    yield* removed;
-    const membership = yield* member;
+    // Removal is reported before membership. The reads run one after the other: on Cloud they
+    // share the event's one SQL connection, and overlapping them would open a second one, a TLS
+    // login that costs far more than the few milliseconds the second read waits.
+    yield* refuseRemoved(organization);
+    const membership = yield* auth.membership(principal, organization);
     const access = {
       organization,
       owner: organizationOwner(organization),
@@ -218,11 +212,14 @@ export const inventory = (owner: OwnerId) =>
   Effect.gen(function* () {
     const executor = yield* Effect.flatten(HostedExecutor);
     const policy = yield* CurrentAuthorization;
-    const apps = yield* executor.apps
-      .list({ owner, ids: permittedAppIds(policy) })
-      .pipe(Effect.flatMap(visibleApps));
+    const listedApps = yield* executor.apps.list({ owner, ids: permittedAppIds(policy) });
+    // Membership is read once for both the app and the account policies.
+    const actor = yield* currentResourceAuthority;
+    const apps = yield* visibleAppsAs(actor, listedApps);
     const accounts = permitsAction(policy, "read")
-      ? yield* executor.accounts.list({ owner }).pipe(Effect.flatMap(visibleAccounts))
+      ? yield* executor.accounts
+          .list({ owner })
+          .pipe(Effect.flatMap((listed) => visibleAccountsAs(actor, listed)))
       : [];
     const user = yield* CurrentUserId;
     if (user === undefined) return yield* new OrganizationForbidden();

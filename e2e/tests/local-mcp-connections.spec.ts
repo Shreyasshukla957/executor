@@ -121,4 +121,40 @@ layer(TestLive, { excludeTestServices: true })("Local scoped MCP connections", (
       }).pipe(Effect.provide(McpClient.layer)),
     ),
   );
+  it.effect(scenarios.localMcpOAuthWithoutResource.title, (context) =>
+    withCase(
+      context,
+      Effect.gen(function* () {
+        const target = yield* Target,
+          evidence = yield* Evidence,
+          mcp = yield* McpClient;
+        const operator = yield* pairLocalOperator;
+        const clients: string[] = [];
+        yield* revokeClientGrants(operator, () => clients);
+        const consent = yield* evidence.step(
+          "Authorize a client that sends no resource parameter",
+          consentTo(operator, undefined),
+        );
+        clients.push(consent.clientId);
+        // The consent page names the plain MCP URL the grant is bound to.
+        expect(consent.consentResources).toEqual([`${target.metadata.origin}/mcp`]);
+        expect(consent.status).toBe(200);
+        const token = yield* consent.tokens;
+        const client = yield* mcp.connect(token, "local-without-resource");
+        const listed = yield* client.use("The plain MCP URL accepts the grant", (client) =>
+          client.listTools(),
+        );
+        expect(listed.tools.map((tool) => tool.name).sort()).toEqual([
+          "execute",
+          "resume",
+          "skills",
+        ]);
+        // The default is the plain URL's model mode only, not every approval mode.
+        const other = yield* Effect.exit(
+          mcp.connect(token, "local-without-resource-browser-mode", { mode: "browser" }),
+        );
+        expect(Exit.isFailure(other)).toBe(true);
+      }).pipe(Effect.provide(McpClient.layer)),
+    ),
+  );
 });

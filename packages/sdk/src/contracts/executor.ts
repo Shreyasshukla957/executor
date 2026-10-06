@@ -12,7 +12,7 @@ import type { OAuthOptions } from "./oauth.ts";
 import type { ToolInvocationOptions, ToolListOptions } from "./tools.ts";
 import type { App } from "./apps.ts";
 import type { Account } from "./account.ts";
-import type { AccountConnectionId, StorageError } from "./shared.ts";
+import type { AccountConnectionId, AccountId, StorageError } from "./shared.ts";
 import type { BlobStorage } from "./blobs.ts";
 import type { AppSourceStorage } from "./source.ts";
 
@@ -22,8 +22,13 @@ export interface ResourceLifecycle {
   readonly profileResolving?: (
     profile: import("./profiles.ts").Profile,
   ) => Effect.Effect<void, StorageError>;
-  /** Recheck product authority immediately before acquiring and returning account credentials. */
-  readonly accountResolving: (account: Account) => Effect.Effect<void, StorageError>;
+  /**
+   * Recheck product authority before acquiring account credentials, and again after any renewal.
+   * Returns the IDs of the accounts the product still authorizes; the SDK refuses the others.
+   */
+  readonly accountsResolving: (
+    accounts: readonly [Account, ...Account[]],
+  ) => Effect.Effect<ReadonlySet<AccountId>, StorageError>;
   /** Recheck a saved connection after external authentication, before committing its result. */
   readonly connectionCompleting: (
     connection: AccountConnectionId,

@@ -1,5 +1,6 @@
 /** Product metadata commits with SDK resources using the same SQL transaction context. */
 import {
+  AccountId,
   CurrentProfile,
   StorageError,
   type ResourceLifecycle,
@@ -70,15 +71,25 @@ export const hostedResourceLifecycle = Effect.gen(function* () {
             where g.app_id = p.id and gm.member_id = m.id)))`;
         if (rows.length !== 1) return yield* new StorageError();
       }).pipe(Effect.catchTag("SqlError", () => new StorageError())),
-    accountResolving: (account) =>
+    accountsResolving: (accounts) =>
       Effect.gen(function* () {
-        const organization = yield* organizationOf(account.owner);
         const profile = yield* CurrentProfile;
         const user = profile === undefined ? yield* CurrentUserId : profile.subject;
         if (user === undefined) return yield* new StorageError();
-        const rows = yield* sql`select p.account_id from hosted_account_access p
-        join executor_accounts a on a.id = p.account_id and a.owner = ${account.owner}
-        where p.account_id = ${account.id} and p.organization_id = ${organization}
+        // An account outside an organization is never authorized; it is refused in its turn.
+        const owned = accounts.filter(
+          (account) =>
+            account.owner.startsWith("organization:") &&
+            Schema.is(OrganizationId)(account.owner.slice("organization:".length)),
+        );
+        if (owned.length === 0) return new Set<AccountId>();
+        const rows = yield* sql`select p.account_id as id, a.owner from hosted_account_access p
+        join executor_accounts a on a.id = p.account_id
+          and a.owner = 'organization:' || p.organization_id
+        where ${sql.in(
+          "p.account_id",
+          owned.map((account) => account.id),
+        )}
         and (p.kind <> 'personal' or exists(select 1 from member owner_member
           where owner_member."organizationId" = p.organization_id and owner_member."userId" = p.personal_user_id))
         and exists(select 1 from member m
@@ -87,8 +98,20 @@ export const hostedResourceLifecycle = Effect.gen(function* () {
             or (p.kind = 'shared' and (p.audience = 'everyone' or exists(
               select 1 from hosted_account_groups g join hosted_group_members gm on gm.group_id = g.group_id
               where g.account_id = p.account_id and gm.member_id = m.id)))))`;
-        if (rows.length !== 1) return yield* new StorageError();
-      }).pipe(Effect.catchTag("SqlError", () => new StorageError())),
+        const allowed = yield* Schema.decodeUnknownEffect(
+          Schema.Array(Schema.Struct({ id: AccountId, owner: Schema.String })),
+        )(rows);
+        // Each account must still belong to the owner the invocation resolved it under.
+        const owners = new Map(owned.map((account) => [account.id, account.owner]));
+        return new Set(
+          allowed.filter((row) => owners.get(row.id) === row.owner).map((row) => row.id),
+        );
+      }).pipe(
+        Effect.catchTags({
+          SqlError: () => new StorageError(),
+          SchemaError: () => new StorageError(),
+        }),
+      ),
     connectionCompleting: (connection) =>
       Effect.gen(function* () {
         const user = yield* CurrentUserId;

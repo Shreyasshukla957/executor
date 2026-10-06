@@ -65,7 +65,7 @@ const resolveApp = (
           );
           if (profile.status === "removed" || profile.status === "removing")
             return yield* invalid("profile");
-          yield* checkAccounts(executor, organizationOwner, profile.accounts).pipe(
+          yield* checkAccounts(organizationOwner, profile.accounts).pipe(
             Effect.catchTags({
               OrganizationForbidden: () => Effect.fail(invalid("profile")),
               AccountNotFound: () => Effect.fail(invalid("profile")),
@@ -78,7 +78,7 @@ const resolveApp = (
           .pipe(Effect.catchTag("AccountNotFound", () => Effect.fail(invalid("account"))));
         const accounts = bareAccountSelection(app.requirements.accounts, account);
         if (accounts === undefined) return yield* invalid("account");
-        yield* checkAccounts(executor, organizationOwner, accounts).pipe(
+        yield* checkAccounts(organizationOwner, accounts).pipe(
           Effect.catchTags({
             OrganizationForbidden: () => Effect.fail(invalid("account")),
             AccountNotFound: () => Effect.fail(invalid("account")),

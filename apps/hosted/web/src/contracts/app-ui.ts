@@ -14,12 +14,17 @@ import { Atom, AtomHttpApi } from "effect/unstable/reactivity";
 import type { HttpApiEndpoint } from "effect/unstable/httpapi";
 import type { HttpClientError } from "effect/unstable/http";
 import { DashboardRuntime } from "./telemetry.ts";
+import { batchReads } from "@executor-js/dashboard-start/batch-browser";
 
-/** This client is used only by products that mount private app pages. */
+/**
+ * This client is used only by products that mount private app pages. Its reads batch with the
+ * page's others.
+ */
 export class AppUiClient extends AtomHttpApi.Service<AppUiClient>()("HostedAppUiClient", {
   api: HostedAppUiApi,
   httpClient: organizationHttpClient,
   runtime: DashboardRuntime,
+  transformClient: batchReads(HostedAppUiApi),
 }) {}
 class AppUiKey extends Data.Class<{
   readonly organization: OrganizationReference;

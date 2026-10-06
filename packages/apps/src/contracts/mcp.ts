@@ -2,6 +2,7 @@ import type { ProviderError } from "./provider-error.ts";
 /** MCP protocol data uses Effect Schema; executable tool methods use Effect. */
 import { type Effect, type Redacted, Schema } from "effect";
 import type { Elicit, ElicitationFailed } from "./elicitation.ts";
+import { UpstreamError } from "./failure.ts";
 import { AccountId, HttpUrl } from "./schema.ts";
 import { JsonObject, type JsonValue } from "./schema.ts";
 import { RouterIcon } from "./router.ts";
@@ -51,16 +52,22 @@ export interface McpConnection {
 export { ToolAnnotations as McpToolAnnotations } from "./tools.ts";
 import { ToolAnnotations as McpToolAnnotations } from "./tools.ts";
 
-/** Native MCP result semantics. Protocol/transport failures use the Effect error channel. */
+/**
+ * Native MCP result semantics, and the value every MCP tool call returns. A tool's output
+ * schema is built from this declaration. Protocol/transport failures use the Effect error channel.
+ */
 export const McpToolResult = Schema.Struct({
   content: Schema.Array(JsonObject),
-  structuredContent: Schema.optional(JsonObject),
-  isError: Schema.optional(Schema.Boolean),
-  _meta: Schema.optional(JsonObject),
+  structuredContent: Schema.optionalKey(JsonObject),
+  isError: Schema.optionalKey(Schema.Boolean),
+  _meta: Schema.optionalKey(JsonObject),
 });
 export type McpToolResult = typeof McpToolResult.Type;
 
-/** Remote metadata. Input/output schemas remain upstream JSON Schema documents. */
+/**
+ * Remote metadata. Input/output schemas remain upstream JSON Schema documents; the upstream
+ * output schema describes only a result's `structuredContent`.
+ */
 export const McpToolMetadata = Schema.Struct({
   name: Schema.String,
   title: Schema.optional(Schema.String),
@@ -89,10 +96,15 @@ export interface McpToolContext {
   readonly elicit?: Elicit;
 }
 
-/** A tool bound to one evaluation's account; do not reuse it with another account. */
-export interface McpTool extends McpToolMetadata {
+/**
+ * A tool bound to one evaluation's account; do not reuse it with another account. `output`
+ * decodes and describes the `McpToolResult` that `run` returns, with the upstream output schema
+ * under `structuredContent`.
+ */
+export interface McpTool extends Omit<McpToolMetadata, "outputSchema"> {
   readonly description: string;
   readonly input: Schema.Decoder<JsonValue>;
+  readonly output: Schema.Decoder<JsonValue>;
   readonly readOnly?: boolean;
   readonly run: (
     context: McpToolContext,
@@ -102,7 +114,10 @@ export interface McpTool extends McpToolMetadata {
 /** The discovered catalog keyed by remote tool name. */
 export type McpTools = Readonly<Record<string, McpTool>>;
 
-/** Safe protocol/transport failure; no raw upstream payloads or credentials. */
+/**
+ * Safe protocol/transport failure; no raw upstream payloads or credentials. `upstream` is the
+ * JSON-RPC error the server answered with, bounded and with account secrets replaced.
+ */
 export class McpError extends Schema.TaggedError<McpError>()("McpError", {
   phase: Schema.Literals(["connect", "discover", "call", "schema", "transport"]),
   reason: Schema.Literals([
@@ -113,6 +128,7 @@ export class McpError extends Schema.TaggedError<McpError>()("McpError", {
     "invalid_input",
   ]),
   status: Schema.optional(Schema.Number),
+  upstream: Schema.optional(UpstreamError),
 }) {}
 
 /** Public process configuration. Credentials arrive through the selected account. */
