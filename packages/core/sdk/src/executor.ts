@@ -212,6 +212,7 @@ import {
   isUnusableSuccessTokenResponse,
   optionalScopesFromAuthorizationUrl,
   shouldRefreshToken,
+  tokenEndpointForRefresh,
   type OAuth2TokenResponse,
   type OAuthEndpointUrlPolicy,
 } from "./oauth-helpers";
@@ -2694,7 +2695,13 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
         // Refresh against the region the code was redeemed at when one was
         // recorded at connect time (multi-site providers like Datadog), else
         // the oauth_client's configured token endpoint.
-        const tokenUrl = row.oauth_token_url ? String(row.oauth_token_url) : clientRow.tokenUrl;
+        const tokenUrl = tokenEndpointForRefresh(
+          clientRow.tokenUrl,
+          row.oauth_token_url == null ? null : String(row.oauth_token_url),
+        );
+        if (tokenUrl === undefined) {
+          return yield* reauth("Stored OAuth token endpoint is no longer trusted; reconnect.");
+        }
 
         // Enterprise-managed authorization (the ID-JAG grant profile) issues NO
         // refresh token by design — the identity assertion in `refresh_item_id`
