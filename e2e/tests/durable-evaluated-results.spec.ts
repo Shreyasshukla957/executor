@@ -203,6 +203,12 @@ const listed = (names: ReadonlyArray<string>) => names.includes("sdk.tools.listi
 /** A read that evaluated, and kept its result in the supervisor after responding. */
 const written = (names: ReadonlyArray<string>) =>
   listed(names) && names.includes("storage.evaluated.write");
+/**
+ * A read that evaluated. The evaluation ends after the response, so its spans can reach Motel
+ * before the request's own: the read waits for the listing span, which holds the cache outcome.
+ */
+const evaluates = (names: ReadonlyArray<string>) =>
+  listed(names) && names.includes("sdk.tools.listing.evaluate");
 
 layer(HostedLive, { excludeTestServices: true })("Durable evaluated results", (it) => {
   it.effect(scenarios.durableEvaluatedResults.title, (context) =>
@@ -332,8 +338,6 @@ layer(HostedLive, { excludeTestServices: true })("Durable evaluated results", (i
       withHostedCase(
         context,
         Effect.gen(function* () {
-          const evaluates = (names: ReadonlyArray<string>) =>
-            names.includes("sdk.tools.listing.evaluate");
           // Both listings hold 12,000 definitions of the same total length and share none.
           const control = yield* listingApp(distinctSource("own"));
           const colliding = yield* listingApp(distinctSource("Defined"));
@@ -363,8 +367,6 @@ layer(HostedLive, { excludeTestServices: true })("Durable evaluated results", (i
       withHostedCase(
         context,
         Effect.gen(function* () {
-          const evaluates = (names: ReadonlyArray<string>) =>
-            names.includes("sdk.tools.listing.evaluate");
           // Both listings hold 1,000 definitions with names of the same total length.
           const control = yield* listingApp(longNamesSource("own"));
           const colliding = yield* listingApp(longNamesSource("same"));
