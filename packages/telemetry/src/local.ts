@@ -14,7 +14,7 @@ export const localTelemetry = (directory: string, service: string) =>
     Effect.gen(function* () {
       const path = yield* Path.Path;
       const diagnostics = path.resolve(directory, "diagnostics");
-      const file = yield* rotatingJsonLogger(diagnostics, service);
+      const { logger: file } = yield* rotatingJsonLogger(diagnostics, service);
       const stderr = Logger.withConsoleError(Logger.formatJson);
       const logger = Logger.make((options) => {
         stderr.log(options);

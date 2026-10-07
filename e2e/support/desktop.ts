@@ -60,13 +60,26 @@ export const launchDesktop = (options: {
     );
   });
 
+// A failed assertion prints the whole event, so keep what tells runs apart: when it was logged,
+// which backend run it describes and how that run ended.
 const LogLine = Schema.fromJsonString(
   Schema.Struct({
+    timestamp: Schema.String,
+    level: Schema.String,
     message: Schema.String,
     annotations: Schema.Struct({
+      run: Schema.optional(Schema.Number),
       pid: Schema.optional(Schema.Number),
       kind: Schema.optional(Schema.String),
       ready: Schema.optional(Schema.Boolean),
+      exitCode: Schema.optional(Schema.NullOr(Schema.Number)),
+      signal: Schema.optional(Schema.NullOr(Schema.String)),
+      configuration: Schema.optional(Schema.String),
+      stderr: Schema.optional(Schema.String),
+      recovery: Schema.optional(
+        Schema.Struct({ stage: Schema.String, reason: Schema.optional(Schema.String) }),
+      ),
+      backup: Schema.optional(Schema.String),
       delayMillis: Schema.optional(Schema.Number),
     }),
   }),
@@ -83,7 +96,20 @@ export const desktopEvents = (directory: string) =>
     const text = yield* fs.readFileString(file);
     return text.split("\n").flatMap((line) => {
       const entry = Schema.decodeUnknownOption(LogLine)(line);
-      return Option.isSome(entry) ? [entry.value] : [];
+      if (Option.isNone(entry)) return [];
+      const { stderr } = entry.value.annotations;
+      // A failed assertion prints this. Redact pairing links as managed-server.ts does.
+      return stderr === undefined
+        ? [entry.value]
+        : [
+            {
+              ...entry.value,
+              annotations: {
+                ...entry.value.annotations,
+                stderr: stderr.replace(/#pair=[a-f0-9]{64}/g, "#pair=<redacted>"),
+              },
+            },
+          ];
     });
   });
 

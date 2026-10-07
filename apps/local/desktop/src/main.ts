@@ -84,7 +84,7 @@ const desktop = Effect.gen(function* () {
   // Beside the data directory, so a reset is a same-volume rename.
   const backups = path.join(path.dirname(directory), "backups");
   yield* fs.makeDirectory(directory, { recursive: true });
-  const file = yield* rotatingJsonLogger(diagnostics, "executor-desktop");
+  const log = yield* rotatingJsonLogger(diagnostics, "executor-desktop");
   const environmentPort = yield* Config.String("EXECUTOR_PORT").pipe(Config.option);
   const source: PortSource = Option.isSome(environmentPort)
     ? { kind: "environment", port: environmentPort.value }
@@ -291,6 +291,7 @@ const desktop = Effect.gen(function* () {
           directory,
           backups,
           appVersion: app.getVersion(),
+          whileMoving: log.whileMoving,
           window: () => window,
         });
 
@@ -492,7 +493,7 @@ const desktop = Effect.gen(function* () {
           )
         : Effect.void,
     ),
-    Effect.provide(Logger.layer([Logger.withConsoleError(Logger.formatJson), file])),
+    Effect.provide(Logger.layer([Logger.withConsoleError(Logger.formatJson), log.logger])),
   );
 });
 

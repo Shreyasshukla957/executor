@@ -359,6 +359,12 @@ it.live(scenarios.desktopReset.title, () =>
             event.message === "Showing desktop recovery",
         ),
       ).toEqual([]);
+      // Lines logged before a move go with it: the first backup holds both reset attempts.
+      expect(
+        (yield* desktopEvents(backup)).filter(
+          (event) => event.message === "Resetting Executor data",
+        ),
+      ).toHaveLength(2);
     }),
   ).pipe(Effect.provide(services)),
 );
