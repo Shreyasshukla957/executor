@@ -3,7 +3,7 @@
  * invocations for the runner, gives each invocation a build loader over the host's build store,
  * and decodes the reply. Hosts differ only in where the runner lives and how builds are stored.
  */
-import { Effect, Option, Redacted, Result, Schema, type Stream } from "effect";
+import { Effect, Option, Redacted, Result, Schema, type Scope, type Stream } from "effect";
 import { makeTelemetryForwarder, TelemetryBatch, traceHeaders } from "@executor-js/telemetry";
 import {
   AccountCheckResult,
@@ -26,6 +26,7 @@ import {
 } from "apps/contracts";
 import {
   AppCacheChanges,
+  InvocationRun,
   RuntimeProtocolFailed,
   type RuntimeProtocolUnsupported,
   type Runtime,
@@ -39,8 +40,68 @@ import { appProtocol } from "./app-protocols.ts";
 import { invocationElicitation } from "./worker-elicitation.ts";
 import { invocationWorkflowControls } from "./worker-workflow-rpc.ts";
 
-/** The span recorded each time a host reads a build for a cold start. */
+/** The span recorded each time a host reads a build, to learn its protocol or cold-start it. */
 export const buildLoadSpan = "runtime.app.build.load";
+
+/**
+ * One invocation's build loader over a host's build store. The runner calls it to learn a build's
+ * protocol and on a cold start. A build whose protocol this host does not run never starts, so
+ * only its load finds that out: `refused` keeps that as the invocation's failure.
+ */
+export const invocationBuildLoader = <R>(
+  invocation: Pick<AppInvocation, "app" | "build" | "database" | "command" | "accounts" | "run">,
+  read: Effect.Effect<LoadedWorkerBuild, RuntimeBuildUnavailable, R>,
+): Effect.Effect<
+  {
+    readonly load: AppCapabilities["load"];
+    readonly refused: <A, E, R2>(
+      invoked: Effect.Effect<A, E | RuntimeProtocolFailed, R2>,
+    ) => Effect.Effect<A, E | RuntimeProtocolFailed | RuntimeProtocolUnsupported, R2>;
+  },
+  RuntimeProtocolFailed,
+  R | Scope.Scope
+> =>
+  Effect.gen(function* () {
+    const lifetime = yield* Effect.acquireRelease(
+      Effect.sync(() => new AbortController()),
+      (controller) => Effect.sync(() => controller.abort()),
+    );
+    const services = yield* Effect.context<R>();
+    const worker = yield* appWorker(invocation).pipe(
+      Effect.mapError(() => new RuntimeProtocolFailed()),
+    );
+    let unsupported: RuntimeProtocolUnsupported | undefined;
+    return {
+      load: () =>
+        Effect.runPromiseWith(services)(
+          read.pipe(
+            Effect.tap((loaded) =>
+              appProtocol(loaded.protocol).pipe(
+                Effect.tapError((error) =>
+                  Effect.sync(() => {
+                    unsupported = error;
+                  }),
+                ),
+              ),
+            ),
+            Effect.withSpan(buildLoadSpan, {
+              attributes: {
+                "executor.app.id": invocation.app,
+                "executor.build.id": invocation.build,
+                "executor.runtime.mode": worker.mode,
+                "executor.worker.identity": worker.name,
+                ...(invocation.run === undefined ? {} : { "executor.run.id": invocation.run }),
+              },
+            }),
+          ),
+          { signal: lifetime.signal },
+        ),
+      refused: (invoked) =>
+        invoked.pipe(
+          Effect.catchTag("RuntimeProtocolFailed", (error) => Effect.fail(unsupported ?? error)),
+        ),
+    };
+  });
 
 /** What one host provides. Everything else about app execution is shared. */
 export interface AppRuntimeHost {
@@ -54,7 +115,7 @@ export interface AppRuntimeHost {
   readonly invoke: (
     invocation: AppInvocation,
     capabilities: AppCapabilities,
-  ) => Effect.Effect<unknown, RuntimeProtocolFailed>;
+  ) => Effect.Effect<unknown, RuntimeProtocolFailed | RuntimeProtocolUnsupported>;
   readonly build: Runtime<BlobStore>["build"];
   readonly asset: NonNullable<Runtime<BlobStore>["asset"]>;
   readonly changes: (app: string) => Stream.Stream<number, RuntimeProtocolFailed>;
@@ -82,8 +143,8 @@ export const appRuntime = (host: AppRuntimeHost) =>
             Effect.sync(() => new AbortController()),
             (controller) => Effect.sync(() => controller.abort()),
           );
-          const services = yield* Effect.context<BlobStore>();
           const build = input.build;
+          const run = yield* InvocationRun;
           const invocation: AppInvocation = {
             app: input.app,
             build,
@@ -95,39 +156,14 @@ export const appRuntime = (host: AppRuntimeHost) =>
             ...(input.approval === undefined ? {} : { approval: input.approval }),
             ...(input.replay === undefined ? {} : { replay: input.replay }),
             ...(input.deadline === undefined ? {} : { deadline: input.deadline }),
+            ...(run === undefined ? {} : { run }),
           };
-          const worker = yield* appWorker(invocation).pipe(
-            Effect.mapError(() => new RuntimeProtocolFailed()),
-          );
-          // A build whose protocol this host does not run never starts, so only a load finds it.
-          // The runner may sit behind RPC, so the load keeps the typed failure for this call.
-          let unsupported: RuntimeProtocolUnsupported | undefined;
-          const body = yield* host
-            .invoke(invocation, {
-              // Only a cold start calls this, inside the trusted runner or data supervisor.
-              load: () =>
-                Effect.runPromiseWith(services)(
-                  host.loadBuild(build).pipe(
-                    Effect.tap((loaded) =>
-                      appProtocol(loaded.protocol).pipe(
-                        Effect.tapError((error) =>
-                          Effect.sync(() => {
-                            unsupported = error;
-                          }),
-                        ),
-                      ),
-                    ),
-                    Effect.withSpan(buildLoadSpan, {
-                      attributes: {
-                        "executor.app.id": input.app,
-                        "executor.build.id": build,
-                        "executor.runtime.mode": worker.mode,
-                        "executor.worker.identity": worker.name,
-                      },
-                    }),
-                  ),
-                  { signal: lifetime.signal },
-                ),
+          // Only the trusted runner or data supervisor calls the loader. The runner may sit behind
+          // RPC, so the loader keeps an unsupported protocol as this call's typed failure.
+          const loader = yield* invocationBuildLoader(invocation, host.loadBuild(build));
+          const body = yield* loader.refused(
+            host.invoke(invocation, {
+              load: loader.load,
               elicit:
                 input.elicitation === undefined
                   ? null
@@ -137,12 +173,8 @@ export const appRuntime = (host: AppRuntimeHost) =>
                   ? null
                   : yield* invocationWorkflowControls(input.workflowControls, lifetime.signal),
               ...(input.workflow === undefined ? {} : { workflow: input.workflow }),
-            })
-            .pipe(
-              Effect.catchTag("RuntimeProtocolFailed", (error) =>
-                Effect.fail(unsupported ?? error),
-              ),
-            );
+            }),
+          );
           // Telemetry is an additive transport field. Retained builds keep their original protocol.
           const collected = yield* Schema.decodeUnknownEffect(
             Schema.Struct({

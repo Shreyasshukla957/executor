@@ -1,4 +1,4 @@
-import { Publication } from "@executor-js/app-registry/contracts";
+import { Publication } from "@executor-js/sdk";
 import type { Query } from "../../contracts/dashboard.ts";
 import type { ComponentType } from "react";
 import type { FailureProps } from "../../contracts/dashboard.ts";

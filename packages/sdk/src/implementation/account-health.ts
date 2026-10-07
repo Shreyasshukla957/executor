@@ -29,7 +29,10 @@ import type { makeOAuth } from "./oauth.ts";
  * request after about ten seconds.
  */
 const checkMillis = 6_000;
-/** The app's own deadline for one attempt, never past the whole check's. */
+/**
+ * The app's own deadline for one attempt, never past the whole check's. The provider's `health`
+ * receives it as `deadline`, so a check such as `mcpHealth` can give up in time to say why.
+ */
 const attemptMillis = 5_000;
 
 type OAuth = Pick<ReturnType<typeof makeOAuth>, "resolve" | "renewRejected">;

@@ -48,7 +48,7 @@ const browserAccess = Effect.gen(function* () {
   Effect.catchTags({
     AuthenticationUnavailable: () => Effect.succeed(HttpServerResponse.empty({ status: 503 })),
     McpUnauthorized: () => Effect.succeed(HttpServerResponse.empty({ status: 401 })),
-    McpForbidden: () => Effect.succeed(HttpServerResponse.empty({ status: 403 })),
+    McpApprovalForbidden: () => Effect.succeed(HttpServerResponse.empty({ status: 403 })),
     SchemaError: () => Effect.succeed(HttpServerResponse.empty({ status: 400 })),
   }),
 );

@@ -11,9 +11,18 @@ export const ProfileRevision = Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)
 /** Setup input is app-owned configuration, not provider credentials. */
 export const ProfileWebhookConfig = Schema.Record(Schema.NonEmptyString, Schema.Json);
 /** A profile never selects its own code version or owns a separate database. */
+/** The immutable creation request a profile was made from; later selection edits never change it. */
+export const ProfileRequest = Schema.Struct({
+  name: Schema.optional(Schema.NonEmptyString),
+  accounts: SelectedAccounts,
+  webhookConfig: ProfileWebhookConfig,
+});
+export type ProfileRequest = typeof ProfileRequest.Type;
 export const Profile = Schema.Struct({
   id: ProfileId,
   app: AppId,
+  idempotencyKey: Schema.NonEmptyString,
+  request: ProfileRequest,
   owner: OwnerId,
   subject: Schema.NonEmptyString,
   name: Schema.NullOr(Schema.NonEmptyString.check(Schema.isMaxLength(128))),
@@ -101,6 +110,7 @@ export const ProfileInputs = {
     app: AppId,
     owner: Schema.optional(OwnerId),
     subject: Schema.optional(Schema.NonEmptyString),
+    idempotencyKey: Schema.optional(Schema.NonEmptyString),
   }),
   /** List existing profiles across explicit apps; absent apps contribute no rows. */
   listMany: Schema.Struct({
@@ -150,7 +160,11 @@ export const AppProfilesGroup = HttpApiGroup.make("appProfiles")
   .add(
     HttpApiEndpoint.get("list", "/v1/apps/:app/profiles", {
       params: { app: AppId },
-      query: { owner: Schema.optional(OwnerId), subject: Schema.optional(Schema.NonEmptyString) },
+      query: {
+        owner: Schema.optional(OwnerId),
+        subject: Schema.optional(Schema.NonEmptyString),
+        idempotencyKey: Schema.optional(Schema.NonEmptyString),
+      },
       success: Schema.Array(Profile),
       error: errors,
     }),

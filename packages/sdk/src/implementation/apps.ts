@@ -45,7 +45,9 @@ import {
 import { StoredApp, StoredDeployment } from "../contracts/storage.ts";
 import { query, transaction, type Query } from "./database.ts";
 import { identifyProvider } from "./provider.ts";
-import { SourceError, type AppSourceStorage } from "../contracts/source.ts";
+import { SourceError, type AppSourceStorage, type RepositoryBackend } from "../contracts/source.ts";
+import type { Registry } from "../contracts/registry.ts";
+import { resolvePublication } from "./registry.ts";
 
 import type { BlobStorage } from "../contracts/blobs.ts";
 import { readDeploymentSource, writeDeploymentSource } from "./deployment-source.ts";
@@ -203,10 +205,12 @@ export const makeApps = (
   runtime: Runtime,
   crypto: Crypto.Crypto,
   sources: AppSourceStorage,
+  repositories: RepositoryBackend,
+  registry: Registry,
   blobs: BlobStorage,
   lifecycle?: ResourceLifecycle,
 ) => {
-  const authoring = makeAppAuthoring(db, sources, blobs, crypto, lifecycle);
+  const authoring = makeAppAuthoring(db, sources, repositories, blobs, crypto, lifecycle);
   const deploy = (input: DeployInput, copiedFrom: AppCopyOrigin | null = null) =>
     Effect.gen(function* () {
       // Reserve an order before building. Only successful promotions advance the other counter.
@@ -420,7 +424,7 @@ export const makeApps = (
           const deployedApp = yield* Schema.decodeUnknownEffect(DeployedApp)(projected).pipe(
             Effect.mapError(() => new StorageError()),
           );
-          return { app: deployedApp, deployment: { ...deployment, files } };
+          return { app: deployedApp, deployment };
         }),
       );
     }).pipe(Effect.withSpan("sdk.apps.deploy"));
@@ -429,7 +433,9 @@ export const makeApps = (
       const from = input.from;
       const snapshot: AppCopySnapshot =
         typeof from !== "string"
-          ? from
+          ? "package" in from
+            ? yield* resolvePublication(registry, from)
+            : from
           : yield* Effect.gen(function* () {
               const parent = yield* storedApp(db, { app: from });
               if (parent.activeDeployment !== null) {

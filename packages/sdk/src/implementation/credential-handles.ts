@@ -10,7 +10,15 @@
  * isolate, after the invocation's request context is gone, and for accounts not saved yet.
  */
 import { Clock, Effect, Encoding, Option, Result, Schema } from "effect";
-import type { ResolvedAccount, ResolvedAccounts } from "apps/contracts";
+import {
+  NetworkRefused,
+  networkRefusalHeader,
+  networkRefusalResponse,
+  networkRefusalStatus,
+  type ResolvedAccount,
+  type ResolvedAccounts,
+} from "apps/contracts";
+import { isPrivateHostname } from "@executor-js/utils/url-policy";
 
 /** How long a handle stays usable. Every invocation, and every workflow step, seals afresh. */
 const handleLifetime = 60 * 60 * 1000;
@@ -180,14 +188,6 @@ export const credentialHostMatches = (pattern: string, url: URL) => {
   return label.length > 0 && !label.includes(".");
 };
 
-/** A request carried a handle to a host its provider does not declare, or a stale handle. */
-const refused = (message: string) =>
-  new Response(message, {
-    status: 421,
-    statusText: "Credential not allowed for this host",
-    headers: { "content-type": "text/plain; charset=utf-8", "x-executor-credential": "refused" },
-  });
-
 const rewritable = (contentType: string | null) => {
   const type = contentType?.split(";")[0]?.trim().toLowerCase();
   if (type === undefined || type === "" || type === "text/event-stream") return undefined;
@@ -281,23 +281,45 @@ const basicCredentials = (header: string, values: ReadonlyMap<string, string>) =
   return `Basic ${Encoding.encodeBase64(replaceAll(decoded, values))}`;
 };
 
+/** Which destinations Executor refuses before an app's request reaches the host's network. */
+export interface AppEgress {
+  /**
+   * Refuse private, loopback and internal destinations, named by the URL. The host's network
+   * must refuse their addresses too: a public name can resolve to a private address.
+   */
+  readonly refusePrivateAddresses: boolean;
+  /** The instance's own origin, which the host reaches without the network. Never refused. */
+  readonly selfOrigin: string | undefined;
+}
+
+const egressRefusal = (url: URL, egress: AppEgress) =>
+  !egress.refusePrivateAddresses ||
+  url.origin === egress.selfOrigin ||
+  !isPrivateHostname(url.hostname)
+    ? undefined
+    : new NetworkRefused({ host: url.host, refusal: { reason: "private_address" } });
+
 export interface CredentialOutbound {
   /** The app whose Worker sent the request. Bound by the runner, never by app code. */
   readonly app: string;
   readonly key: CryptoKey;
+  readonly egress: AppEgress;
   /** Send the rewritten request on the host's network. */
   readonly send: (request: Request) => Promise<Response>;
 }
 
 /**
  * Send one app request, substituting the handles it carries when its target is allowed, and
- * returning a response with echoed values replaced by their handles.
+ * returning a response with echoed values replaced by their handles. A refused request is never
+ * sent; app code receives Executor's refusal response instead, see `networkRefusalResponse`.
  */
 export const credentialFetch = async (
   request: Request,
   outbound: CredentialOutbound,
 ): Promise<Response> => {
   const url = new URL(request.url);
+  const blocked = egressRefusal(url, outbound.egress);
+  if (blocked !== undefined) return networkRefusalResponse(blocked);
   const kind = request.body === null ? undefined : rewritable(request.headers.get("content-type"));
   const body =
     kind === undefined || request.body === null ? undefined : await readBody(request.body);
@@ -310,14 +332,16 @@ export const credentialFetch = async (
     ...(body?.complete === true ? handlesIn(body.text) : []),
   ]);
   const unchanged = () =>
-    outbound.send(
-      body === undefined
-        ? request
-        : new Request(request, {
-            body: body.complete ? body.text : body.stream,
-            ...(body.complete ? {} : { duplex: "half" }),
-          }),
-    );
+    outbound
+      .send(
+        body === undefined
+          ? request
+          : new Request(request, {
+              body: body.complete ? body.text : body.stream,
+              ...(body.complete ? {} : { duplex: "half" }),
+            }),
+      )
+      .then(unmarked);
   if (found.size === 0) return unchanged();
 
   const values = new Map<string, string>();
@@ -326,19 +350,23 @@ export const credentialFetch = async (
       open(outbound.key, handle.slice(handlePrefix.length, -1)),
     );
     if (Option.isNone(sealed) || sealed.value.app !== outbound.app)
-      return refused(
-        "This request carries a credential handle that is not valid for this app. Use the account fields this invocation received.",
+      return networkRefusalResponse(
+        new NetworkRefused({ host: url.host, refusal: { reason: "credential_app" } }),
       );
     const { provider, hosts, expires, value } = sealed.value;
     if (expires <= Date.now())
-      return refused(
-        `This request carries an expired ${provider} credential handle. Use the account fields this invocation received.`,
+      return networkRefusalResponse(
+        new NetworkRefused({
+          host: url.host,
+          refusal: { reason: "credential_expired", provider },
+        }),
       );
     if (!hosts.some((host) => credentialHostMatches(host, url)))
-      return refused(
-        hosts.length === 0
-          ? `${provider} credentials cannot be sent to ${url.host}: the provider declares no hosts.`
-          : `${provider} credentials cannot be sent to ${url.host}. The provider allows: ${hosts.join(", ")}.`,
+      return networkRefusalResponse(
+        new NetworkRefused({
+          host: url.host,
+          refusal: { reason: "credential_host", provider, allowedHosts: hosts },
+        }),
       );
     values.set(handle, value);
   }
@@ -367,11 +395,30 @@ export const credentialFetch = async (
   return redactResponse(response, values);
 };
 
+/**
+ * Only Executor's network marks a refusal. A service's response carrying the mark loses it, so
+ * app code and the framework's helpers never present a service's text as Executor's refusal.
+ */
+const forged = (response: Response) =>
+  response.status === networkRefusalStatus && response.headers.has(networkRefusalHeader);
+
+const unmarked = (response: Response) => {
+  if (!forged(response)) return response;
+  const headers = new Headers(response.headers);
+  headers.delete(networkRefusalHeader);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+};
+
 /** Replace values the service echoed with their handles, in headers and bounded text bodies. */
 const redactResponse = async (response: Response, values: ReadonlyMap<string, string>) => {
   if (response.status === 101) return response;
   const headers = new Headers();
   for (const [name, value] of response.headers) headers.append(name, redact(value, values));
+  if (forged(response)) headers.delete(networkRefusalHeader);
   const kind =
     response.body === null ? undefined : rewritable(response.headers.get("content-type"));
   if (kind === undefined || response.body === null)

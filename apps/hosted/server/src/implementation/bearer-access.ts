@@ -36,20 +36,23 @@ import {
   organizationOwner,
   type OrganizationAccess,
 } from "../contracts/organization.ts";
-import { McpAccess, McpForbidden, McpUnauthorized } from "../contracts/mcp.ts";
+import { McpAccess, McpForbidden, McpForbiddenReason, McpUnauthorized } from "../contracts/mcp.ts";
 import { AuthenticationUnavailable, Unauthorized } from "../contracts/auth.ts";
 import { OrganizationForbidden } from "../contracts/organization.ts";
 import { isApiKey } from "./api-keys.ts";
 import { patGrantId } from "./mcp-oauth.ts";
 
-/** Why a bearer was refused, before translation into the MCP or API contract. */
+/**
+ * Why a bearer was refused, before translation into the MCP or API contract. A valid credential
+ * that may not make the request names why, because each reason needs a different fix.
+ */
 class BearerRejected extends Schema.TaggedError<BearerRejected>()("BearerRejected", {
-  reason: Schema.Literals(["unauthorized", "forbidden", "unavailable"]),
+  reason: Schema.Union([Schema.Literals(["unauthorized", "unavailable"]), McpForbiddenReason]),
 }) {}
 
 const unauthorized = new BearerRejected({ reason: "unauthorized" });
-const forbidden = new BearerRejected({ reason: "forbidden" });
 const unavailable = new BearerRejected({ reason: "unavailable" });
+const forbidden = (reason: McpForbiddenReason) => new BearerRejected({ reason });
 
 /** What the request names: the presented credential and any organization it selects. */
 export interface BearerRequest {
@@ -106,20 +109,21 @@ const requestedOrganization = (
   fromHeader: string,
 ) =>
   Effect.gen(function* () {
-    if (header !== null && !Schema.is(OrganizationReference)(header)) return yield* forbidden;
+    if (header !== null && !Schema.is(OrganizationReference)(header))
+      return yield* forbidden("membership");
     const resolve = (matches: string) =>
       Schema.decodeUnknownEffect(Schema.Array(OrganizationId))(jsonText(matches)).pipe(
         Effect.mapError(() => unavailable),
         Effect.flatMap((ids) =>
           ids.length === 1 && ids[0] !== undefined
             ? Effect.succeed(ids[0])
-            : Effect.fail(forbidden),
+            : Effect.fail(forbidden("membership")),
         ),
       );
     const byUrl = request.organization === undefined ? undefined : yield* resolve(fromUrl);
     const byHeader = header === null ? undefined : yield* resolve(fromHeader);
     if (byUrl !== undefined && byHeader !== undefined && byUrl !== byHeader)
-      return yield* forbidden;
+      return yield* forbidden("organization_mismatch");
     return byUrl ?? byHeader;
   });
 
@@ -324,10 +328,10 @@ const oauthAccess = (
       return yield* unauthorized;
     // Live membership in the grant's organization.
     const organization = yield* Schema.decodeUnknownEffect(OrganizationId)(row.grantResource).pipe(
-      Effect.mapError(() => forbidden),
+      Effect.mapError(() => forbidden("membership")),
     );
     const role = yield* Schema.decodeUnknownEffect(OrganizationRole)(row.role).pipe(
-      Effect.mapError(() => forbidden),
+      Effect.mapError(() => forbidden("membership")),
     );
     // A connection grant has no authority of its own; it reads the connection on every use.
     const connection = row.grantConnection ?? undefined;
@@ -354,7 +358,8 @@ const oauthAccess = (
       row.urlOrganizations,
       row.headerOrganizations,
     );
-    if (requested !== undefined && requested !== organization) return yield* forbidden;
+    if (requested !== undefined && requested !== organization)
+      return yield* forbidden("organization_mismatch");
     return {
       userId: row.subject,
       clientId: row.tokenClient,
@@ -463,15 +468,16 @@ const patAccess = (sql: SqlClient.SqlClient, token: string, request: BearerReque
         row.urlOrganizations,
         row.headerOrganizations,
       )) ?? pinned;
-    if (organization === undefined) return yield* forbidden;
+    if (organization === undefined) return yield* forbidden("organization_required");
     // A pinned key never authorizes another organization.
-    if (pinned !== undefined && pinned !== organization) return yield* forbidden;
+    if (pinned !== undefined && pinned !== organization)
+      return yield* forbidden("organization_mismatch");
     const memberships = yield* Schema.decodeUnknownEffect(Memberships)(
       jsonText(row.memberships),
     ).pipe(Effect.mapError(() => unavailable));
     const membership = memberships.find((item) => item.organization === organization);
     const role = yield* Schema.decodeUnknownEffect(OrganizationRole)(membership?.role).pipe(
-      Effect.mapError(() => forbidden),
+      Effect.mapError(() => forbidden("membership")),
     );
     return {
       userId: row.userId,
@@ -515,9 +521,9 @@ export const mcpBearerAccess = (
     Effect.mapError(({ reason }) =>
       reason === "unauthorized"
         ? new McpUnauthorized()
-        : reason === "forbidden"
-          ? new McpForbidden()
-          : new AuthenticationUnavailable(),
+        : reason === "unavailable"
+          ? new AuthenticationUnavailable()
+          : new McpForbidden({ reason }),
     ),
   );
 
@@ -548,14 +554,15 @@ export const apiBearerAccess = (origin: string, request: BearerRequest) =>
           })),
         );
     const organizationSlug = access.organizationSlug;
-    if (organizationSlug === null || organizationSlug.length === 0) return yield* forbidden;
+    if (organizationSlug === null || organizationSlug.length === 0)
+      return yield* forbidden("membership");
     return { ...access, organizationSlug } satisfies ApiBearerAccess;
   }).pipe(
     Effect.mapError(({ reason }) =>
       reason === "unauthorized"
         ? new Unauthorized()
-        : reason === "forbidden"
-          ? new OrganizationForbidden()
-          : new AuthenticationUnavailable(),
+        : reason === "unavailable"
+          ? new AuthenticationUnavailable()
+          : new OrganizationForbidden(),
     ),
   );

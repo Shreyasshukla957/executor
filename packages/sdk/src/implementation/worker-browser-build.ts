@@ -16,6 +16,10 @@ const namespace = "executor-browser";
 const assetUrl = "executor-asset-url";
 const scriptImports = new Set(["import-statement", "dynamic-import", "require-call"]);
 const browserAsset = /\.(?:svg|woff2)$/;
+/** Metafile inputs carry their plugin namespace, as in `virtual:node_modules/react/index.js`. */
+const packageInput = (input: string) =>
+  input.slice(input.indexOf(":") + 1).startsWith("node_modules/");
+const sourceMapComment = /\n\/\/# sourceMappingURL=[^\n]*\n?$/;
 const decodeAssetWrapper = Schema.decodeUnknownOption(
   Schema.Struct({ namespace: Schema.String, commonjs: Schema.Boolean }),
 );
@@ -180,13 +184,29 @@ export const browserBuild = (
               return fail();
             outputs.push({ source: entry, path: output, ...(css === undefined ? {} : { css }) });
           }
+          // A chunk built only from installed packages keeps no source map: mapping vendor
+          // code locates nothing in the app, and the maps were most of a large build's assets.
+          const packageChunks = new Set(
+            Object.entries(result.metafile.outputs)
+              .filter(
+                ([file, metadata]) =>
+                  file.endsWith(".js") &&
+                  Object.keys(metadata.inputs).length > 0 &&
+                  Object.keys(metadata.inputs).every(packageInput),
+              )
+              .map(([file]) => path.resolve("/", file)),
+          );
           for (const file of result.outputFiles) {
+            const absolute = path.resolve("/", file.path);
+            if (absolute.endsWith(".map") && packageChunks.has(absolute.slice(0, -4))) continue;
             const relative = relativeOutput(file.path);
             if (relative === undefined) return fail();
             assets.push({
               path: relative,
               contentType: uiContentType(relative),
-              body: file.contents,
+              body: packageChunks.has(absolute)
+                ? new TextEncoder().encode(file.text.replace(sourceMapComment, "\n"))
+                : file.contents,
             });
           }
         });

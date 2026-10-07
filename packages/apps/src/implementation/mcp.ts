@@ -17,7 +17,18 @@ import {
 } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { captureTelemetry } from "@executor-js/telemetry";
-import { Deferred, Effect, Option, Redacted, Ref, Schema, Stream } from "effect";
+import {
+  Clock,
+  Deferred,
+  Effect,
+  Match,
+  Option,
+  Predicate,
+  Redacted,
+  Ref,
+  Schema,
+  Stream,
+} from "effect";
 import {
   FetchHttpClient,
   HttpClient,
@@ -26,32 +37,62 @@ import {
 } from "effect/unstable/http";
 import {
   defaultMcpClientLimits,
+  McpCredentialsUnverified,
   McpError,
+  McpHealthInput,
+  mcpHealthReserveMs,
   McpToolsOptions,
   type McpConnection,
+  type McpHealthCheck,
+  type McpHealthOptions,
 } from "../contracts/mcp.ts";
 import { adaptMcpTools } from "./mcp-tools.ts";
+import { NetworkRefused } from "../contracts/network.ts";
+import { failOnNetworkRefusal } from "./network.ts";
 import { answeredError, mcpClient, mcpJsonSchemaValidator } from "./mcp-client.ts";
 
-/** Safe projection of transport errors. Raw messages can contain credential-bearing URLs. */
-const failure = (phase: McpError["phase"], error: unknown): McpError | ProviderError => {
-  if (Schema.is(ProviderError)(error) || Schema.is(McpError)(error)) return error;
-  const status =
+/**
+ * The client rejects a body that is not JSON with a `SyntaxError`, and a message that does not
+ * match the protocol's schema with a Zod error listing its `issues`.
+ */
+const unreadable = (error: unknown) =>
+  error instanceof SyntaxError ||
+  (error instanceof Error && Predicate.hasProperty(error, "issues") && Array.isArray(error.issues));
+
+/**
+ * Safe projection of client errors. Raw messages can contain credential-bearing URLs. Only a status
+ * the server redirected or failed the request with is kept: the client also reports `-1` for a
+ * response that is not MCP, and the `200` of a web page served where an SSE stream was expected.
+ * A JSON-RPC error the server answered with, kept as `upstream`, or a closed connection, is
+ * `request` without a status.
+ */
+const failure = (
+  phase: McpError["phase"],
+  error: unknown,
+): McpError | ProviderError | NetworkRefused => {
+  if (
+    Schema.is(ProviderError)(error) ||
+    Schema.is(McpError)(error) ||
+    Schema.is(NetworkRefused)(error)
+  )
+    return error;
+  const code =
     error instanceof UnauthorizedError
       ? 401
       : error instanceof StreamableHTTPError || error instanceof SseError
         ? error.code
         : undefined;
-  const provider = status === undefined ? undefined : httpProviderError(status);
-  if (provider !== undefined) return provider;
+  if (code !== undefined && code >= 300 && code <= 599)
+    return httpProviderError(code) ?? new McpError({ phase, reason: "request", status: code });
   const upstream = answeredError(error);
   return new McpError({
     phase,
     reason:
-      error instanceof ProtocolError && error.code === ErrorCode.RequestTimeout
-        ? "timeout"
-        : "request",
-    ...(status === undefined ? {} : { status }),
+      code !== undefined || unreadable(error)
+        ? "invalid_response"
+        : error instanceof ProtocolError && error.code === ErrorCode.RequestTimeout
+          ? "timeout"
+          : "request",
     ...(upstream === undefined ? {} : { upstream }),
   });
 };
@@ -101,7 +142,7 @@ const transportFetch =
   (
     connection: McpConnection,
     telemetry: Effect.Success<typeof captureTelemetry>,
-    rejected: Deferred.Deferred<never, ProviderError>,
+    rejected: Deferred.Deferred<never, ProviderError | NetworkRefused>,
     answered: Ref.Ref<ErrorResponse | undefined>,
   ): FetchLike =>
   (url, init) =>
@@ -117,14 +158,21 @@ const transportFetch =
         // The server directed the client to another origin or embedded credentials in a URL.
         if (target.origin !== connection.url.origin || target.username || target.password)
           return yield* new McpError({ phase: "transport", reason: "invalid_response" });
-        const headers = new Headers(Redacted.value(connection.headers));
-        new Headers(init?.headers).forEach((value, name) => headers.set(name, value));
         const request = yield* Effect.try({
-          try: () => HttpClientRequest.fromWeb(new Request(target, { ...init, headers })),
-          catch: () => failure("transport", undefined),
+          try: () => {
+            const headers = new Headers(Redacted.value(connection.headers));
+            new Headers(init?.headers).forEach((value, name) => headers.set(name, value));
+            return HttpClientRequest.fromWeb(new Request(target, { ...init, headers }));
+          },
+          // The provider's headers cannot form an HTTP request, such as a name with a space.
+          catch: () => new McpError({ phase: "transport", reason: "invalid_input" }),
         });
         const client = yield* HttpClient.HttpClient;
         const response = yield* client.execute(request);
+        // Executor's network refused the request; its reason names the host or credential at fault.
+        yield* failOnNetworkRefusal(response).pipe(
+          Effect.tapError((refused) => Deferred.fail(rejected, refused)),
+        );
         if (response.status < 400)
           return new Response(
             [204, 205, 304].includes(response.status)
@@ -208,7 +256,7 @@ function withClient<A, E>(
     Effect.scoped(
       Effect.gen(function* () {
         const telemetry = yield* captureTelemetry;
-        const rejected = yield* Deferred.make<never, ProviderError>();
+        const rejected = yield* Deferred.make<never, ProviderError | NetworkRefused>();
         const answered = yield* Ref.make<ErrorResponse | undefined>(undefined);
         const pending = new Set<Promise<void>>();
         const { client, transport } = yield* Effect.acquireRelease(
@@ -340,6 +388,65 @@ export const mcpClientEffect = (input: McpToolsOptions, changed?: Effect.Effect<
       failure,
     );
   });
+
+/**
+ * Whether the server refused a check for lacking credentials: a 401, or a 403 that is not rate
+ * limiting, whether it came at initialization or while listing tools.
+ */
+const refusesCredentials = (error: McpError | ProviderError) =>
+  Schema.is(ProviderError)(error) &&
+  Match.value(error.reason).pipe(
+    Match.whenOr("unauthorized", "forbidden", "rejected", () => true),
+    Match.whenOr("rate_limited", "unavailable", () => false),
+    Match.exhaustive,
+  );
+
+/**
+ * Check one account: initialize and read the first page of tools with the account's headers, then
+ * repeat that with no headers on a fresh transport. A refused account fails with its
+ * `ProviderError`, and anything else that stops the first check is an `McpError`; the second never
+ * runs. The check passes only when the server refuses the second, which shows it checked the
+ * credentials. Otherwise it fails with `McpCredentialsUnverified`. Both share one budget, which
+ * ends early enough before the check context's deadline to close the session and report why.
+ */
+export const mcpHealthEffect = (check: McpHealthCheck, options: McpHealthOptions) =>
+  Effect.gen(function* () {
+    const { deadline, timeoutMs, ...parsed } = yield* Schema.decodeUnknownEffect(McpHealthInput)({
+      ...options,
+      accountId: check.account.id,
+      signal: check.signal,
+      deadline: check.deadline,
+    }).pipe(Effect.mapError(() => new McpError({ phase: "connect", reason: "invalid_input" })));
+    const end = Math.min(
+      (yield* Clock.currentTimeMillis) + (timeoutMs ?? defaultMcpClientLimits.timeoutMs),
+      deadline === undefined ? Number.POSITIVE_INFINITY : deadline - mcpHealthReserveMs,
+    );
+    /** What is left of the budget for the next attempt; a timeout once it is spent. */
+    const remaining = Effect.flatMap(Clock.currentTimeMillis, (now) =>
+      end - now >= 1
+        ? Effect.succeed(Math.floor(end - now))
+        : Effect.fail(new McpError({ phase: "transport", reason: "timeout" })),
+    );
+    yield* (yield* mcpClientEffect({ ...parsed, timeoutMs: yield* remaining })).check;
+    // The same server, limits and budget; nothing derived from the account.
+    return yield* remaining.pipe(
+      Effect.flatMap((timeoutMs) =>
+        mcpClientEffect({ url: parsed.url, signal: parsed.signal, timeoutMs }),
+      ),
+      Effect.flatMap((anonymous) => anonymous.check),
+      Effect.matchEffect({
+        onSuccess: () => Effect.fail(new McpCredentialsUnverified({ anonymous: "answered" })),
+        // Executor's network refused the attempt, so the server never answered it.
+        onFailure: (error): Effect.Effect<void, McpCredentialsUnverified | NetworkRefused> =>
+          Schema.is(NetworkRefused)(error)
+            ? Effect.fail(error)
+            : refusesCredentials(error)
+              ? Effect.void
+              : Effect.fail(new McpCredentialsUnverified({ anonymous: error })),
+      }),
+      Effect.withSpan("provider.mcp.anonymous"),
+    );
+  }).pipe(Effect.withSpan("provider.mcp.health"));
 
 /** Discover and compile all tools for connection probes and low-level consumers. */
 export const mcpToolsEffect = (input: McpToolsOptions) =>

@@ -9,7 +9,8 @@
  * app-cache.spec.ts
  * ```
  *
- * The block may instead say `all` or `none`. A pull request without the block runs the full suite.
+ * The block may instead say `none`, or `all` followed by the reason the change needs every
+ * scenario. A pull request without the block fails selection, so every run is a deliberate choice.
  * Each job receives a `--test-name` pattern, or an empty output when none of its scenarios is
  * selected; the job is then skipped.
  *
@@ -31,13 +32,18 @@ const claude = "Claude Code connects";
 const inventoryLoad = "concurrent owners and admins save every account";
 const catalogScale =
   "MCP execute over 7,000 tools|MCP execute pays for a slow app|MCP execute remembers a stalled";
+/**
+ * Flaky on the self-host job: the saved array choice is lost after superseded profile reads.
+ * Skipped until https://github.com/UsefulSoftwareCo/executor-next/issues/1743 is fixed.
+ */
+const flakyProfilePicker = "profile picker keeps scalar and array choices isolated across tabs";
 
 /** Each output feeds one `--test-name` in checks.yml. Full runs use these patterns unchanged. */
 const jobs = {
   local: { target: "local", pattern: `^(?!.*${claude})` },
   "self-host": {
     target: "self-host",
-    pattern: `^(?!.*(?:${claude}|${inventoryLoad}|${catalogScale}))`,
+    pattern: `^(?!.*(?:${claude}|${inventoryLoad}|${catalogScale}|${flakyProfilePicker}))`,
   },
   "self-host-inventory": { target: "self-host", pattern: inventoryLoad },
   "self-host-catalog": { target: "self-host", pattern: catalogScale },
@@ -45,30 +51,46 @@ const jobs = {
   cloud: {
     target: "cloud",
     pattern:
-      "Cloud onboarding|Cloud OAuth callbacks|Cloud product events|Cloud feedback|Cloud tracks an unusable OAuth|app query traces|observability retains|browser decode and startup|optimistic replay failures|private app crash reports|Platform admin impersonation|Cloud reports the framework pin|Cloud deploys fail promptly when the compiler does not answer|refuses every stored state Better Auth refuses|Billing reconciles only while visible|A dashboard read refreshed while in flight|Cloud finishes a slow app's tool listing|Cloud remembers a stalled tool listing",
+      "Cloud onboarding|Cloud OAuth callbacks|Cloud product events|Cloud feedback|Cloud tracks an unusable OAuth|app query traces|observability retains|browser decode and startup|optimistic replay failures|private app crash reports|Platform admin impersonation|Cloud reports the framework pin|Cloud deploys fail promptly when the compiler does not answer|refuses every stored state Better Auth refuses|Billing reconciles only while visible|A dashboard read refreshed while in flight|Cloud finishes a slow app's tool listing|Cloud remembers a stalled tool listing|Cloud MCP session objects|database failure while verifying an API key|Cloud cron wakes the schedule coordinator",
   },
   "cloud-workers": {
     target: "cloud",
     pattern:
       "app Workers stay loaded across credential rotation|workflow runs reuse the app Worker|warm app calls load no build|Cold app Workers reuse a build",
   },
+  // These hold row locks in the shared Cloud database, which would stall other scenarios' SQL.
+  "cloud-locks": { target: "cloud", pattern: "A Better Auth query" },
 } as const satisfies Record<string, { target: typeof Target.Type; pattern: string }>;
 
 const plan = scenariosForSuite("all", "managed");
 const specFiles: ReadonlySet<string> = new Set(plan.map((scenario) => scenario.file));
 const escape = (title: string) => title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-/** `all`, `skip`, or the spec files named in the description's single `e2e` block. */
+const example = "```e2e\ngroups.spec.ts\ninvitation-roles.spec.ts\n```";
+
+/** The full suite with its reason, `skip`, or the spec files named in the single `e2e` block. */
 const requested = (body: string) =>
   Effect.gen(function* () {
     const blocks = [...body.matchAll(/^```e2e[ \t]*\r?\n([\s\S]*?)^```/gm)];
-    if (blocks.length === 0) return "all" as const;
+    if (blocks.length === 0)
+      return yield* new SelectionFailed({
+        message: `The pull request description has no e2e block. Name the spec files that exercise the change, for example:\n${example}\nWrite none when no scenario can observe it, or all with a reason for a cross-cutting change. See AGENTS.md, "Choosing a PR's E2E scenarios".`,
+      });
     if (blocks.length > 1)
       return yield* new SelectionFailed({
         message: "The pull request description has more than one e2e block. Keep one.",
       });
-    const tokens = blocks[0]![1]!.split(/[\s,]+/).filter((token) => token.length > 0);
-    if (tokens.length === 1 && tokens[0] === "all") return "all" as const;
+    const text = blocks[0]![1]!.trim();
+    const all = /^all\b:?\s*([\s\S]*)$/.exec(text);
+    if (all !== null) {
+      const reason = all[1]!.replace(/\s+/g, " ").trim();
+      if (reason === "")
+        return yield* new SelectionFailed({
+          message: `The e2e block says all without a reason. The full suite takes about three times as long as a selection. Name the spec files that exercise the change, for example:\n${example}\nor keep all and say why every scenario is needed, for example "all: changes the lockfile".`,
+        });
+      return { all: reason };
+    }
+    const tokens = text.split(/[\s,]+/).filter((token) => token.length > 0);
     if (tokens.length === 1 && tokens[0] === "none") return [];
     if (tokens.length === 1 && tokens[0] === "skip") return "skip" as const;
     const files = tokens.map((token) => token.replace(/^e2e\/tests\//, ""));
@@ -90,7 +112,7 @@ NodeRuntime.runMain(
     const output = yield* Config.String("GITHUB_OUTPUT").pipe(Config.option);
     const summary = yield* Config.String("GITHUB_STEP_SUMMARY").pipe(Config.option);
 
-    const named = pullRequest === "" ? ("all" as const) : yield* requested(body);
+    const named = pullRequest === "" ? undefined : yield* requested(body);
     if (named === "skip") {
       const above = stackedAbove.split(/\s+/).filter((number) => number.length > 0);
       if (above.length === 0)
@@ -112,7 +134,7 @@ NodeRuntime.runMain(
       return;
     }
     const files =
-      named === "all"
+      named === undefined || "all" in named
         ? undefined
         : new Set([
             ...named,
@@ -147,13 +169,13 @@ NodeRuntime.runMain(
     const report = [
       "## E2E selection",
       "",
-      pullRequest === ""
-        ? "Full suite: this run is not for a pull request."
-        : files === undefined
-          ? "Full suite: the pull request description asks for all, or has no e2e block."
-          : files.size === 0
-            ? "No E2E scenarios: the pull request selects none and changes no spec file."
-            : `Spec files: ${[...files].sort().join(", ")}`,
+      files === undefined
+        ? named !== undefined && "all" in named
+          ? `Full suite: ${named.all}`
+          : "Full suite: this run is not for a pull request."
+        : files.size === 0
+          ? "No E2E scenarios: the pull request selects none and changes no spec file."
+          : `Spec files: ${[...files].sort().join(", ")}`,
       "",
       "| Job | Scenarios |",
       "| --- | --- |",

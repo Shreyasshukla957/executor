@@ -1,5 +1,4 @@
 /** Cloud app source uses the same Git revision contract as native hosts. */
-import { gitSourceStorage } from "@executor-js/app-source";
 import { cloudflareRepositories, type ArtifactsTokens } from "@executor-js/app-source/cloudflare";
 import { Config, Effect, Schema } from "effect";
 import { cachedWorkspaces } from "../implementation/workspace-cache.ts";
@@ -18,8 +17,6 @@ export const cloudAppSources = (tokens: ArtifactsTokens) =>
     const git = cloudflareRepositories(tokens, { accountId, namespace });
     const workspaces = yield* cloudWorkspaceObjects;
     /** Every caller in an execution shares one cache view, so all working-branch writes invalidate it. */
-    return (background: (work: Effect.Effect<void>) => Effect.Effect<boolean>) => {
-      const repositories = cachedWorkspaces(git, workspaces, background);
-      return { repositories, sources: gitSourceStorage(repositories) };
-    };
+    return (background: (work: Effect.Effect<void>) => Effect.Effect<boolean>) =>
+      cachedWorkspaces(git, workspaces, background);
   }).pipe(Effect.orDie);

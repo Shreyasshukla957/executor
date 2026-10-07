@@ -72,9 +72,15 @@ export const sentryBindings = Effect.gen(function* () {
   };
 });
 
+const sourceMapUploads = {
+  api: "SentryCloudSourceMaps",
+  "app-pages": "SentryAppPagesSourceMaps",
+  "mcp-server": "SentryMcpServerSourceMaps",
+} as const;
+
 /** Upload the exact Rolldown artifacts deployed by Alchemy, matched by release and module path. */
 export const uploadCloudSourceMaps = (
-  worker: "api" | "app-pages",
+  worker: keyof typeof sourceMapUploads,
   bundle: Output.Output<unknown>,
 ) =>
   Effect.gen(function* () {
@@ -85,7 +91,7 @@ export const uploadCloudSourceMaps = (
       return;
     const output = yield* Output.stackRef<SentryOutput>("executor-next-sentry");
     yield* Config.Redacted("SENTRY_AUTH_TOKEN");
-    yield* Command.Exec(worker === "api" ? "SentryCloudSourceMaps" : "SentryAppPagesSourceMaps", {
+    yield* Command.Exec(sourceMapUploads[worker], {
       command: `bunx --no-install sentry-cli sourcemaps upload --url-prefix / .generated/sentry-worker/${worker}`,
       env: {
         SENTRY_URL: yield* Config.NonEmptyString("SENTRY_URL"),

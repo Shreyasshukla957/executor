@@ -242,7 +242,9 @@ network in `100.64.0.0/10`, gives the container a fixed address there and maps
 `nexus.example.ts.net` to that address inside the container. `BETTER_AUTH_URL`
 uses that name, and `EXECUTOR_APPS_ALLOW_PRIVATE_FETCH` is unset. After
 first-admin setup, an API key calls the built-in Executor app through `/mcp`. An
-authored app then checks that it cannot fetch the container's private address.
+authored app then checks that Executor refuses the container's private address
+by name, and that the image's public-only network refuses it behind a public
+name mapped to it, which no name check catches.
 The same case points `EXECUTOR_REGISTRY_URL` at a synthetic registry and checks
 that the public app catalog, running in workerd, refuses redirects and reports
 status, invalid-response, forwarded and network failures distinctly.
@@ -740,9 +742,9 @@ own environment.
 
 To verify the installed CLI artifact through the same local scenarios, set
 `EXECUTOR_E2E_LOCAL_ENTRY` to the absolute installed `bin.mjs` path and run
-`bun run e2e:local`. The harness starts that entry from its isolated data directory,
-with synthetic secrets. Pairing, dashboard loading and app deployment/call use
-real HTTP requests against the installed package.
+`bun run e2e:local`. The harness starts that entry from its installed package directory,
+with an isolated data directory and synthetic secrets. Pairing, dashboard loading and
+app deployment/call use real HTTP requests against the installed package.
 
 The first-launch key scenarios also run against an installed entry:
 

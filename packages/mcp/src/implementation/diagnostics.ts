@@ -1,4 +1,6 @@
-import { Option, Schema, SchemaAST } from "effect";
+import { Effect, Option, Schema, SchemaAST } from "effect";
+import { HttpServerResponse } from "effect/unstable/http";
+import { McpSchema } from "effect/unstable/ai";
 import { InputInvalid, mcpFailurePresentation, ToolCallFailed } from "@executor-js/sdk/core";
 import { UserFacingError } from "@executor-js/utils/user-facing-error";
 import {
@@ -38,7 +40,7 @@ const presentation = (error: Error): Option.Option<typeof ApiErrorResponse.Type>
               ? {
                   action: "Check the API's response and the app's OpenAPI document, then retry.",
                   instructions:
-                    "An API the app calls returned a failure its OpenAPI document does not describe, so no response body is shown. Check the API's own logs or status, and whether the document declares this error. Retry safety is not implied; inspect current state with a safe read before repeating the call.",
+                    "An API the app calls failed in a way its OpenAPI document does not describe. The message names the operation's method and templated path, and the response's status, media type and length; the response body is not shown. Check that the path and parameters match the API, the API's own logs or status, and whether the document declares this error. Retry safety is not implied; inspect current state with a safe read before repeating the call.",
                 }
               : tool.value.failure.source === "storage"
                 ? {
@@ -54,15 +56,15 @@ const presentation = (error: Error): Option.Option<typeof ApiErrorResponse.Type>
   }
   const input = Schema.decodeUnknownOption(InputInvalid)(error);
   if (Option.isSome(input)) {
-    // Problems name input paths and expected shapes; supplied values are never included.
+    // Problems name input paths and what the schema expects there; supplied values are never included.
     return Schema.decodeUnknownOption(ApiErrorResponse)({
       code: "InputInvalid",
       status: 422,
       message: `Input failed validation: ${input.value.problems.join("; ")}`.slice(0, 4096),
       recovery: {
-        action: "Fix the listed input fields and call the tool again.",
+        action: "Change the input to the shape each problem expects, then call the tool again.",
         instructions:
-          "The tool did not run. Compare the input with the tool's signature from tools.search before retrying.",
+          "The tool did not run. Each problem names an input path and what that path expects: a type, the values the schema allows, an object's keys (? marks an optional key, ... marks other keys allowed), an unexpected key to remove, or the alternatives a union accepts. For a union, pick one alternative and set the key that tells them apart; the problems after it are for the closest alternative. Nest each field where the tool's input type from tools.search or tools.search.describe places it, then retry.",
       },
     });
   }
@@ -99,6 +101,35 @@ export const diagnostic = (error: Error): string =>
 /** The same presentation as a single readable line, for failures agents read but never parse. */
 export const diagnosticSummary = (error: Error): string =>
   Option.match(presentation(error), { onSome: summary, onNone: () => identifier(error) });
+
+/**
+ * Refuse an MCP HTTP request before protocol dispatch. Clients print the response body after
+ * their own prefix, such as "Error POSTing to endpoint:", so an empty body hides the cause. The
+ * body is a JSON-RPC error without a request ID, carrying the error's summary and presentation.
+ * Its code is -32600, as for the transport's own rejections: the MCP specification defines no
+ * code for a refused request and says new implementations should not use -32000 to -32019.
+ */
+export const refusedMcpRequest = (
+  error: UserFacingError,
+): Effect.Effect<HttpServerResponse.HttpServerResponse> =>
+  Option.match(presentation(error), {
+    onNone: () => Effect.die(new Error(`${error.code} has no valid API presentation`)),
+    onSome: (response) =>
+      Effect.succeed(
+        HttpServerResponse.jsonUnsafe(
+          {
+            jsonrpc: "2.0",
+            id: null,
+            error: {
+              code: McpSchema.INVALID_REQUEST_ERROR_CODE,
+              message: summary(response),
+              data: response,
+            },
+          },
+          { status: response.status },
+        ),
+      ),
+  });
 
 /** CodeMode transports tool errors as messages, including inside agent try/catch.
  * Decode our safe JSON projection back into structured MCP details for uncaught failures.

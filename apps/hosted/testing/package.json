@@ -8,6 +8,7 @@
   "dependencies": {
     "@effect/platform-bun": "https://pkg.pr.new/Effect-TS/effect/@effect/platform-bun@c7d1ffff31a3e2ae0b0b0796b742bddeb797269d",
     "@effect/platform-node": "https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@c7d1ffff31a3e2ae0b0b0796b742bddeb797269d",
+    "@executor-js/dashboard-start": "workspace:*",
     "@executor-js/devtools": "workspace:*",
     "@executor-js/hosted-server": "workspace:*",
     "@executor-js/telemetry": "workspace:*",

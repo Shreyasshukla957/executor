@@ -1,5 +1,7 @@
 import { httpProviderError, graphqlProviderError, accountProviderError } from "./provider-error.ts";
 import { ProviderError } from "../contracts/provider-error.ts";
+import { NetworkRefused } from "../contracts/network.ts";
+import { failOnNetworkRefusal } from "./network.ts";
 /** Discover GraphQL tools live; transport, decoding and cancellation stay in Effect. */
 import { Effect, Redacted, Schema } from "effect";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
@@ -170,6 +172,8 @@ export const graphqlClientEffect = (input: GraphqlToolsOptions) =>
               HttpClientRequest.bodyJsonUnsafe({ query, variables }),
             ),
           );
+          // Executor's network refused the request; its reason names the host or credential at fault.
+          yield* failOnNetworkRefusal(response);
           if (response.status < 200 || response.status >= 300)
             return yield* (
               httpProviderError(response.status, response.headers) ??
@@ -206,7 +210,9 @@ export const graphqlClientEffect = (input: GraphqlToolsOptions) =>
         Effect.mapError((error) =>
           error instanceof ProviderError && options.accountId !== undefined
             ? accountProviderError(error, options.accountId)
-            : error instanceof GraphqlError || error instanceof ProviderError
+            : error instanceof GraphqlError ||
+                error instanceof ProviderError ||
+                error instanceof NetworkRefused
               ? error
               : new GraphqlError({ phase, reason: "request" }),
         ),
@@ -214,7 +220,9 @@ export const graphqlClientEffect = (input: GraphqlToolsOptions) =>
     const discover = request("discover", getIntrospectionQuery()).pipe(
       Effect.flatMap(Schema.decodeUnknownEffect(GraphqlIntrospection)),
       Effect.mapError((error) =>
-        error instanceof GraphqlError || error instanceof ProviderError
+        error instanceof GraphqlError ||
+        error instanceof ProviderError ||
+        error instanceof NetworkRefused
           ? error
           : new GraphqlError({ phase: "discover", reason: "invalid_response" }),
       ),
@@ -354,7 +362,7 @@ export const adaptGraphqlTool = (
 /** Low-level callers can still request a complete invocation-owned tool map. */
 export const graphqlToolsEffect = (
   input: GraphqlToolsOptions,
-): Effect.Effect<GraphqlTools, GraphqlError | ProviderError> =>
+): Effect.Effect<GraphqlTools, GraphqlError | ProviderError | NetworkRefused> =>
   Effect.gen(function* () {
     const client = yield* graphqlClientEffect(input);
     const definitions = yield* client.discover.pipe(Effect.flatMap(graphqlDefinitions));

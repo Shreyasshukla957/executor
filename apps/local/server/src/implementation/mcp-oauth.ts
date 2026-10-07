@@ -26,6 +26,7 @@ import {
   Option,
 } from "effect";
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
+import { UserFacingError } from "@executor-js/utils/user-facing-error";
 import type { ServerConfig } from "../contracts/config.ts";
 import { localRequest, sessionCookie, type LocalAuth } from "./auth.ts";
 
@@ -35,10 +36,22 @@ export class LocalMcpUnauthorized extends Schema.TaggedError<LocalMcpUnauthorize
   {},
 ) {}
 /** Auth database failures stay distinct from invalid credentials. */
-export class LocalMcpAuthUnavailable extends Schema.TaggedError<LocalMcpAuthUnavailable>()(
-  "LocalMcpAuthUnavailable",
-  {},
-) {}
+export const LocalMcpAuthUnavailable = UserFacingError.define({
+  tag: "LocalMcpAuthUnavailable",
+  status: 503,
+  title: "MCP authorization unavailable",
+  description:
+    "Executor could not read or update its local MCP authorization storage, so it could not check MCP credentials.",
+  recovery: {
+    action:
+      "Try again. If this continues, copy the fix prompt into your agent to check Executor’s authorization storage.",
+    instructions:
+      "Inspect the local Executor instance’s MCP authorization database and safe diagnostics. Restore storage access without deleting grants, resetting credentials, or weakening authorization.",
+  },
+  retryable: true,
+});
+/** Parsed LocalMcpAuthUnavailable failure. */
+export type LocalMcpAuthUnavailable = typeof LocalMcpAuthUnavailable.Type;
 const failure = (error: unknown) =>
   isAPIError(error) && [400, 401, 403].includes(error.statusCode)
     ? new LocalMcpUnauthorized()
@@ -209,6 +222,7 @@ export const makeLocalMcpOAuth = (config: ServerConfig, pairing: LocalAuth, cryp
     const requestAddress = Effect.map(HttpServerRequest.HttpServerRequest, (request) =>
       requestedMcpAddress(new URL(request.url, origin)),
     );
+    /** An MCP URL whose elicitation_mode or connection is repeated or unsupported. */
     const invalidAddress = HttpServerResponse.jsonUnsafe(
       { error: "Unsupported elicitation_mode or connection." },
       { status: 400 },
@@ -267,6 +281,7 @@ export const makeLocalMcpOAuth = (config: ServerConfig, pairing: LocalAuth, cryp
       metadata,
       protectedResource,
       challenge,
+      invalidAddress,
       connections,
     };
   });

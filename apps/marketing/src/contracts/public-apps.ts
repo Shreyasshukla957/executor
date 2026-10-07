@@ -1,6 +1,5 @@
 /** Public Apps uses the registry reader without importing dashboard authentication or data. */
-import { remoteRegistry } from "@executor-js/app-registry/client";
-import { PackageName } from "@executor-js/app-registry/contracts";
+import { PackageName, remoteRegistry } from "@executor-js/sdk/core";
 import { Data, Effect, Layer, Option, Schema } from "effect";
 import { Atom } from "effect/unstable/reactivity";
 

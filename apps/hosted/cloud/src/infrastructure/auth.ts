@@ -9,7 +9,7 @@ import { billingLive } from "../implementation/billing.ts";
 import { clearHeroIdentityOnSignOut } from "../implementation/hero-experiment.ts";
 import { recordCloudSignup, recordCloudLogin } from "../implementation/product-analytics.ts";
 import { cloudAuthOptions, cloudAuthSettings } from "../implementation/auth-options.ts";
-/** Native Alchemy auth binding, shared by the HTTP Worker and MCP session objects. */
+/** Native Alchemy auth binding for the HTTP Worker; MCP session objects use `mcp-auth.ts`. */
 import {
   CurrentUsage,
   CurrentUserId,
@@ -17,29 +17,25 @@ import {
   usageFailure,
   Authentication,
   AuthenticationUnavailable,
-  McpAuthentication,
   sessionPrincipal,
   lookupMembership,
   deleteOrganizationRecords,
   lookupOrganizationSlug,
   resolveOrganizationReference,
-  mcpAuthenticationError,
-  mcpConnectionStore,
   ApiAuthentication,
   apiBearerAccess,
-  mcpBearerAccess,
 } from "@executor-js/hosted-server";
 import { betterAuth } from "better-auth";
 import { BetterAuthApiError, isAPIErrorLike } from "@alchemy.run/better-auth";
 import { cloudSessionCookiePrefix } from "../contracts/browser.ts";
 import { RuntimeContext } from "alchemy";
 import { Context, Effect, Layer, Option, Redacted, Schema, type Scope } from "effect";
-import { SqlClient } from "effect/unstable/sql";
-import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
+import { HttpBody, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import type { SendAuthEmail } from "../contracts/email.ts";
 import { cloudSecrets } from "./secrets.ts";
 import { AuthDatabase, appSessionsPerCall, boundAuthAdapter } from "./auth-database.ts";
-import { InvocationDatabase } from "./invocation-database.ts";
+import { invocationSql } from "./invocation-database.ts";
+import { mcpAuthentication } from "./mcp-auth.ts";
 
 /** Bind during initialization; database calls capture the current invocation only. */
 export const cloudAuth = (send: SendAuthEmail) =>
@@ -154,20 +150,8 @@ export const cloudAuth = (send: SendAuthEmail) =>
       Effect.provide(RuntimeContext.phantom),
     );
     // Bearer authentication reads its rows in one statement on the client this invocation
-    // shares with Better Auth and the executor. Building it opens no connection; a malformed
-    // URL is a deployment defect.
-    const invocationDatabase = yield* InvocationDatabase;
-    const withSql = <A, E>(effect: Effect.Effect<A, E, SqlClient.SqlClient>) =>
-      invocationDatabase.pipe(
-        Effect.orDie,
-        Effect.flatMap((services) =>
-          Effect.provideService(
-            effect,
-            SqlClient.SqlClient,
-            Context.get(services, SqlClient.SqlClient),
-          ),
-        ),
-      );
+    // shares with Better Auth and the executor.
+    const withSql = yield* invocationSql;
     const identity = Layer.effect(
       Authentication,
       Effect.gen(function* () {
@@ -221,41 +205,7 @@ export const cloudAuth = (send: SendAuthEmail) =>
         });
       }),
     );
-    const mcpIdentity = Layer.effect(
-      McpAuthentication,
-      Effect.gen(function* () {
-        return McpAuthentication.of({
-          origin: settings.url,
-          authenticate: (headers, mode, organization) =>
-            withSql(mcpBearerAccess(settings.url, { headers, mode, organization })).pipe(
-              Effect.withSpan("auth.authenticate"),
-            ),
-          browserGrant: (headers, id) =>
-            bound.pipe(
-              Effect.flatMap(([instance, bind]) =>
-                Effect.tryPromise({
-                  try: () =>
-                    bind(() => instance.api.getMcpBrowserAccess({ headers, body: { id } })),
-                  catch: mcpAuthenticationError,
-                }),
-              ),
-            ),
-          metadata: nativeCall((instance) => instance.api.getOAuthServerConfig()).pipe(
-            Effect.mapError(() => new AuthenticationUnavailable()),
-          ),
-          connections: mcpConnectionStore((run) =>
-            bound.pipe(
-              Effect.flatMap(([instance, bind]) =>
-                Effect.tryPromise({
-                  try: () => bind(() => run(instance.api)),
-                  catch: (cause) => cause,
-                }),
-              ),
-            ),
-          ),
-        });
-      }),
-    );
+    const mcpIdentity = mcpAuthentication(settings.url, bound, withSql);
     const apiIdentity = Layer.effect(
       ApiAuthentication,
       Effect.gen(function* () {
@@ -290,7 +240,14 @@ export const cloudAuth = (send: SendAuthEmail) =>
       const response = yield* Effect.promise((signal) =>
         callbacks.run({ context, signal }, () => bind(() => instance.handler(web))),
       );
-      return HttpServerResponse.fromWeb(response);
+      if (response.body === null) return HttpServerResponse.fromWeb(response);
+      // Better Auth answers with complete JSON. Sent as a stream, its last byte would wait for
+      // the request's cleanup, including Better Auth queries the request left running.
+      const body = new Uint8Array(yield* Effect.promise(() => response.arrayBuffer()));
+      return HttpServerResponse.setBody(
+        HttpServerResponse.fromWeb(response),
+        HttpBody.uint8Array(body, response.headers.get("content-type") ?? undefined),
+      );
     });
     const handler = observation
       .observe(requestHandler)

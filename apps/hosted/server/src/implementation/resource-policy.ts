@@ -77,9 +77,8 @@ export const applicationAccesses = (apps: readonly AppId[], actor: ResourceAutho
     array(select g.group_id from hosted_app_groups g where g.app_id = p.id order by g.group_id) as groups,
     exists(select 1 from hosted_app_groups g join hosted_group_members m on m.group_id = g.group_id
       where g.app_id = p.id and m.member_id = ${actor.member}) as granted
-    from hosted_app_access p join executor_apps a on a.id = p.id
-    where ${sql.in("p.id", apps)} and p.organization_id = ${actor.organization}
-      and a.owner = ${`organization:${actor.organization}`}`;
+    from hosted_app_access p
+    where ${sql.in("p.id", apps)} and p.organization_id = ${actor.organization}`;
     const policies = yield* Schema.decodeUnknownEffect(Schema.Array(AppPolicy))(rows);
     return policies.map((found) => appAccessOf(found, actor));
   }).pipe(
@@ -126,9 +125,7 @@ export const resourceAuthorityForApp = (
     exists(select 1 from hosted_app_groups g join hosted_group_members gm on gm.group_id = g.group_id
       where g.app_id = p.id and gm.member_id = m.id) as granted
     from member m
-    left join (hosted_app_access p join executor_apps a
-      on a.id = p.id and a.owner = ${`organization:${organization}`})
-      on p.id = ${app} and p.organization_id = m."organizationId"
+    left join hosted_app_access p on p.id = ${app} and p.organization_id = m."organizationId"
     where m."organizationId" = ${organization} and m."userId" = ${user}`;
     const found = yield* Schema.decodeUnknownEffect(Schema.Array(MemberAppPolicy))(rows);
     const row = found[0];
@@ -174,9 +171,8 @@ export const accountAccesses = (accounts: readonly AccountId[], actor: ResourceA
     array(select g.group_id from hosted_account_groups g where g.account_id = p.account_id order by g.group_id) as groups,
     exists(select 1 from hosted_account_groups g join hosted_group_members m on m.group_id = g.group_id
       where g.account_id = p.account_id and m.member_id = ${actor.member}) as granted
-    from hosted_account_access p join executor_accounts a on a.id = p.account_id
-    where ${sql.in("p.account_id", accounts)} and p.organization_id = ${actor.organization}
-      and a.owner = ${`organization:${actor.organization}`}`;
+    from hosted_account_access p
+    where ${sql.in("p.account_id", accounts)} and p.organization_id = ${actor.organization}`;
     const policies = yield* Schema.decodeUnknownEffect(Schema.Array(AccountPolicy))(rows);
     return yield* Effect.forEach(policies, (found) =>
       Effect.gen(function* () {
@@ -263,9 +259,8 @@ export const requireAppUse = (app: App, organization: OrganizationId, user: stri
     const sql = yield* policyDatabase;
     const rows = yield* sql`select m.role from member m
       join hosted_app_access p on p.organization_id = m."organizationId"
-      join executor_apps a on a.id = p.id
       where m."organizationId" = ${organization} and m."userId" = ${user}
-        and a.id = ${app.id} and a.owner = ${app.owner}
+        and p.id = ${app.id}
         and (p.audience = 'everyone'
           or (p.audience = 'private' and p.creator_id = ${user})
           or (p.audience = 'groups' and exists (

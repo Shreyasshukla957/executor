@@ -6,7 +6,8 @@ authentication docs, and ask the user how they sign in when it is unclear. Put
 that method in `provider.ts` ([accounts.md](accounts.md)); never put a
 credential in source. When the service has a safe current-user or account read,
 give the provider a `health` check that calls it ([accounts.md](accounts.md#check-an-account)),
-so users can validate credentials before saving and see which account they connected. Look up exact helper options with `framework.describe`.
+so users can validate credentials before saving and see which account they connected. For an
+MCP server, use [`mcpHealth`](#check-an-mcp-account). Look up exact helper options with `framework.describe`.
 
 | Interface                   | Helper                                                    |
 | --------------------------- | --------------------------------------------------------- |
@@ -34,6 +35,15 @@ withApprovals(await liveOpenapiRouter(options), (tool) =>
 // MCP, HTTP or stdio
 withApprovals(await mcpRouter(options), (tool) =>
   toolAnnotations(tool)?.destructiveHint === true ? always() : undefined,
+);
+```
+
+To ask before every MCP tool the server does not mark read-only, including tools
+with no hints, invert the rule:
+
+```ts
+withApprovals(await mcpRouter(options), (tool) =>
+  toolAnnotations(tool)?.readOnlyHint === true ? undefined : always(),
 );
 ```
 
@@ -72,8 +82,66 @@ OAuth uses `oauth2({ discover: "https://example.com/mcp" })`
 and `Authorization: "Bearer " + account.fields.access_token`.
 API-key methods use a `secrets` field and the header the server documents,
 for example `headers: { "X-API-Key": account.fields.token }`.
+
+When quick add refuses a server, its reason names what the server answered
+without credentials. A 401 with a Bearer challenge and no OAuth metadata means
+a key sent as `Authorization: "Bearer " + ...`; confirm the header in the
+service's documentation. A 403 web page means a firewall refused Executor's
+check, not that a key is needed. A public server that also offers OAuth is
+added without an account; its `provider.ts` keeps the discovered OAuth.
 The factory runs with each configured app's selected account, so different
 accounts can expose different catalogs. Do not keep a global authenticated catalog.
+
+### Check an MCP account
+
+Give an authenticated MCP provider `mcpHealth` from `apps/mcp` as its `health`
+check. It connects to the server with the account's headers, initializes, and
+reads the first page of tools. Then it does the same without any headers, to
+show that the server needs the credentials. No tool runs. Do not check MCP accounts with the
+vendor's REST or GraphQL API: an MCP OAuth token is often valid only for the MCP
+server it was issued for. Do not import `@modelcontextprotocol/sdk` to write
+your own check.
+
+```ts
+import { defineProvider, oauth2 } from "apps";
+import { mcpHealth } from "apps/mcp";
+
+export const url = "https://mcp.example.com/mcp";
+export const headers = (account: { fields: { access_token: string } }) => ({
+  Authorization: "Bearer " + account.fields.access_token,
+});
+
+export const provider = defineProvider({
+  name: "Example",
+  hosts: ["mcp.example.com"],
+  auth: { oauth: oauth2({ discover: url }) },
+  health: (check) => mcpHealth(check, { url, headers: headers(check.account) }),
+});
+```
+
+Pass the check context `health` receives as the first argument. `mcpHealth`
+reads the account, `signal` and `deadline` from it: both checks share the time
+Executor gives the account check and stop early enough to report a server that
+did not answer in time. Use the same `url` and `headers` in `mcpRouter`. Send
+credentials only in `headers`: the check without them uses the same `url`. Do
+not set `timeoutMs` for a longer wait: it can only shorten that time.
+
+With the account's headers, a refused token reports rejected credentials, an
+`insufficient_scope` challenge a missing permission, and 429 or 5xx an
+unavailable service. The check stops there. A server that cannot be reached, or
+answers in a way Executor cannot use, means the check could not verify the
+account. The account form shows why.
+
+When the server accepts the account, the check passes only if the server
+refuses the same requests without credentials (401 or 403, while initializing or
+listing tools). Some servers answer without credentials, so a wrong key would
+pass as well. The check then could not verify the account, and the form says:
+"This MCP server answers without credentials, so Executor can't check this
+account. A refused key will show up when a tool is called." It also could not
+verify the account if the requests without credentials time out or fail in any
+other way, such as 429 or 5xx; the form names that failure. MCP has no standard
+current-user request, so the check reports no account name. Quick-add OAuth apps
+are generated with this check.
 
 Streamable HTTP and legacy SSE are supported. Every discovery/call owns and
 closes its connection. Session-local workflows do not survive separate tool
@@ -206,7 +274,9 @@ object with non-empty `action` and `instructions` strings is also returned as
 or malformed `recovery` is ignored. Other payload fields, headers, and stacks are
 not forwarded.
 Authentication and rate limits keep their existing provider-error handling.
-Unknown, malformed, oversized, or stalled error bodies use the generic failure.
+Unknown, malformed, oversized, or stalled error bodies use the generic failure. It
+names the operation's method and templated path, such as `GET /items/{item}`, and
+the response's status, media type, and declared length, but never its body.
 
 Inside an `execute` program's `catch`, CodeMode exposes only `error.message`.
 For these declared API errors it contains JSON with `code`, `status`,

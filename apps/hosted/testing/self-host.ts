@@ -1,4 +1,4 @@
-/** Explicit local test server. Production's entry point never mounts these auth shortcuts. */
+/** Explicit local test server. Production's entry point never mounts these auth shortcuts or fixtures. */
 import * as BunHttpServer from "@effect/platform-bun/BunHttpServer";
 import * as BunRuntime from "@effect/platform-bun/BunRuntime";
 import * as BunServices from "@effect/platform-bun/BunServices";
@@ -11,6 +11,7 @@ import { selfHostDatabase } from "../self-host/src/database.ts";
 import { selfHostConfiguration } from "../self-host/src/implementation/bootstrap.ts";
 import { devAppName, freePort } from "../../../scripts/dev-host.ts";
 import { developmentSettings, developmentSignIn } from "./development.ts";
+import { accessCheckFixture } from "./access-check-fixture.ts";
 
 /**
  * Zero-config defaults; explicit settings win. The hostname is per checkout so browser
@@ -52,12 +53,16 @@ const command = Command.make("test-self-host", {
             HttpRouter.add("GET", "/api/devtools", development.status),
             HttpRouter.add("POST", "/api/devtools/operator", development.signIn),
             product,
+            accessCheckFixture,
           );
           return HttpRouter.serve(routes, { disableLogger: true }).pipe(
             Layer.provide(
               BunHttpServer.layer({
                 hostname: target.hostname === "[::1]" ? "::1" : "127.0.0.1",
                 port: target.port,
+                // Longer than the dashboard's 10-second render deadline, so a document that
+                // waits for it is not cut off by the listener first.
+                idleTimeout: 30,
               }),
             ),
           );

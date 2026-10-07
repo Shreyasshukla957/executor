@@ -1,6 +1,6 @@
 /** Drive real sign-ins against a loopback issuer that answers with standard and nonstandard errors. */
 import { expect, layer } from "@effect/vitest";
-import { Effect, Schema } from "effect";
+import { Clock, DateTime, Effect, Schema } from "effect";
 import { FetchHttpClient, HttpClient } from "effect/unstable/http";
 import { randomUUID } from "node:crypto";
 import { Actors } from "../support/actors.ts";
@@ -14,11 +14,42 @@ import { scenarios } from "../test-plan.ts";
 import { appsManifest } from "../support/apps-release.ts";
 
 const SignIn = Schema.Struct({ authorizationUrl: Schema.String });
+/** The service's own words: an RFC 6749 error response, or the text of any other error body. */
+const ServiceError = Schema.Union([
+  Schema.Struct({ error: Schema.String, description: Schema.optional(Schema.String) }),
+  Schema.Struct({ body: Schema.String }),
+]);
 const Failure = Schema.Struct({
   _tag: Schema.optional(Schema.String),
   reason: Schema.optional(Schema.String),
-  recovery: Schema.optional(Schema.Struct({ instructions: Schema.String })),
+  message: Schema.optional(Schema.String),
+  recovery: Schema.optional(Schema.Struct({ action: Schema.String, instructions: Schema.String })),
+  serviceError: Schema.optional(ServiceError),
+  retryAfter: Schema.optional(Schema.String),
 });
+/** The connection as an agent reads it through the hosted management API. */
+const Connection = Schema.Struct({
+  state: Schema.Struct({
+    status: Schema.String,
+    failure: Schema.optional(
+      Schema.Struct({
+        at: Schema.String,
+        error: Schema.Struct({
+          ...Failure.fields,
+          cause: Schema.optional(
+            Schema.Struct({
+              stage: Schema.String,
+              status: Schema.optional(Schema.Number),
+              providerError: Schema.optional(Schema.String),
+            }),
+          ),
+        }),
+      }),
+    ),
+  }),
+});
+/** The secret every client the issuer registers authenticates with. */
+const registeredSecret = "synthetic-client-secret";
 const Echo = Schema.Struct({ authorization: Schema.NullOr(Schema.String) });
 
 /** An authorization-code app whose only query presents the account's token to the issuer. */
@@ -48,6 +79,33 @@ layer(HostedLive, { excludeTestServices: true })("OAuth error responses", (it) =
           http = yield* HttpClient.HttpClient;
         const issuer = yield* oauthSetupIssuer;
         const prefix = `/api/organizations/${actors.organization.id}`;
+        const readConnection = (connection: string) =>
+          Effect.gen(function* () {
+            const response = yield* api.request(
+              actors.owner,
+              "GET",
+              `${prefix}/connections/${connection}`,
+            );
+            expect(response.status, JSON.stringify(response.body)).toBe(200);
+            return (yield* body(Connection, response)).state;
+          });
+        /** The service's words stay out of the curated explanation, and no sent secret returns. */
+        const curated = (
+          label: string,
+          failure: typeof Failure.Type,
+          serviceError: typeof ServiceError.Type | undefined,
+        ) => {
+          expect(failure.serviceError, label).toEqual(serviceError);
+          expect(JSON.stringify(failure), label).not.toContain(registeredSecret);
+          const words =
+            serviceError === undefined
+              ? undefined
+              : "body" in serviceError
+                ? serviceError.body
+                : serviceError.description;
+          if (words !== undefined)
+            expect(JSON.stringify([failure.message, failure.recovery]), label).not.toContain(words);
+        };
         const standard = {
           scopes: ["read"],
           includeIdToken: false,
@@ -123,6 +181,7 @@ layer(HostedLive, { excludeTestServices: true })("OAuth error responses", (it) =
             return {
               app,
               profile,
+              connection,
               completed,
               failure: yield* body(Failure, completed),
               exchanged: (yield* issuer.metrics).tokenExchanges - exchanges,
@@ -146,21 +205,32 @@ layer(HostedLive, { excludeTestServices: true })("OAuth error responses", (it) =
           };
           readonly reason: string;
           readonly evidence: string;
+          /** What the person connecting and agents reading the connection see the service say. */
+          readonly serviceError?: typeof ServiceError.Type;
         }> = [
           {
             name: "HTTP 200 invalid_grant",
             tokenError: { status: 200, body: { error: "invalid_grant" } },
             reason: "authorization_code_rejected",
             evidence: "HTTP 200, provider error invalid_grant",
+            serviceError: { error: "invalid_grant" },
           },
           {
+            // The service repeats the client secret Executor sent; it never comes back out.
             name: "HTTP 200 invalid_client",
             tokenError: {
               status: 200,
-              body: { error: "invalid_client", error_description: "PRIVATE_PROVIDER_ERROR" },
+              body: {
+                error: "invalid_client",
+                error_description: `Client secret ${registeredSecret} is not accepted\nfor this client`,
+              },
             },
             reason: "registered_client_incompatible",
             evidence: "HTTP 200, provider error invalid_client",
+            serviceError: {
+              error: "invalid_client",
+              description: "Client secret [redacted] is not accepted for this client",
+            },
           },
           // Services that reject the client with their own code are read as invalid_client, so a
           // client registered in this sign-in is reported as incompatible.
@@ -169,12 +239,14 @@ layer(HostedLive, { excludeTestServices: true })("OAuth error responses", (it) =
             tokenError: { status: 200, body: { error: "incorrect_client_credentials" } },
             reason: "registered_client_incompatible",
             evidence: "HTTP 200.",
+            serviceError: { error: "incorrect_client_credentials" },
           },
           {
             name: "Salesforce invalid_client_id",
             tokenError: { status: 400, body: { error: "invalid_client_id" } },
             reason: "registered_client_incompatible",
             evidence: "HTTP 400.",
+            serviceError: { error: "invalid_client_id" },
           },
           {
             name: "Dropbox invalid_client description",
@@ -184,12 +256,42 @@ layer(HostedLive, { excludeTestServices: true })("OAuth error responses", (it) =
             },
             reason: "registered_client_incompatible",
             evidence: "HTTP 400.",
+            serviceError: { error: "invalid_client: Invalid client_id or client_secret" },
           },
           {
+            // Codes outside RFC 6749 are not recorded as evidence, but the service's own words are shown.
             name: "HTTP 200 nonstandard error",
             tokenError: { status: 200, body: { ok: false, error: "private_nonstandard_code" } },
             reason: "exchange_failed",
             evidence: "HTTP 200.",
+            serviceError: { error: "private_nonstandard_code" },
+          },
+          {
+            // Ahrefs answers some token requests with a JSON array instead of an RFC 6749 error.
+            // Its text is shown as the service's response.
+            name: "HTTP 400 JSON array",
+            tokenError: {
+              status: 400,
+              body: [
+                "Error",
+                [
+                  "InvalidInput",
+                  "invalid input: expected application/json or application/x-www-form-urlencoded body",
+                ],
+              ],
+            },
+            reason: "exchange_failed",
+            evidence: "OAuth exchange stage, HTTP 400.",
+            serviceError: {
+              body: '["Error",["InvalidInput","invalid input: expected application/json or application/x-www-form-urlencoded body"]]',
+            },
+          },
+          {
+            // A service that cannot answer: the callback page says Executor could not reach it.
+            name: "HTTP 503 without a body",
+            tokenError: { status: 503, body: {} },
+            reason: "service_unavailable",
+            evidence: "OAuth exchange stage, HTTP 503.",
           },
           {
             name: "HTTP 401 Basic challenge",
@@ -200,6 +302,7 @@ layer(HostedLive, { excludeTestServices: true })("OAuth error responses", (it) =
             },
             reason: "registered_client_incompatible",
             evidence: "HTTP 401, provider error invalid_client",
+            serviceError: { error: "invalid_client" },
           },
         ];
         for (const scenario of tokenErrors) {
@@ -212,9 +315,172 @@ layer(HostedLive, { excludeTestServices: true })("OAuth error responses", (it) =
           });
           expect(result.failure.recovery?.instructions, scenario.name).toContain(scenario.evidence);
           expect(result.exchanged, scenario.name).toBe(1);
-          const serialized = JSON.stringify(result.completed.body);
-          expect(serialized).not.toContain("PRIVATE_PROVIDER_ERROR");
-          expect(serialized).not.toContain("private_nonstandard_code");
+          curated(scenario.name, result.failure, scenario.serviceError);
+          // The connection keeps the failure, so an agent that issued the link learns what happened.
+          const state = yield* readConnection(result.connection.id);
+          expect(state, scenario.name).toMatchObject({
+            status: "pending",
+            failure: {
+              error: {
+                _tag: "OAuthCompletionFailed",
+                reason: scenario.reason,
+                cause: { stage: "exchange", status: scenario.tokenError.status },
+              },
+            },
+          });
+          expect(state.failure?.error.serviceError, scenario.name).toEqual(scenario.serviceError);
+          expect(state.failure?.error.message, scenario.name).toBe(result.failure.message);
+          if (scenario.tokenError.status === 503) {
+            // A new sign-in has no outcome yet, so the earlier failure no longer describes it.
+            const restarted = yield* api.request(
+              actors.owner,
+              "POST",
+              `${prefix}/connections/${result.connection.id}/oauth/start`,
+              { method: "oauth", label: "Synthetic error account" },
+            );
+            expect(restarted.status, JSON.stringify(restarted.body)).toBe(200);
+            expect(yield* readConnection(result.connection.id)).toEqual({ status: "pending" });
+          }
+        }
+
+        // An HTML error page that repeats the request, here a 429 of about 6 KB. Only its text is
+        // kept, without the code, PKCE verifier or client credentials the request sent, and never
+        // more than 500 characters, wherever it is returned or recorded. The service was reached
+        // and is limiting requests, so the failure says so, with the time its Retry-After names.
+        {
+          const escape = (text: string) =>
+            text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+          const [files, name] = mcp("HTML 429 page");
+          const before = yield* Clock.currentTimeMillis;
+          const result = yield* signIn(files, name, {
+            tokenError: {
+              status: 429,
+              retryAfter: "120",
+              page: (request) =>
+                `<!DOCTYPE html><html><head><title>429 Too Many Requests</title>` +
+                `<style>body { font-family: synthetic-style; }</style>` +
+                `<script>var syntheticScript = "<p>";</script></head><body>` +
+                `<!-- synthetic comment --><h1>Too many requests</h1>` +
+                `<p>Request: ${escape(request.body)}</p>` +
+                `<p>Authorization: ${escape(request.authorization ?? "")}</p>` +
+                `<footer>${"<span>Synthetic footer text.</span> ".repeat(160)}</footer></body></html>`,
+            },
+          });
+          const after = yield* Clock.currentTimeMillis;
+          expect(result.completed.status).toBe(400);
+          expect(result.failure).toMatchObject({
+            _tag: "OAuthCompletionFailed",
+            reason: "rate_limited",
+            message: "The service asked Executor to wait before sending more sign-in requests.",
+          });
+          // Retry-After: 120 is two minutes from the answer, and the copy rounds it up to a minute.
+          const retryAfter = result.failure.retryAfter;
+          if (retryAfter === undefined)
+            return yield* Effect.die("Expected the time the service's Retry-After names");
+          const retryAt = Date.parse(retryAfter);
+          expect(retryAt).toBeGreaterThanOrEqual(before + 120_000);
+          expect(retryAt).toBeLessThanOrEqual(after + 120_000);
+          // "Www, DD Mmm YYYY HH:MM:SS GMT"
+          const utc = DateTime.toDateUtc(
+            DateTime.makeUnsafe(Math.ceil(retryAt / 60_000) * 60_000),
+          ).toUTCString();
+          expect(result.failure.recovery?.action).toBe(
+            `Start the connection again after ${utc.slice(17, 22)} UTC on ${Number(utc.slice(5, 7))} ${utc.slice(8, 11)} ${utc.slice(12, 16)}.`,
+          );
+          expect(result.failure.recovery?.instructions).toContain(
+            `Its Retry-After header asked Executor to wait until ${retryAfter}`,
+          );
+          const serviceError = result.failure.serviceError;
+          if (serviceError === undefined || !("body" in serviceError))
+            return yield* Effect.die(
+              `Expected the page's text, got ${JSON.stringify(serviceError)}`,
+            );
+          const text = serviceError.body;
+          expect(text.startsWith("429 Too Many Requests Too many requests Request: ")).toBe(true);
+          expect(text).toContain("code=[redacted]");
+          expect(text).toContain("code_verifier=[redacted]");
+          expect(text).toContain("Authorization: Basic [redacted]");
+          expect(text).toContain("Synthetic footer text.");
+          for (const markup of ["<", ">", "&amp;", "synthetic-style", "syntheticScript", "comment"])
+            expect(text, markup).not.toContain(markup);
+          expect(text).toHaveLength(500);
+          expect(text.endsWith("…")).toBe(true);
+          curated("HTML 429 page", result.failure, serviceError);
+          const state = yield* readConnection(result.connection.id);
+          expect(state).toMatchObject({
+            status: "pending",
+            failure: {
+              error: {
+                _tag: "OAuthCompletionFailed",
+                reason: "rate_limited",
+                cause: { stage: "exchange", status: 429 },
+                retryAfter: result.failure.retryAfter,
+              },
+            },
+          });
+          expect(state.failure?.error.serviceError).toEqual(serviceError);
+          expect(state.failure?.error.recovery).toEqual(result.failure.recovery);
+        }
+
+        // Registration refused for Executor's callback: the service's own error is returned and
+        // recorded on the connection, beside the stage and status.
+        {
+          const serviceError = {
+            error: "invalid_redirect_uri",
+            description: "Redirect URIs must be on a host this service has approved",
+          };
+          yield* issuer.configure({
+            registrationStatus: 400,
+            registrationError: "invalid_redirect_uri",
+            registrationErrorDescription: serviceError.description,
+          });
+          const [files, name] = mcp("Registration refused");
+          const deployed = yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
+            name,
+            files,
+          });
+          expect(deployed.status, JSON.stringify(deployed.body)).toBe(200);
+          const app = yield* body(Resource, deployed);
+          yield* Effect.addFinalizer(() =>
+            api.request(actors.owner, "DELETE", `${prefix}/apps/${app.id}`).pipe(Effect.orDie),
+          );
+          const profile = yield* createProfile(actors.owner, `${prefix}/apps/${app.id}`);
+          const connection = yield* body(
+            Resource,
+            yield* api.request(actors.owner, "POST", `${prefix}/apps/${app.id}/connections`, {
+              requirement: "service",
+              profile: profile.id,
+            }),
+          );
+          const started = yield* api.request(
+            actors.owner,
+            "POST",
+            `${prefix}/connections/${connection.id}/oauth/start`,
+            { method: "oauth", label: "Synthetic error account" },
+          );
+          expect(started.status, JSON.stringify(started.body)).toBe(422);
+          const failure = yield* body(Failure, started);
+          expect(failure).toMatchObject({
+            _tag: "OAuthSetupFailed",
+            reason: "client_not_approved",
+          });
+          expect(failure.message).toContain("doesn’t accept Executor’s callback URL");
+          curated("Registration refused", failure, serviceError);
+          expect(yield* readConnection(connection.id)).toMatchObject({
+            status: "pending",
+            failure: {
+              error: {
+                _tag: "OAuthSetupFailed",
+                reason: "client_not_approved",
+                cause: { stage: "register", status: 400, providerError: "invalid_redirect_uri" },
+                serviceError,
+              },
+            },
+          });
+          yield* issuer.configure({
+            registrationStatus: 201,
+            registrationErrorDescription: "PRIVATE_PROVIDER_ERROR",
+          });
         }
 
         // Callback errors keep their RFC 6749 §4.1.2.1 meaning, after the RFC 9207 issuer check.
@@ -254,7 +520,21 @@ layer(HostedLive, { excludeTestServices: true })("OAuth error responses", (it) =
             reason: scenario.reason,
           });
           expect(result.exchanged, label).toBe(0);
-          expect(JSON.stringify(result.completed.body)).not.toContain("private_nonstandard_code");
+          // The issuer check runs before the response's `error` is read.
+          const serviceError =
+            scenario.callbackIssuer === undefined ? { error: scenario.error } : undefined;
+          curated(label, result.failure, serviceError);
+          expect(yield* readConnection(result.connection.id), label).toMatchObject({
+            status: "pending",
+            failure: {
+              error: {
+                _tag: "OAuthCompletionFailed",
+                reason: scenario.reason,
+                cause: { stage: "authorize" },
+                ...(serviceError === undefined ? {} : { serviceError }),
+              },
+            },
+          });
         }
 
         // An unsigned ID token is rejected even when the service advertises `none`.

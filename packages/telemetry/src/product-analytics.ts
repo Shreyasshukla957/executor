@@ -4,6 +4,7 @@
  * bounded in-memory batch to PostHog's `/batch/` endpoint and never affects product operations.
  */
 import { Cause, Config, Effect, Exit, Option, Queue, Schema, Semaphore } from "effect";
+import { ApiError } from "@executor-js/utils/api-error";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
 
 /** Feedback text: at least one non-whitespace character and at most 10,000 characters. */
@@ -18,11 +19,12 @@ export const Feedback = Schema.Struct({ message: FeedbackMessage });
 export type Feedback = typeof Feedback.Type;
 
 /** Feedback could not be confirmed: ingestion failed, rejected the batch or timed out. */
-export class FeedbackUnavailable extends Schema.TaggedError<FeedbackUnavailable>()(
-  "FeedbackUnavailable",
-  {},
-  { httpApiStatus: 503 },
-) {}
+export const FeedbackUnavailable = ApiError.define({
+  tag: "FeedbackUnavailable",
+  status: 503,
+  message: "Executor could not confirm that the feedback was received. Try again later.",
+});
+export type FeedbackUnavailable = typeof FeedbackUnavailable.Type;
 
 /**
  * The operator turned analytics off, or this build has no analytics destination. A 4xx status

@@ -11,7 +11,6 @@ import { localScheduleHandlers } from "./schedules.ts";
 import { localMcpApproval } from "./mcp-approvals.ts";
 import { makeLocalMcpOAuth } from "./mcp-oauth.ts";
 import { localMcpConnectionHandlers } from "./mcp-connections.ts";
-import { hostedExecutorOrigin, remoteRegistry } from "@executor-js/app-registry";
 import { localAppManagement } from "./app-management.ts";
 import { runStartupDataSteps } from "@executor-js/app-management/data-steps";
 import { SqlClient } from "effect/unstable/sql";
@@ -20,7 +19,7 @@ import { SqlClient } from "effect/unstable/sql";
 import {
   ExecutorApi,
   WorkflowHost,
-  recoverAppRepositories,
+  RepositoryHost,
   type Executor,
   AccountNotFound,
   AppNotFound,
@@ -30,6 +29,8 @@ import {
   toEffectRuntime,
   executorHandlers,
   webhookCallback,
+  hostedExecutorOrigin,
+  remoteRegistry,
 } from "@executor-js/sdk/core";
 import { filesystemBlobStore, workerdApps } from "@executor-js/sdk/node";
 import {
@@ -51,7 +52,6 @@ import type { HostEgress } from "@executor-js/utils/url-policy";
 import { HttpApiBuilder } from "effect/unstable/httpapi";
 import type { LocalServerOptions } from "../contracts/server.ts";
 import type { ServerConfig } from "../contracts/config.ts";
-import { aesGcmCredentials as credentials } from "@executor-js/sdk/core";
 import { openStorage } from "./storage.ts";
 import { installExecutorApp } from "./executor-app.ts";
 import { localMcp } from "./mcp.ts";
@@ -72,7 +72,6 @@ import { browserTelemetry } from "./telemetry.ts";
 import { webFiles } from "./web.ts";
 import { withHostPipeline } from "@executor-js/dashboard-start/in-process";
 import { localManagementDocument } from "../contracts/management.ts";
-import { gitSourceStorage } from "@executor-js/app-source";
 import { nativeRepositories } from "@executor-js/app-source/node";
 import { feedbackDisabled } from "@executor-js/telemetry/product-analytics";
 import { LocalFeedbackApi } from "../contracts/feedback.ts";
@@ -91,7 +90,6 @@ export const localApi = (
       const path = yield* Path.Path;
       const directory = path.resolve(config.directory);
       const { storage, sql } = yield* openStorage(directory);
-      const credentialStore = yield* credentials(config.encryptionKey, crypto);
       // Node can hook connect, so every host-side fetch re-checks the addresses a name resolves
       // to. The agent lives for this layer's scope, which is the process.
       const httpClient = yield* safeHttpClient(config.urlPolicy);
@@ -120,22 +118,23 @@ export const localApi = (
         ),
       );
       const repositories = nativeRepositories(path.join(directory, "repositories"));
-      const sources = gitSourceStorage(repositories);
       const server = yield* Scope.Scope;
       const evaluation = yield* declarationConfig;
       const executor = yield* createExecutor({
-        // Stale declarations refresh on the server's own lifetime.
-        declarations: makeDeclarationCache(evaluation.limits),
-        toolListings: evaluation.toolListings,
-        background: (work) => Effect.forkIn(work, server).pipe(Effect.as(true)),
-        workflows,
-        webhookOrigin:
-          config.webhookOrigin ?? config.browserOrigin ?? `http://localhost:${config.port}`,
-        storage,
+        database: storage,
+        secret: config.encryptionKey,
+        origin: config.webhookOrigin ?? config.browserOrigin ?? `http://localhost:${config.port}`,
+        git: repositories,
         blobs,
-        sources,
-        credentials: credentialStore,
         runtime,
+        workflows,
+        registry,
+        cache: {
+          memory: makeDeclarationCache(evaluation.limits),
+          toolListings: evaluation.toolListings,
+        },
+        // Stale declarations refresh on the server's own lifetime.
+        background: (work) => Effect.forkIn(work, server).pipe(Effect.as(true)),
         oauth: {
           httpClient,
           clientName: "Executor Local",
@@ -156,12 +155,12 @@ export const localApi = (
       const observed = (source: "mcp" | "api" | "dashboard" | "app_ui") =>
         observeLocalExecutor(executor, analytics, source);
       // Before background work, the Executor app's regeneration and serving; the data lock is held.
-      yield* runStartupDataSteps({ executor, repositories, blobs }, "private_local").pipe(
+      yield* runStartupDataSteps({ executor, blobs }, "private_local").pipe(
         Effect.provideService(SqlClient.SqlClient, sql),
         startupPhase("data-steps"),
       );
       yield* Effect.forkScoped(
-        recoverAppRepositories({ database: storage, sources, blobs }).pipe(
+        executor[RepositoryHost].recover.pipe(
           Effect.catch(() => Effect.logWarning("App repository recovery failed")),
           Effect.repeat(Schedule.spaced("10 seconds")),
         ),
@@ -184,7 +183,7 @@ export const localApi = (
       yield* analytics === undefined
         ? scheduler
         : scheduler.pipe(Effect.provideService(ScheduleObservation, scheduleAnalytics(analytics)));
-      const managed = yield* installExecutorApp(executor, storage, credentialStore, config);
+      const managed = yield* installExecutorApp(executor, config);
       const access = HttpRouter.middleware((httpEffect) =>
         Effect.gen(function* () {
           const request = yield* HttpServerRequest.HttpServerRequest;
@@ -263,7 +262,7 @@ export const localApi = (
       const signIn = yield* appAuthentication(executor, auth, config, crypto);
       const ui = appUi(
         observed("app_ui"),
-        storage,
+        storage.reactivity,
         toEffectRuntime(runtime, blobs),
         config,
         auth,
@@ -312,8 +311,7 @@ export const localApi = (
       ).pipe(Layer.provide(appOriginAccess.layer), Layer.provide(privateResponses.layer));
       const dashboardApi = dashboard(
         observed("dashboard"),
-        storage,
-        credentialStore,
+        storage.reactivity,
         config,
         auth,
         egress,
@@ -329,13 +327,7 @@ export const localApi = (
         config,
         auth,
         managed.app,
-        {
-          executor: api,
-          sources,
-          repositories,
-          registry,
-          blobs,
-        },
+        { executor: api },
         publicSkills,
       );
       const productRoutes = Layer.mergeAll(

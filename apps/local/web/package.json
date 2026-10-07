@@ -16,7 +16,6 @@
   },
   "dependencies": {
     "@effect/atom-react": "https://pkg.pr.new/Effect-TS/effect/@effect/atom-react@c7d1ffff31a3e2ae0b0b0796b742bddeb797269d",
-    "@executor-js/app-registry": "workspace:*",
     "@executor-js/catalog": "workspace:*",
     "@executor-js/dashboard-start": "workspace:*",
     "@executor-js/devtools": "workspace:*",

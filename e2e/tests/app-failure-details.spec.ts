@@ -17,7 +17,11 @@ const BuildFailed = Schema.Struct({
   _tag: Schema.Literal("DeploymentBuildFailed"),
   stage: Schema.String,
   location: Schema.optional(
-    Schema.Struct({ file: Schema.String, line: Schema.optional(Schema.Number) }),
+    Schema.Struct({
+      file: Schema.String,
+      line: Schema.optional(Schema.Number),
+      column: Schema.optional(Schema.Number),
+    }),
   ),
   message: Schema.String,
 });
@@ -88,7 +92,7 @@ layer(HostedLive, { excludeTestServices: true })("App failure details", (it) => 
             files: [...files, appsManifest],
           });
 
-        // The compiler's own error and location reach the deployer.
+        // The compiler's own error and location reach the deployer, with 1-based columns.
         const compile = yield* deploy([
           {
             path: "index.ts",
@@ -101,11 +105,29 @@ export default defineApp({ accounts: {} }, { tools: router({ broken: ) }) });`,
         const compiled = yield* body(BuildFailed, compile);
         expect(compiled).toMatchObject({
           stage: "compile",
-          location: { file: "index.ts", line: 2 },
+          location: { file: "index.ts", line: 2, column: 70 },
         });
-        expect(compiled.message).toContain("index.ts:2:");
+        expect(compiled.message).toContain('index.ts:2:70: Unexpected ")"');
 
-        // A module the bundle cannot load names itself when the app is declared.
+        // Columns count UTF-16 code units, as editors do, after non-ASCII text on the same line:
+        // "é" is one unit and "🙂" two, though they take two and four bytes.
+        const unicode = yield* deploy([
+          {
+            path: "index.ts",
+            content: `import { defineApp, router } from "apps";
+export default defineApp({ accounts: {} }, { tools: router({ "café 🙂": ) }) });`,
+          },
+        ]);
+        yield* evidence.json("unicode-compile-failure.json", unicode.body);
+        expect(unicode.status).toBe(422);
+        const counted = yield* body(BuildFailed, unicode);
+        expect(counted).toMatchObject({
+          stage: "compile",
+          location: { file: "index.ts", line: 2, column: 73 },
+        });
+        expect(counted.message).toContain('index.ts:2:73: Unexpected ")"');
+
+        // An import that no deployed file satisfies fails where it is written.
         const missing = yield* deploy([
           {
             path: "index.ts",
@@ -117,8 +139,39 @@ export default defineApp({ accounts: {} }, { tools: router({ value }) });`,
         yield* evidence.json("missing-module-failure.json", missing.body);
         expect(missing.status).toBe(422);
         const unloaded = yield* body(BuildFailed, missing);
-        expect(unloaded.stage).toBe("declaration");
-        expect(unloaded.message).toContain("not-there.ts");
+        expect(unloaded).toMatchObject({
+          stage: "compile",
+          location: { file: "index.ts", line: 2, column: 23 },
+        });
+        expect(unloaded.message).toContain('index.ts:2:23: Cannot find "./not-there.ts"');
+
+        // A declaration that throws while the Worker loads is located in its own file, and a
+        // value passed where a schema belongs is named.
+        const invalid = yield* deploy([
+          {
+            path: "index.ts",
+            content: `import { defineApp } from "apps";
+import { tools } from "./lib/tools.js";
+export default defineApp({ accounts: {} }, { tools });`,
+          },
+          {
+            path: "lib/tools.ts",
+            content: `import { object, query, router, string } from "apps";
+export const tools = router({
+  search: query({ input: object({ q: string }) }, async () => []),
+});`,
+          },
+        ]);
+        yield* evidence.json("invalid-schema-failure.json", invalid.body);
+        expect(invalid.status).toBe(422);
+        const located = yield* body(BuildFailed, invalid);
+        expect(located).toMatchObject({
+          stage: "declaration",
+          location: { file: "lib/tools.ts", line: 3, column: 26 },
+        });
+        expect(located.message).toContain('The object() field "q" must be a schema');
+        expect(located.message).toContain("Call it, as in string().");
+        expect(located.message).toContain("at lib/tools.ts:3:26");
 
         // An app that throws while its module loads reports its own message at declaration.
         const declaration = yield* deploy([

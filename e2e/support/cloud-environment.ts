@@ -113,6 +113,18 @@ export const startCloudEnvironment = (input: {
       DOCKER_CONFIG: `${directory}/docker-client`,
     };
     yield* fs.makeDirectory(dockerEnv.DOCKER_CONFIG, { recursive: true, mode: 0o700 });
+    // Lets the lock fixture stop and resume one of the database's backends.
+    const postgresContainer = `${directory}/postgres-container.json`;
+    yield* fs.writeFileString(
+      postgresContainer,
+      JSON.stringify({
+        container,
+        dockerHost: dockerEnv.DOCKER_HOST,
+        dockerConfig: dockerEnv.DOCKER_CONFIG,
+      }),
+      { mode: 0o600 },
+    );
+    yield* Effect.addFinalizer(() => fs.remove(postgresContainer).pipe(Effect.orDie));
     yield* fs.writeFileString(
       `${directory}/environment.json`,
       JSON.stringify(

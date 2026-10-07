@@ -137,7 +137,7 @@ export const disconnectAccount = Effect.gen(function* () {
   const { owner, account } = yield* AccountGrants.delete;
   const executor = yield* Effect.flatten(HostedExecutor);
   yield* executor.accounts.get({ owner, account });
-  return yield* executor.accounts.remove({ owner, account });
+  return yield* executor.accounts.remove({ owner, account, bindings: "clear" });
 });
 /** Update the label or description using the owner-filtered SDK primitive. */
 export const updateAccount = (metadata: {

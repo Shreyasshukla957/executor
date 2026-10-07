@@ -122,7 +122,44 @@ Names match their directories. Names are at most 64 characters, descriptions
 
 `githubSkills` resolves `ref` (default `HEAD`) once per call and reads all files
 from that commit. With `cache: ctx.cache`, it keeps each commit's file list, so
-later reads of an unchanged commit skip the file listing. `wellKnownSkills({url, fetch: ctx.fetch, signal: ctx.signal})`
+later reads of an unchanged commit skip the file listing.
+
+A private repository needs a GitHub account. Pass the account and its token;
+the token needs read access to the repository's contents. Declare GitHub's
+hosts so the app holds only a handle and Executor sends the token on each
+request of the read:
+
+```ts
+import { defineApp, defineProvider, dynamicSkills, object, secrets, string } from "apps";
+import { githubSkills } from "apps/skills";
+
+const github = defineProvider({
+  name: "GitHub",
+  hosts: ["github.com", "raw.githubusercontent.com"],
+  auth: { token: secrets({ label: "Token", fields: object({ token: string() }) }) },
+});
+
+export default defineApp({ accounts: { github } }, async (ctx) => ({
+  dynamicSkills: dynamicSkills({
+    list: () =>
+      githubSkills({
+        repo: "example-org/private-skills",
+        path: "skills",
+        account: ctx.accounts.github,
+        token: ctx.accounts.github.fields.token,
+        fetch: ctx.fetch,
+        signal: ctx.signal,
+        cache: ctx.cache,
+      }),
+  }),
+}));
+```
+
+The catalog is cached in that account's scope, so other accounts never read
+it. A token GitHub rejects fails the read naming the account. Without a token,
+a private repository reads as missing.
+
+`wellKnownSkills({url, fetch: ctx.fetch, signal: ctx.signal})`
 loads a site's `/.well-known/agent-skills/index.json`. Its directory index is
 `{skills: [{name, version?, files: ["SKILL.md", "references/example.md"]}]}`.
 Files live beneath the named directory beside that index. Helpers return complete

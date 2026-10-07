@@ -95,6 +95,24 @@ const Completed = Schema.Struct({
   status: Schema.Literal("completed"),
   execution: Schema.Struct({ ok: Schema.Literal(true), value: Schema.Unknown }),
 });
+/** A declared Executor API error, as MCP returns it from a failed Executor app call. */
+const ApiFailure = Schema.Struct({
+  status: Schema.Literal("completed"),
+  execution: Schema.Struct({
+    ok: Schema.Literal(false),
+    error: Schema.Struct({
+      message: Schema.String,
+      response: Schema.Struct({
+        code: Schema.String,
+        status: Schema.Number,
+        message: Schema.String,
+        recovery: Schema.optional(
+          Schema.Struct({ action: Schema.String, instructions: Schema.String }),
+        ),
+      }),
+    }),
+  }),
+});
 
 /** Sign-in is redirects only: no host-owned page renders and nothing says "Opening app…". */
 const expectNoSignInPages = (timeline: ReadonlyArray<Entry>) => {
@@ -217,8 +235,13 @@ layer(HostedLive, { excludeTestServices: true })("Private app pages", (it) => {
               {
                 name: "execute",
                 arguments: {
-                  // Keep the discovery assertion below MCP's output limit as signatures grow.
-                  code: 'const result = await tools.search({ query: "executor", limit: 100 }); return { items: result.items.map(({ path }) => ({ path })) };',
+                  // Every page of matches, so a tool cannot hide on a later page.
+                  code: `const items = [];
+for (let page = await tools.search({ query: "executor", limit: 100 }); ; page = await tools.search(page.next)) {
+  items.push(...page.items.map(({ path }) => ({ path })));
+  if (page.next === null) break;
+}
+return { items };`,
                 },
               },
               undefined,
@@ -236,6 +259,68 @@ layer(HostedLive, { excludeTestServices: true })("Private app pages", (it) => {
         expect(discovered.items.map((item) => item.path)).not.toContain(
           `${tools}.appData.subscribe`,
         );
+      }).pipe(Effect.provide(Layer.mergeAll(McpOAuth.layer, McpClient.layer))),
+    ),
+  );
+  it.effect(scenarios.appUiMcpFailures.title, (context) =>
+    withHostedCase(
+      context,
+      Effect.gen(function* () {
+        const api = yield* Api,
+          actors = yield* Actors;
+        const { tools, client } = yield* mcpSession;
+        const organization = { organization: actors.organization.id };
+        const run = (label: string, code: string) =>
+          client.use(label, (client, signal) =>
+            client.callTool({ name: "execute", arguments: { code } }, undefined, { signal }),
+          );
+        const name = `Address proof ${randomUUID().slice(0, 8)}`;
+        const created = yield* run(
+          "Create an app without deploying it",
+          `return await ${tools}.appManagement.create(${JSON.stringify({ path: organization, body: { name, files } })});`,
+        );
+        const app = yield* Schema.decodeUnknownEffect(App)(
+          (yield* Schema.decodeUnknownEffect(Completed)(created.structuredContent)).execution.value,
+        );
+        yield* Effect.addFinalizer(() =>
+          api
+            .request(
+              actors.owner,
+              "DELETE",
+              `/api/organizations/${actors.organization.id}/apps/${app.id}`,
+            )
+            .pipe(Effect.orDie),
+        );
+        // The app's page has no address until its first deployment, and the error says so.
+        const location = yield* run(
+          "Get the URL of an app that has never been deployed",
+          `return await ${tools}.appUi.location({ path: ${JSON.stringify({ ...organization, app: app.id })} });`,
+        );
+        expect(
+          (yield* Schema.decodeUnknownEffect(ApiFailure)(location.structuredContent)).execution
+            .error,
+        ).toEqual({
+          message:
+            "AppNotDeployed (HTTP 409): The app has no active deployment to load. Recovery: Open Source and deploy the app before using its tools or accounts.",
+          response: {
+            code: "AppNotDeployed",
+            status: 409,
+            message: "The app has no active deployment to load.",
+            recovery: expect.any(Object),
+          },
+        });
+        // A different name with the same generated address names the app that holds it.
+        const taken = yield* run(
+          "Create an app whose name produces an existing app's address",
+          `return await ${tools}.appManagement.create(${JSON.stringify({ path: organization, body: { name: name.toLowerCase().replaceAll(" ", "-"), files } })});`,
+        );
+        const message = `The app “${name}” (${app.id}) already uses the address “${app.slug}”, which this name also produces. Choose a different name, or deploy to that app by its ID.`;
+        expect(
+          (yield* Schema.decodeUnknownEffect(ApiFailure)(taken.structuredContent)).execution.error,
+        ).toEqual({
+          message: `AppSlugTaken (HTTP 409): ${message}`,
+          response: { code: "AppSlugTaken", status: 409, message },
+        });
       }).pipe(Effect.provide(Layer.mergeAll(McpOAuth.layer, McpClient.layer))),
     ),
   );

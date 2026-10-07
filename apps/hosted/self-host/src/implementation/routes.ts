@@ -21,6 +21,9 @@ import {
   ScheduledAuthority,
   ScheduleWakeup,
   hostedOAuthCallback,
+  clientMetadataDocument,
+  clientMetadataDocumentPath,
+  clientMetadataSetting,
   hostedWebhookCallback,
   catalogLive,
   hostedMiddlewareLive,
@@ -93,6 +96,7 @@ export const selfHostRouteMap = <DashboardE, DashboardR>(options: {
         ? worker
         : worker.pipe(Effect.provideService(ScheduleObservation, analytics.schedules));
     }).pipe(Effect.provide(executorServices));
+    const clientMetadata = yield* clientMetadataSetting(auth.origin);
     const addresses = appAddresses(auth.origin, yield* appUiBaseUrl(auth.origin));
     const appUi = hostedAppUi(addresses);
     const mcp = yield* selfHostMcp.pipe(Effect.provide(HttpServer.layerServices));
@@ -102,7 +106,7 @@ export const selfHostRouteMap = <DashboardE, DashboardR>(options: {
       HttpRouter.provideRequest(localSourceFormatter),
       Layer.provide(appUi.dashboard),
       HttpRouter.provideRequest(auth.appSessions),
-      HttpRouter.provideRequest(catalogLive(document.document, egress)),
+      HttpRouter.provideRequest(catalogLive(document.document, egress, clientMetadata)),
       Layer.provide(hostedMiddlewareLive),
       HttpRouter.provideRequest(executorServices),
       Layer.provide(auth.identity),
@@ -142,6 +146,11 @@ export const selfHostRouteMap = <DashboardE, DashboardR>(options: {
       HttpRouter.add("GET", "/api/oauth/callback", hostedOAuthCallback).pipe(
         HttpRouter.provideRequest(auth.identity),
       ),
+      HttpRouter.add(
+        "GET",
+        clientMetadataDocumentPath,
+        clientMetadataDocument(clientMetadata),
+      ).pipe(HttpRouter.provideRequest(auth.identity)),
       mcpRoutes,
       Layer.mergeAll(
         HttpRouter.add("GET", "/api/mcp/approvals/:requestId", mcp.approvals),

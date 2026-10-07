@@ -2,6 +2,7 @@
 import { Effect, Layer, Schema } from "effect";
 import type { HttpApiMiddleware } from "effect/unstable/httpapi";
 import { HttpApi, HttpApiBuilder } from "effect/unstable/httpapi";
+import { appsVersion } from "@executor-js/app-templates";
 import {
   FrameworkDocumentation,
   FrameworkReference,
@@ -82,7 +83,9 @@ export const frameworkHandlers = <I extends HttpApiMiddleware.AnyId, S, Id exten
     Effect.gen(function* () {
       // Read on the first lookup and kept; later lookups never touch I/O.
       const documentation = yield* FrameworkDocumentation;
+      // The apps release this host runs; builds that do not declare it name the same version.
       return handlers
+        .handle("release", () => Effect.succeed({ version: appsVersion }))
         .handle("search", ({ query }) =>
           Effect.gen(function* () {
             const reference = yield* documentation;

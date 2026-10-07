@@ -2,19 +2,20 @@ import { hostedAppCapabilities } from "@executor-js/hosted-server/app-management
 import { executorSelfHostApiDocument } from "../contracts/api.ts";
 import { AppManagementHost } from "@executor-js/app-management";
 import { runStartupDataSteps } from "@executor-js/app-management/data-steps";
-import { hostedExecutorOrigin, remoteRegistry } from "@executor-js/app-registry";
-import { gitSourceStorage } from "@executor-js/app-source";
-import type { RepositoryBackend } from "@executor-js/app-source";
 /** Self-host SDK uses the same PGlite connection as Better Auth. */
 import type { HostEgress } from "@executor-js/utils/url-policy";
 import {
+  createExecutor,
   toEffectRuntime,
   makeExecutorStorage,
   WorkflowHost,
-  recoverAppRepositories,
+  RepositoryHost,
   makeDeclarationCache,
   declarationConfig,
+  hostedExecutorOrigin,
+  remoteRegistry,
   type Executor,
+  type RepositoryBackend,
 } from "@executor-js/sdk/core";
 import {
   HostedExecutor,
@@ -25,9 +26,12 @@ import {
   OrganizationDefaults,
   organizationDefaults,
   lazyHostedApiDocument,
+  clientMetadataSetting,
+  hostedOAuthClientName,
   withExecutorAnalytics,
 } from "@executor-js/hosted-server";
-import { postgresExecutor } from "@executor-js/hosted-server/database";
+import { hostedResourceLifecycle } from "@executor-js/hosted-server/resource-lifecycle";
+import * as BrowserCrypto from "@effect/platform-browser/BrowserCrypto";
 import { HostedAppRuntime } from "@executor-js/hosted-server/app-ui/contracts";
 import { workerdHostHandler } from "@executor-js/sdk/workerd";
 import type { AppRuntime, BlobStorage, WorkflowRuntime } from "@executor-js/sdk/core";
@@ -58,10 +62,7 @@ export const selfHostExecutorServices = <E, R>(
     Effect.gen(function* () {
       const key = yield* Config.Redacted("EXECUTOR_ENCRYPTION_KEY");
       const origin = yield* Config.String("BETTER_AUTH_URL");
-      const clientMetadataUrl = yield* Config.String("EXECUTOR_OAUTH_CLIENT_METADATA_URL").pipe(
-        Config.option,
-        Config.map(Option.getOrUndefined),
-      );
+      const clientMetadata = yield* clientMetadataSetting(origin);
       const storage = yield* makeExecutorStorage({ provider: "postgresql" });
       const evaluation = yield* declarationConfig;
       const server = yield* Scope.Scope;
@@ -72,32 +73,34 @@ export const selfHostExecutorServices = <E, R>(
           Config.withDefault(hostedExecutorOrigin),
         ),
       );
-      const sources = gitSourceStorage(repositories);
-      const executor = yield* postgresExecutor(
-        key,
-        runtime,
+      const executor = yield* createExecutor({
+        database: storage,
+        secret: key,
+        origin,
+        git: repositories,
         blobs,
-        sources,
-        {
+        runtime,
+        workflows,
+        registry,
+        hooks: yield* hostedResourceLifecycle,
+        oauth: {
           httpClient: egress.client,
+          clientName: hostedOAuthClientName,
           urlPolicy: egress.policy,
-          ...(clientMetadataUrl === undefined ? {} : { clientMetadataUrl }),
+          ...(Option.isSome(clientMetadata) ? { clientMetadataUrl: clientMetadata.value.url } : {}),
         },
-        {
-          storage,
-          webhookOrigin: origin,
-          workflows,
-          declarations: makeDeclarationCache(evaluation.limits),
+        cache: {
+          memory: makeDeclarationCache(evaluation.limits),
           toolListings: evaluation.toolListings,
-          // Stale declarations refresh on the server's own lifetime.
-          background: (work) => Effect.forkIn(work, server).pipe(Effect.as(true)),
         },
-      );
+        // Stale declarations refresh on the server's own lifetime.
+        background: (work) => Effect.forkIn(work, server).pipe(Effect.as(true)),
+      }).pipe(Effect.provide(BrowserCrypto.layer));
       yield* Deferred.succeed(ready, executor);
       // The schema is current and nothing serves or builds yet; the caller holds the data lock.
-      yield* runStartupDataSteps({ executor, repositories, blobs }, "private_hosted");
+      yield* runStartupDataSteps({ executor, blobs }, "private_hosted");
       yield* Effect.forkScoped(
-        recoverAppRepositories({ database: storage, sources, blobs }).pipe(
+        executor[RepositoryHost].recover.pipe(
           Effect.catch(() => Effect.logWarning("App repository recovery failed")),
           Effect.repeat(Schedule.spaced("10 seconds")),
         ),
@@ -111,7 +114,6 @@ export const selfHostExecutorServices = <E, R>(
       const initialize = yield* organizationDefaults(
         executor,
         origin,
-        storage,
         lazyHostedApiDocument(() => executorSelfHostApiDocument(origin)).document,
         // Password registration is admitted locally; self-host does not send verification mail.
         false,
@@ -131,11 +133,6 @@ export const selfHostExecutorServices = <E, R>(
           AppManagementHost,
           Effect.succeed({
             executor: withExecutorAnalytics(executor),
-            sources,
-            repositories,
-            registry,
-            blobs,
-            publisher: undefined,
             access: yield* hostedAppCapabilities,
           }),
         ),

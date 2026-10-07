@@ -90,12 +90,13 @@ const message = Match.type<AppUiError>().pipe(
         ),
         Match.exhaustive,
       ),
-    OrganizationForbidden: () => "You do not have access to this team.",
-    UiForbidden: () => "You do not have access to this app.",
-    UiFailed: (error) =>
-      error.reason === "account_required"
-        ? "Choose this app’s accounts before opening it."
-        : "The app page is unavailable. Check its deployment and the server’s app URL settings.",
+    OrganizationForbidden: () => "You do not have access to this app.",
+    AppNotFound: () => "This app no longer exists.",
+    AppNotDeployed: () => "Deploy this app before opening its page.",
+    DeploymentNotFound: () => "This app’s deployment is no longer available. Reload the app.",
+    StorageError: () => "Executor could not read this app. Try again.",
+    AppUiUnavailable: () =>
+      "The app page is unavailable. Check its deployment and the server’s app URL settings.",
     Unauthorized: () => "Your session ended. Sign in again.",
     Forbidden: () => "Open Executor from its configured address.",
     AuthenticationUnavailable: () => "Sign-in is temporarily unavailable.",

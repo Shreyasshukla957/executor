@@ -217,7 +217,7 @@ layer(TestLive, { excludeTestServices: true })("Local skills", (it) => {
               items: expect.arrayContaining([
                 expect.objectContaining({
                   path: expect.stringContaining("appProfiles.create"),
-                  signature: expect.stringContaining("idempotencyKey"),
+                  input: expect.stringContaining("idempotencyKey"),
                 }),
               ]),
             },

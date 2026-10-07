@@ -40,6 +40,17 @@ export interface AppCache {
   readonly forAccount: (account: { readonly id: string }) => AppCache;
 }
 
+/**
+ * A credential a remote read sends, and the account it belongs to. A public source takes neither.
+ * A credential comes only with its account, so the read is cached in that account's scope.
+ */
+export type AccountCredential<Credential extends object> =
+  | ({ readonly account?: undefined } & { readonly [Field in keyof Credential]?: undefined })
+  | ({
+      /** The selected account, as `accounts.<slot>` provides it. */
+      readonly account: { readonly id: string };
+    } & Credential);
+
 /** Trusted storage and background ownership; never accepted from request JSON. */
 export interface HostCache {
   readonly transport: CacheTransport;

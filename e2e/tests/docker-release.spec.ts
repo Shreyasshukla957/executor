@@ -522,22 +522,32 @@ visit("/app/data/hosted.pglite");process.stdout.write(hash.digest("hex"));`,
                 `
 const http = require("node:http");
 const net = require("node:net");
-const hosts = [];
+const requests = [];
 let blockedConnections = 0;
 net.createServer(socket => { blockedConnections++; socket.destroy(); }).listen(8092, "::");
 http.createServer((request, response) => {
   response.setHeader("content-type", "application/json");
-  if (request.url === "/stats") return response.end(JSON.stringify({ hosts, blockedConnections }));
-  hosts.push(request.headers.host);
+  if (request.url === "/stats") return response.end(JSON.stringify({ requests, blockedConnections }));
+  requests.push(request.method + " " + request.headers.host + request.url);
   if (request.url === "/redirect") {
     response.writeHead(302, { location: "https://blocked.example.test:8092/mcp" }).end();
     return;
   }
-  // A public MCP server: anonymous initialization succeeds, so quick add needs no account.
-  response.end(JSON.stringify({
-    jsonrpc: "2.0", id: 1,
-    result: { protocolVersion: "2025-11-25", capabilities: { tools: {} }, serverInfo: { name: "Release network fixture", version: "1.0.0" } }
-  }));
+  if (request.method !== "POST" || request.url !== "/mcp") return response.writeHead(404).end();
+  // A public MCP server: anonymous initialization and tool listing succeed, so quick add needs
+  // no account. Each answer echoes its request's id, as JSON-RPC requires.
+  let body = "";
+  request.on("data", chunk => { body += chunk; });
+  request.on("end", () => {
+    const message = JSON.parse(body);
+    if (message.id === undefined) return response.writeHead(202).end();
+    response.end(JSON.stringify({
+      jsonrpc: "2.0", id: message.id,
+      result: message.method === "initialize"
+        ? { protocolVersion: "2025-11-25", capabilities: { tools: {} }, serverInfo: { name: "Release network fixture", version: "1.0.0" } }
+        : { tools: [] }
+    }));
+  });
 }).listen(8091, "::");
 `,
               ]),
@@ -554,7 +564,7 @@ http.createServer((request, response) => {
                 Schema.decodeUnknownEffect(
                   Schema.fromJsonString(
                     Schema.Struct({
-                      hosts: Schema.Array(Schema.String),
+                      requests: Schema.Array(Schema.String),
                       blockedConnections: Schema.Number,
                     }),
                   ),
@@ -593,9 +603,15 @@ http.createServer((request, response) => {
               });
             }
             const observed = yield* stats;
-            expect(observed.hosts).toEqual([
-              "allowed.example.test:8091",
-              "allowed.example.test:8091",
+            // The allowed import's anonymous check, then one request to the redirect that was
+            // refused without following it. The blocked host was never contacted.
+            expect(observed.requests).toEqual([
+              "POST allowed.example.test:8091/mcp",
+              "POST allowed.example.test:8091/mcp",
+              "POST allowed.example.test:8091/mcp",
+              "GET allowed.example.test:8091/.well-known/oauth-protected-resource/mcp",
+              "GET allowed.example.test:8091/.well-known/oauth-protected-resource",
+              "POST allowed.example.test:8091/redirect",
             ]);
             expect(observed.blockedConnections).toBe(0);
           }
@@ -911,6 +927,8 @@ it.live("released image serves management tools at a tailnet origin with private
       const containerPort = 8080;
       const hostname = "nexus.example.ts.net";
       const origin = `http://${hostname}:${containerPort}`;
+      // A public-looking name for the same private address, which no name check catches.
+      const disguised = "intranet.example.com";
       const port = yield* Effect.scoped(
         Effect.gen(function* () {
           for (let candidate = 4431; candidate <= 4439; candidate++) {
@@ -958,6 +976,8 @@ it.live("released image serves management tools at a tailnet origin with private
             address,
             "--add-host",
             `${hostname}:${address}`,
+            "--add-host",
+            `${disguised}:${address}`,
             "--publish",
             `127.0.0.1:${port}:${containerPort}`,
             // EXECUTOR_APPS_ALLOW_PRIVATE_FETCH stays unset: the default is under test.
@@ -1134,11 +1154,26 @@ http.createServer((request, response) => {
           },
         ],
       });
+      // Each failure states its cause in a message Executor derives from the reason.
       const failures = {
-        "@fixture/moved": { reason: "status", status: 302 },
-        "@fixture/down": { reason: "status", status: 503 },
-        "@fixture/garbled": { reason: "invalid-response" },
-        "@fixture/missing": { reason: "not-found" },
+        "@fixture/moved": {
+          reason: "status",
+          status: 302,
+          message: "The public app registry responded with HTTP 302.",
+        },
+        "@fixture/down": {
+          reason: "status",
+          status: 503,
+          message: "The public app registry responded with HTTP 503.",
+        },
+        "@fixture/garbled": {
+          reason: "invalid-response",
+          message: "The public app registry returned a response Executor could not read.",
+        },
+        "@fixture/missing": {
+          reason: "not-found",
+          message: "The public app listing or its selected commit does not exist.",
+        },
       };
       for (const [name, failure] of Object.entries(failures))
         expect(yield* catalog(name), name).toEqual({
@@ -1154,7 +1189,11 @@ http.createServer((request, response) => {
       yield* run(["kill", appRegistry]);
       expect(yield* catalog("@fixture/example"), "an unreachable registry").toEqual({
         status: 400,
-        body: { _tag: "RegistryError", reason: "network" },
+        body: {
+          _tag: "RegistryError",
+          reason: "network",
+          message: "Executor could not reach the public app registry. Try again.",
+        },
       });
       const deployed = yield* request(
         `${prefix}/apps/deploy`,
@@ -1166,8 +1205,8 @@ http.createServer((request, response) => {
               content: `import { defineApp, query, object, string, router } from "apps";
 export default defineApp({ accounts: {} }, async () => ({
   tools: router({
-    probe: query({ input: object({ url: string() }) }, async (_ctx, input) => {
-      try { return "reached:" + (await fetch(input.url)).status; }
+    probe: query({ input: object({ url: string() }) }, async (ctx, input) => {
+      try { return "reached:" + (await ctx.fetch(input.url)).status; }
       catch (error) { return "refused:" + (error instanceof Error ? error.message : String(error)); }
     }),
   })
@@ -1276,7 +1315,17 @@ export default defineApp({ accounts: {} }, async () => ({
       // The same listener on its private address is not the dashboard origin.
       const refused = yield* probe(`http://${address}:${containerPort}/health`);
       expect(refused.ok).toBe(true);
-      expect(refused.value, "private app fetch stays off by default").toMatch(/^refused:/);
+      // Executor refuses the address by name, before the public-only network would.
+      expect(refused.value, "private app fetch stays off by default").toMatch(
+        /^refused:Executor refused a request to 100\.64\.[\d.]+:\d+: apps on this instance can reach only public addresses/,
+      );
+      // A public name passes Executor's check, and the public-only network refuses its address.
+      const resolved = yield* probe(`http://${disguised}:${containerPort}/health`);
+      expect(resolved.ok).toBe(true);
+      expect(resolved.value, "the network refuses a public name's private address").toMatch(
+        /^refused:/,
+      );
+      expect(resolved.value).not.toMatch(/^refused:Executor refused/);
       expect(yield* probe(`${origin}/health`), "authored apps reach the dashboard origin").toEqual({
         ok: true,
         value: "reached:200",
@@ -1293,7 +1342,8 @@ type Probe = Effect.Effect<{ readonly isolate: string; readonly calls: number },
  * workerd binding. A positive value bounds the app Workers kept loaded, an unset value applies the
  * default of 32 and an invalid value stops the server before it starts. Each probe app reports an
  * identifier from its module state, so a Worker that was unloaded and loaded again reports a new
- * identifier and no earlier calls.
+ * identifier and no earlier calls. The limit also counts the built-in Executor app's Worker, so
+ * the probes start only after its background setup has finished.
  */
 it.live(
   "released image keeps at most EXECUTOR_APP_WORKERS app Workers loaded",
@@ -1427,6 +1477,36 @@ it.live(
               yield* request("/api/auth/organization/list", undefined, cookie),
             );
             const prefix = `/api/organizations/${organization.id}`;
+            // Setup installs the built-in Executor app and the owner's profile of it in the
+            // background. That profile's setup loads the app's Worker, which under a low limit
+            // unloads an idle probe Worker, so it must finish before the probes are deployed.
+            const executorProfiles = yield* request(`${prefix}/inventory`, undefined, cookie).pipe(
+              Effect.flatMap((response) =>
+                json(
+                  Schema.Struct({
+                    apps: Schema.Array(Schema.Struct({ id: Schema.String, slug: Schema.String })),
+                    profiles: Schema.Array(
+                      Schema.Struct({ app: Schema.String, status: Schema.String }),
+                    ),
+                  }),
+                  response,
+                ),
+              ),
+              Effect.flatMap(({ apps, profiles }) => {
+                const executor = apps.find((app) => app.slug === "executor");
+                const setup =
+                  executor === undefined
+                    ? []
+                    : profiles.filter((profile) => profile.app === executor.id);
+                return setup.length === 0 || setup.some((profile) => profile.status === "pending")
+                  ? Effect.fail(new Error("Executor app setup has not finished"))
+                  : Effect.succeed(setup);
+              }),
+              Effect.retry({ schedule: Schedule.spaced("200 millis"), times: 150 }),
+            );
+            // A profile that is not ready retries its setup later and loads the Worker again.
+            for (const profile of executorProfiles)
+              expect(profile.status, "the built-in Executor app is set up").toBe("ready");
             const probes: Array<Probe> = [];
             for (let index = 0; index < apps; index++) {
               const deployed = yield* request(

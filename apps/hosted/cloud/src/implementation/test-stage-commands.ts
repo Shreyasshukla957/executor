@@ -7,6 +7,8 @@ import { TestStageSlug, testStagePrefix } from "../infrastructure/stage.ts";
 import {
   canDeployTestStage,
   isTestStageDue,
+  stagesToEvict,
+  testStageLimit,
   TestStageLease,
   testStageDeployMilliseconds,
   testStageLifetimeMilliseconds,
@@ -149,6 +151,19 @@ const operation = (name: "deploy" | "plan") =>
             return yield* failure(
               "A preview's database and retention cannot change on redeploy. Use a new slug.",
             );
+          // A new stage replaces the oldest ones beyond the limit, before it creates resources.
+          if (existing === undefined)
+            for (const stage of stagesToEvict(yield* admin.list, input.slug)) {
+              yield* Console.log(
+                `${name === "deploy" ? "Removing" : "Deploying will remove"} the oldest test stage, ${stage.slug} (${stage.owner}), to stay within ${testStageLimit}.`,
+              );
+              if (name === "deploy")
+                yield* destroy(stage.slug, false).pipe(
+                  Effect.catch(() =>
+                    Console.error(`Could not remove ${stage.slug}; deploying anyway.`),
+                  ),
+                );
+            }
           const lease =
             name === "deploy"
               ? yield* admin.reserve(metadata)

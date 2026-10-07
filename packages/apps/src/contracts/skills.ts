@@ -1,5 +1,6 @@
 /** Portable Agent Skills returned by an app factory or loaded from published files. */
 import { Schema } from "effect";
+import { ApiError } from "@executor-js/utils/api-error";
 /** Canonical resource path within one skill. */
 export const SkillFilePath = Schema.NonEmptyString.check(
   Schema.makeFilter(
@@ -66,10 +67,23 @@ export const AppSkillSource = Schema.Struct({
 });
 export type AppSkillSource = typeof AppSkillSource.Type;
 
+const skillDefinitionFailures = {
+  files: (file: string) =>
+    `The skill files of “${file}” are invalid: each needs a unique relative path, text content and a SKILL.md document.`,
+  directory: (file: string) =>
+    `“${file}” is not a valid skill directory. Skill directory names use lowercase letters and digits separated by single hyphens.`,
+  "missing-document": (file: string) => `“${file}” is missing.`,
+  frontmatter: (file: string) =>
+    `“${file}” must start with valid YAML frontmatter between --- lines.`,
+  metadata: (file: string) =>
+    `The frontmatter of “${file}” needs a valid name and description within the Agent Skills limits.`,
+  "name-mismatch": (file: string) => `The name in “${file}” does not match its skill directory.`,
+} as const;
 /** Invalid selected skill files fail the load. Errors identify the file without disclosing its contents. */
-export class SkillDefinitionInvalid extends Schema.TaggedError<SkillDefinitionInvalid>()(
-  "SkillDefinitionInvalid",
-  {
+export const SkillDefinitionInvalid = ApiError.define({
+  tag: "SkillDefinitionInvalid",
+  status: 400,
+  fields: {
     file: SkillFilePath,
     reason: Schema.Literals([
       "files",
@@ -80,8 +94,9 @@ export class SkillDefinitionInvalid extends Schema.TaggedError<SkillDefinitionIn
       "name-mismatch",
     ]),
   },
-  { httpApiStatus: 400 },
-) {}
+  message: ({ file, reason }) => skillDefinitionFailures[reason](file),
+});
+export type SkillDefinitionInvalid = typeof SkillDefinitionInvalid.Type;
 
 /** One evaluated catalog cannot contain ambiguous names. */
 export const AppSkills = Schema.Array(AppSkillSource).check(
@@ -138,14 +153,28 @@ export interface SkillCacheOptions {
   readonly staleFor?: import("effect").Duration.Input;
 }
 /**
- * A public GitHub repository and an optional immutable commit, tag or branch. With a cache, a
- * branch or tag is resolved again when the catalog refreshes, and each commit's file list is kept.
+ * Whose access reads the repository. A public repository needs neither field. A private one takes
+ * a GitHub account and its token, sent on every request of this read. The token comes only with
+ * its account, so the catalog is cached in that account's scope and failures name the account.
  */
-export interface GitHubSkillsOptions extends SkillTransport, SkillCacheOptions {
-  readonly repo: string;
-  readonly path?: string;
-  readonly ref?: string;
-}
+export type GitHubSkillsAccount = import("./cache.ts").AccountCredential<{
+  /**
+   * The account's token or its handle, such as `account.fields.token`. Its provider declares
+   * hosts `github.com` and `raw.githubusercontent.com`, so app code never holds the value.
+   */
+  readonly token: string;
+}>;
+/**
+ * A GitHub repository and an optional immutable commit, tag or branch. With a cache, a branch or
+ * tag is resolved again when the catalog refreshes, and each commit's file list is kept.
+ */
+export type GitHubSkillsOptions = SkillTransport &
+  SkillCacheOptions &
+  GitHubSkillsAccount & {
+    readonly repo: string;
+    readonly path?: string;
+    readonly ref?: string;
+  };
 /** A published directory index, including its listed skill documents and text references. */
 export interface WellKnownSkillsOptions extends SkillTransport, SkillCacheOptions {
   readonly url: string;

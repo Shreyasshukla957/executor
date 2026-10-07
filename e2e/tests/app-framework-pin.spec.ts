@@ -20,7 +20,7 @@ import { Api, body, type Session } from "../support/api.ts";
 import { Actors } from "../support/actors.ts";
 import { HostedLive, withCase, withHostedCase } from "../support/case.ts";
 import { Target } from "../support/platform.ts";
-import { Workspace } from "../support/app-authoring.ts";
+import { Committed, Workspace } from "../support/app-authoring.ts";
 import { serverControl } from "../support/server-control.ts";
 import {
   dataStepPasses,
@@ -130,7 +130,7 @@ const hostedSurface = (actor: Session, organization: string): Surface => {
           expected: source.revision.commit,
           files,
           message,
-        }).pipe(Effect.flatMap(decoded(Workspace)));
+        }).pipe(Effect.flatMap(decoded(Committed)));
       }),
     framework: (target) =>
       request("POST", `/apps/${target.id}/tools/call`, {
@@ -195,7 +195,7 @@ const localSurface = (session: Session, apiKey: string): Surface => {
           expected: source.revision.commit,
           files,
           message,
-        }).pipe(Effect.flatMap(decoded(Workspace)));
+        }).pipe(Effect.flatMap(decoded(Committed)));
       }),
     framework: (target) =>
       request("POST", "/v1/tools/call", {

@@ -41,8 +41,11 @@ Inside the program, app tools are ordinary async functions:
 return await tools.search({ query: "vercel projects" });
 ```
 
-Search returns the exact callable path and the TypeScript signature for each
-tool. The paths look like this:
+Search returns a page of tools: each one's exact callable path, the first line
+of its description and its input type. Each app and profile is listed once.
+`next` continues to the following page, and
+`tools.search.describe({ paths })` returns a tool's whole signature, including
+its output type. The paths look like this:
 
 ```js
 const projects = await tools.vercel.listProjects({});

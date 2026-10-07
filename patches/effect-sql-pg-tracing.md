@@ -8,7 +8,8 @@ transaction therefore includes an unexplained interval before its first query.
 driver's existing network connection and authentication effect. It ends when
 PostgreSQL sends `ReadyForQuery`, or on failure or interruption. It adds no URL,
 credentials, query text, or connection attributes. Password/config resolution
-and later query execution are outside this span.
+and later query execution are outside this span. The span records its
+`db.connect.attempt`, starting at 1.
 
 The patch changes both source and distributed JavaScript. It preserves lazy
 pool acquisition, reuse, dead-connection replacement, idle release, and scoped
@@ -22,6 +23,20 @@ Its `bun patch --commit` command crashes for this URL dependency, so this patch
 and the corresponding text lock entry were generated directly. Keep the key
 aligned with the package URL when upgrading, and remove this patch if upstream
 adds equivalent connection tracing.
+
+## Connection retries
+
+The patch also adds a `connectRetries` option (default `0`) to `PgConnection`
+and `PgClient` configuration. A connection attempt that fails with a retryable
+reason, such as a transport error or `connectTimeout`, is made again up to that
+many times. Each attempt has its own `connectTimeout`. Nothing has been sent on
+a connection before `ReadyForQuery`, so this never repeats a statement; query
+failures are not retried. Authentication failures are not retryable. A retried
+attempt's span also records the previous failure's fixed driver message as
+`db.connect.retry_reason`, for example `PgConnection: Connection timed out`;
+server error text stays out of the span. Cloud's Worker event and Durable
+Object pools set one retry (see `cloudDatabasePool` in
+`apps/hosted/cloud/src/infrastructure/database.ts`).
 
 ## Statement wire timing
 

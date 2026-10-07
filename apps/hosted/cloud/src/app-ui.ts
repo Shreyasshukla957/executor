@@ -16,7 +16,7 @@ import { cloudAnalytics } from "./implementation/product-analytics.ts";
 import { postHogBindings } from "./infrastructure/posthog.ts";
 import { cloudAppSessions } from "./infrastructure/app-sessions.ts";
 import { cloudAuthDatabase } from "./infrastructure/auth-database.ts";
-import { cloudExecutor } from "./infrastructure/executor.ts";
+import { cloudProduct } from "./infrastructure/product.ts";
 import { cloudArtifactsTokensLive } from "./infrastructure/artifacts-tokens.ts";
 import { sentryBindings } from "./infrastructure/sentry.ts";
 import { cloudOrigin } from "./infrastructure/stage.ts";
@@ -73,7 +73,7 @@ export default class AppPages extends Cloudflare.Worker<AppPages>()(
     const reportErrors = yield* cloudSentry;
     const analytics = yield* cloudAnalytics;
     const appSessions = yield* cloudAppSessions;
-    const executor = yield* cloudExecutor(
+    const executor = yield* cloudProduct(
       yield* appDataSupervisors,
       yield* cloudArtifactsTokensLive,
     );

@@ -7,7 +7,7 @@ import {
   type Publication,
   type PublicationSnapshot,
   type RegistryError,
-} from "@executor-js/app-registry/contracts";
+} from "@executor-js/sdk/core";
 import {
   publicApps,
   publicApp,

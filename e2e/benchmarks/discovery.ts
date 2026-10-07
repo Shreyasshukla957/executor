@@ -8,6 +8,13 @@ import { McpClient } from "../support/mcp-client.ts";
 import { Evidence } from "../support/evidence.ts";
 import { appsManifest } from "../support/apps-release.ts";
 
+/** Count the synthetic tools across every page of an empty search. */
+const searchAllCode = `let matches = 0;
+for (let page = await tools.search({ limit: 2000 }); ; page = await tools.search(page.next)) {
+  matches += page.items.filter((item) => item.description.includes("Synthetic discovery tool")).length;
+  if (page.next === null) break;
+}
+return { matches };`;
 const source = `import {defineApp,defineProvider,secrets,defineDatabase,table,query,mutation,object,string,array, router} from "apps";
 const service=defineProvider({name:"Synthetic discovery",auth:{key:secrets({label:"Key",fields:object({token:string()})})}});
 const database=defineDatabase({records:table({key:string(),value:string()})});
@@ -77,7 +84,7 @@ export const discoveryBenchmark = Effect.gen(function* () {
           {
             name: "execute",
             arguments: {
-              code: 'return {matches: (await tools.search({limit:2000})).items.filter(item => item.description.includes("Synthetic discovery tool")).length};',
+              code: searchAllCode,
             },
           },
           undefined,
@@ -204,7 +211,7 @@ export const discoveryBenchmark = Effect.gen(function* () {
               {
                 name: "execute",
                 arguments: {
-                  code: 'return {matches: (await tools.search({limit:2000})).items.filter(item => item.description.includes("Synthetic discovery tool")).length};',
+                  code: searchAllCode,
                 },
               },
               undefined,

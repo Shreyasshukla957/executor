@@ -1,4 +1,5 @@
 import type { ProviderError } from "../contracts/provider-error.ts";
+import type { NetworkRefused } from "../contracts/network.ts";
 /** Shared MCP pagination, wire parsing and calls. Transport owns connection lifetime. */
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type {
@@ -72,13 +73,13 @@ export interface WithMcpClient {
   <A, E>(
     mode: "discover" | "call",
     use: (client: Client) => Effect.Effect<A, E>,
-  ): Effect.Effect<A, E | McpError | ProviderError>;
+  ): Effect.Effect<A, E | McpError | ProviderError | NetworkRefused>;
 }
 /** Shared client operations never cache catalogs or account credentials. */
 export function mcpClient(
   withClient: WithMcpClient,
   timeoutMs: number,
-  failure: (phase: McpError["phase"], error: unknown) => McpError | ProviderError,
+  failure: (phase: McpError["phase"], error: unknown) => McpError | ProviderError | NetworkRefused,
 ) {
   /**
    * Follow the complete live catalog, rejecting duplicate tools and cursor loops. The server's
@@ -146,13 +147,35 @@ export function mcpClient(
     }),
   ).pipe(Effect.withSpan("provider.mcp.discover"));
 
+  /**
+   * Initialize a session and read the first page of tools, which servers that accept anonymous
+   * initialization still authenticate. Nothing is retained. `mcpHealth` runs it with and without
+   * the account's credentials.
+   */
+  const check = withClient("discover", (client) =>
+    Effect.tryPromise({
+      try: (signal) =>
+        client.request({ method: "tools/list", params: {} }, ListToolsResultSchema, {
+          signal,
+          timeout: timeoutMs,
+        }),
+      catch: (error) => failure("discover", error),
+    }).pipe(
+      Effect.asVoid,
+      Effect.withSpan("provider.mcp.request", {
+        kind: "client",
+        attributes: { "rpc.system.name": "jsonrpc", "rpc.method": "tools/list" },
+      }),
+    ),
+  ).pipe(Effect.withSpan("provider.mcp.check"));
+
   /** Call once with one account, retaining content and MCP tool-error results. */
   const call = (name: string, input: JsonObject, context: McpToolContext) =>
     withClient("call", (client) => mcpCall(client, name, input, context, timeoutMs, failure)).pipe(
       Effect.withSpan("provider.mcp.call", { attributes: { "mcp.tool.name": name } }),
     );
 
-  return { list, call };
+  return { list, check, call };
 }
 
 /** Transport-independent operations consumed by the app tool adapter. */

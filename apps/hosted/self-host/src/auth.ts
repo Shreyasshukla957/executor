@@ -5,7 +5,7 @@ import { betterAuth } from "better-auth";
 import { HostedAppSessions, hostedAppSessions } from "@executor-js/hosted-server/app-ui";
 import {
   McpAuthentication,
-  mcpAuthenticationError,
+  mcpBrowserGrantError,
   mcpConnectionStore,
   provisionHostedOAuthResources,
   ApiAuthentication,
@@ -83,7 +83,7 @@ export const selfHostAuth = Effect.gen(function* () {
     browserGrant: (headers, id) =>
       Effect.tryPromise({
         try: () => auth.api.getMcpBrowserAccess({ headers, body: { id } }),
-        catch: mcpAuthenticationError,
+        catch: mcpBrowserGrantError,
       }),
     metadata: Effect.tryPromise({
       try: () => auth.api.getOAuthServerConfig(),

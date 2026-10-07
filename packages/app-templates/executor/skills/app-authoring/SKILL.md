@@ -6,8 +6,8 @@ description: Build and deploy Executor apps with tools, storage, UI, accounts an
 # Build an Executor app
 
 An app is TypeScript source with a default `defineApp` export from `apps`.
-Its `package.json` declares the exact `apps` version it uses; new apps already
-do. App authors use ordinary async functions; Effect stays inside
+Its `package.json` declares the exact `apps` version it uses, which
+`framework.release` returns. App authors use ordinary async functions; Effect stays inside
 the framework. An app's installed name is separate from its source definition.
 
 ## Choose how to work
@@ -51,14 +51,16 @@ Load files through the MCP `skills` tool using the returned app slug, profile, d
 
 ## Discover exact contracts
 
-Use `tools.search` inside `execute` to find callable app tools and their input
-and output signatures. Discover `framework.search` and `framework.describe`
+Use `tools.search` inside `execute` to find callable app tools. It returns their
+exact paths, one-line descriptions and input types. Read a tool's output type
+and whole description with `tools.search.describe({ paths })`. Discover
+`framework.search` and `framework.describe`
 on this Executor app to inspect library functions and methods. These queries
 return generated signatures, related types, examples and documentation links.
 Framework functions are imports or methods used in app source, not MCP tools.
 
-Search by task or name, then describe the selected symbol. Start with
-`apps.defineApp`, `apps.query`, `DatabaseTable.insert`, or `apps/react.useAppQuery`.
+Call `framework.search({ query: { text } })`, then `framework.describe({ query: { symbol, version, digest } })`
+with a symbol it returns. Start with `apps.defineApp`, `apps.query`, `DatabaseTable.insert`, or `apps/react.useAppQuery`.
 The reference identifies its exact framework version and content digest. Keep
 that identity on subsequent reads. Do not assume a host reference describes a
 different pinned `apps` package; that package ships `framework-reference.json`.

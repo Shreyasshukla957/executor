@@ -1,5 +1,6 @@
 /** Immutable deployments, source files and expected build errors. */
 import { Schema } from "effect";
+import { ApiError } from "@executor-js/utils/api-error";
 import { UserFacingError } from "@executor-js/utils/user-facing-error";
 import { AppCodeId, AppId, BuildId, DeploymentId, OwnerId } from "./shared.ts";
 import { SourceCommit, SourceFiles } from "./source.ts";
@@ -60,19 +61,25 @@ export const DeploymentNotFound = UserFacingError.define({
 export type DeploymentNotFound = typeof DeploymentNotFound.Type;
 
 /** The app changed since the caller read it; retry against the current pointer. */
-export class AppDeploymentChanged extends Schema.TaggedError<AppDeploymentChanged>()(
-  "AppDeploymentChanged",
-  { app: AppId, expected: Schema.NullOr(DeploymentId), current: Schema.NullOr(DeploymentId) },
-  {
-    httpApiStatus: 409,
-    description:
-      "The active deployment changed. Read the latest source and reconcile changes before retrying.",
+export const AppDeploymentChanged = ApiError.define({
+  tag: "AppDeploymentChanged",
+  status: 409,
+  fields: {
+    app: AppId,
+    expected: Schema.NullOr(DeploymentId),
+    current: Schema.NullOr(DeploymentId),
   },
-) {}
+  message:
+    "The app's active deployment changed. Read the latest source and reconcile changes before retrying.",
+});
+export type AppDeploymentChanged = typeof AppDeploymentChanged.Type;
 
 /**
  * A source location. Nested, because runtimes such as Bun set their own `line` and `column`
- * properties on every Error instance.
+ * properties on every Error instance. `line` and `column` are both 1-based, and `column` counts
+ * UTF-16 code units, as editors and stack traces print them. esbuild reports 0-based columns in
+ * UTF-8 bytes and source maps 0-based columns in UTF-16 code units; they are converted where their
+ * positions become a `SourceLocation`.
  */
 export const SourceLocation = Schema.Struct({
   file: Schema.String.check(Schema.isMaxLength(1024)),

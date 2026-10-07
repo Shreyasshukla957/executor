@@ -12,7 +12,7 @@ import {
   PublicationSnapshot,
   RegistryError,
   type Registry,
-} from "./contracts/registry.ts";
+} from "../contracts/registry.ts";
 
 const maxResponseBytes = 32 * 1024 * 1024;
 

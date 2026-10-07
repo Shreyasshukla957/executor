@@ -192,8 +192,9 @@ function errorContent(document: OpenApiDocument, response: JsonObject): Json | u
 
 /** Keep tagged errors, including response/component refs and anyOf alternatives.
  * Public text comes from a declared string message or the schema's static description.
+ * `scripts/check-api-errors.ts` applies this to Executor's own API documents.
  */
-function errorResponses(
+export function errorResponses(
   document: OpenApiDocument,
   operation: JsonObject,
   at: string,

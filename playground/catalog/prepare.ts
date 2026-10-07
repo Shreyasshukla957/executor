@@ -10,19 +10,22 @@ const egress = {
   client: Effect.runSync(HttpClient.HttpClient.pipe(Effect.provide(FetchHttpClient.layer))),
 };
 // Supply a one-entry feed. Preparing an MCP entry checks the server over the network to confirm
-// that it needs no sign-in or supports OAuth; it never lists or calls tools.
-const catalog = createCatalog(egress, {
-  list: Effect.succeed([
-    {
-      id: "example/deepwiki",
-      kind: "mcp",
-      name: "DeepWiki",
-      description: "Public documentation MCP server",
-      domain: "deepwiki.com",
-      connectUrl: "https://mcp.deepwiki.com/mcp",
-    },
-  ]),
-});
+// that it needs no sign-in or supports OAuth; it never calls tools.
+const catalog = createCatalog(
+  { egress },
+  {
+    list: Effect.succeed([
+      {
+        id: "example/deepwiki",
+        kind: "mcp",
+        name: "DeepWiki",
+        description: "Public documentation MCP server",
+        domain: "deepwiki.com",
+        connectUrl: "https://mcp.deepwiki.com/mcp",
+      },
+    ]),
+  },
+);
 
 await Effect.runPromise(
   Effect.gen(function* () {

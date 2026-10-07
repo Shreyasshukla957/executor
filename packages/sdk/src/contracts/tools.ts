@@ -11,6 +11,7 @@ import {
   SkillLoadFailed,
   UpstreamError,
 } from "apps/contracts";
+import { ApiError } from "@executor-js/utils/api-error";
 import { ProfileId } from "./shared.ts";
 import { UserFacingError } from "@executor-js/utils/user-facing-error";
 import { ProfileErrors, ProfileRevision } from "./profiles.ts";
@@ -76,16 +77,27 @@ export {
 } from "apps/contracts";
 
 /** A running tool could not complete its user interaction. Earlier effects may have completed. */
-export class ToolElicitationFailed extends Schema.TaggedError<ToolElicitationFailed>()(
-  "ToolElicitationFailed",
-  {
+const elicitationFailures = {
+  unavailable: "The tool asked for input, but this caller cannot answer input requests.",
+  transaction: "The tool asked for input inside a database transaction, which is not allowed.",
+  "invalid-request": "The tool's input request was invalid.",
+  "invalid-response": "The answer did not match the input the tool requested.",
+  transport: "The tool's input request could not be delivered.",
+  expired: "The tool's input request expired before it was answered.",
+  forbidden: "This caller may no longer answer the tool's input request.",
+} as const;
+export const ToolElicitationFailed = ApiError.define({
+  tag: "ToolElicitationFailed",
+  status: 422,
+  fields: {
     app: AppId,
     deployment: DeploymentId,
     tool: ToolName,
     reason: ElicitationFailed.fields.reason,
   },
-  { httpApiStatus: 422 },
-) {}
+  message: ({ reason }) => elicitationFailures[reason],
+});
+export type ToolElicitationFailed = typeof ToolElicitationFailed.Type;
 
 /** One callable in an app's live definition. inputSchema is a JSON Schema document. */
 export const Tool = Schema.Struct({
@@ -323,17 +335,28 @@ export const mcpFailurePresentation = ({ phase, reason, status, upstream }: McpF
           },
           retryable: false,
         };
-      // A JSON-RPC error inside a successful response, such as arguments a tool rejects.
+      // A JSON-RPC error inside a successful response, such as arguments a tool rejects, states
+      // the server's error. Without one, only a transport failure never reached the server.
       return upstream === undefined
-        ? {
-            title: "MCP server unreachable",
-            description: `Executor could not reach the app’s MCP server while ${stage}.`,
-            recovery: {
-              action: "Try again. If this continues, check the MCP server’s address and status.",
-              instructions,
-            },
-            retryable: true,
-          }
+        ? phase === "transport"
+          ? {
+              title: "MCP server unreachable",
+              description: `Executor could not reach the app’s MCP server while ${stage}.`,
+              recovery: {
+                action: "Try again. If this continues, check the MCP server’s address and status.",
+                instructions,
+              },
+              retryable: true,
+            }
+          : {
+              title: "MCP server request failed",
+              description: `The request to the app’s MCP server failed while ${stage}.`,
+              recovery: {
+                action: "Try again. If this continues, check the MCP server’s status.",
+                instructions,
+              },
+              retryable: true,
+            }
         : {
             title: "MCP server returned an error",
             description: `The app’s MCP server returned an error while ${stage}.${answered}`,
@@ -605,44 +628,60 @@ export const routerFailure = (
     : evaluationFailure(identity, error);
 
 /** This evaluated app does not expose the named tool. */
-export class ToolNotFound extends Schema.TaggedError<ToolNotFound>()(
-  "ToolNotFound",
-  { app: AppId, deployment: DeploymentId, tool: ToolName },
-  { httpApiStatus: 404, description: "No tool matches this name in the evaluated app." },
-) {}
+export const ToolNotFound = ApiError.define({
+  tag: "ToolNotFound",
+  status: 404,
+  fields: { app: AppId, deployment: DeploymentId, tool: ToolName },
+  message: ({ tool }) => `The app does not expose a tool named “${tool}”.`,
+});
+export type ToolNotFound = typeof ToolNotFound.Type;
 
 /** Whether a tool reads or writes; callers name it so storage is opened in the right mode. */
 export const ToolKind = Schema.Literals(["query", "mutation"]);
 export type ToolKind = typeof ToolKind.Type;
 
 /** The tool exists with the other kind. Nothing ran; call it again with `actual`. */
-export class ToolKindMismatch extends Schema.TaggedError<ToolKindMismatch>()(
-  "ToolKindMismatch",
-  { app: AppId, deployment: DeploymentId, tool: ToolName, requested: ToolKind, actual: ToolKind },
-  {
-    httpApiStatus: 409,
-    description:
-      "The tool was called as a query but is a mutation, or the reverse. The catalog's readOnly field gives its kind.",
-  },
-) {}
-
-/** The tool input did not match its declared schema. */
-export class InputInvalid extends Schema.TaggedError<InputInvalid>()(
-  "InputInvalid",
-  { app: AppId, deployment: DeploymentId, tool: ToolName, problems: Schema.Array(Schema.String) },
-  {
-    httpApiStatus: 422,
-    description: "Input failed validation. Problems contain safe summaries only.",
-  },
-) {}
-
-/** A tool failed after starting; its external effects may already have occurred. */
-export class ToolCallFailed extends Schema.TaggedError<ToolCallFailed>()(
-  "ToolCallFailed",
-  {
+export const ToolKindMismatch = ApiError.define({
+  tag: "ToolKindMismatch",
+  status: 409,
+  fields: {
     app: AppId,
     deployment: DeploymentId,
     tool: ToolName,
+    requested: ToolKind,
+    actual: ToolKind,
+  },
+  message: ({ tool, requested, actual }) =>
+    `The tool “${tool}” is a ${actual}, but it was called as a ${requested}. Nothing ran; call it as a ${actual}.`,
+});
+export type ToolKindMismatch = typeof ToolKindMismatch.Type;
+
+/** The tool input did not match its declared schema. */
+export const InputInvalid = ApiError.define({
+  tag: "InputInvalid",
+  status: 422,
+  fields: {
+    app: AppId,
+    deployment: DeploymentId,
+    tool: ToolName,
+    problems: Schema.Array(Schema.String),
+  },
+  message: ({ problems }) => `Input failed validation: ${problems.join("; ")}`.slice(0, 4096),
+});
+export type InputInvalid = typeof InputInvalid.Type;
+
+/** A tool failed after starting; its external effects may already have occurred. */
+export const ToolCallFailed = ApiError.define({
+  tag: "ToolCallFailed",
+  status: 502,
+  fields: {
+    app: AppId,
+    deployment: DeploymentId,
+    tool: ToolName,
+    /**
+     * Only the app's own bounded error message, or its MCP server's bounded JSON-RPC error, with
+     * account secrets replaced.
+     */
     reason: Schema.String,
     response: Schema.optional(ApiErrorResponse),
     /** The app's own error, or the app data failure, that stopped the operation. */
@@ -650,12 +689,9 @@ export class ToolCallFailed extends Schema.TaggedError<ToolCallFailed>()(
     /** The app's MCP server refused or failed the tool call, such as with a JSON-RPC error. */
     mcp: Schema.optional(McpFailure),
   },
-  {
-    httpApiStatus: 502,
-    description:
-      "The tool failed. The reason carries only the app's own bounded error message, or its MCP server's bounded JSON-RPC error, with account secrets replaced; retry safety is not implied.",
-  },
-) {}
+  message: ({ reason }) => reason,
+});
+export type ToolCallFailed = typeof ToolCallFailed.Type;
 
 /**
  * An MCP failure of an operation. A failure of the tools/call request fails the call; one before
@@ -674,37 +710,34 @@ export const operationMcpFailure = (
     : evaluationFailure(identity, error);
 
 /** The tool's approval policy blocked the call before its tool body ran. */
-export class ToolBlocked extends Schema.TaggedError<ToolBlocked>()(
-  "ToolBlocked",
-  {
-    app: AppId,
-    deployment: DeploymentId,
-    tool: ToolName,
-  },
-  { httpApiStatus: 403 },
-) {}
+export const ToolBlocked = ApiError.define({
+  tag: "ToolBlocked",
+  status: 403,
+  fields: { app: AppId, deployment: DeploymentId, tool: ToolName },
+  message: ({ tool }) =>
+    `The approval policy of “${tool}” blocked this call. The tool did not run.`,
+});
+export type ToolBlocked = typeof ToolBlocked.Type;
 
 /** Adapter diagnostic for callers that cannot yet present a pending SDK approval request. */
-export class ToolApprovalRequired extends Schema.TaggedError<ToolApprovalRequired>()(
-  "ToolApprovalRequired",
-  {
-    app: AppId,
-    deployment: DeploymentId,
-    tool: ToolName,
-  },
-  { httpApiStatus: 409 },
-) {}
+export const ToolApprovalRequired = ApiError.define({
+  tag: "ToolApprovalRequired",
+  status: 409,
+  fields: { app: AppId, deployment: DeploymentId, tool: ToolName },
+  message: ({ tool }) =>
+    `“${tool}” needs approval before it runs, and this request cannot present an approval prompt. The tool did not run.`,
+});
+export type ToolApprovalRequired = typeof ToolApprovalRequired.Type;
 
 /** The tool's approval policy could not decide. The tool did not run and author failure details remain private. */
-export class ToolPolicyFailed extends Schema.TaggedError<ToolPolicyFailed>()(
-  "ToolPolicyFailed",
-  {
-    app: AppId,
-    deployment: DeploymentId,
-    tool: ToolName,
-  },
-  { httpApiStatus: 500 },
-) {}
+export const ToolPolicyFailed = ApiError.define({
+  tag: "ToolPolicyFailed",
+  status: 500,
+  fields: { app: AppId, deployment: DeploymentId, tool: ToolName },
+  message: ({ tool }) =>
+    `The approval policy of “${tool}” failed before deciding. The tool did not run.`,
+});
+export type ToolPolicyFailed = typeof ToolPolicyFailed.Type;
 
 /** A saved account identity; credentials are always resolved again on resume. */
 export const InvocationAccount = Schema.Struct({
@@ -713,10 +746,13 @@ export const InvocationAccount = Schema.Struct({
   provider: ProviderId,
   method: Schema.String,
 });
-/** Reviewed call with decoded arguments, exact code version and account identities. */
+/**
+ * Reviewed call with decoded arguments, exact code version and account identities. A call without
+ * a profile omits both profile keys: pending requests are JSON, which has no undefined.
+ */
 export const ToolInvocation = Schema.Struct({
-  profile: Schema.optional(ProfileId),
-  profileRevision: Schema.optional(ProfileRevision),
+  profile: Schema.optionalKey(ProfileId),
+  profileRevision: Schema.optionalKey(ProfileRevision),
   app: AppId,
   owner: OwnerId,
   deployment: DeploymentId,

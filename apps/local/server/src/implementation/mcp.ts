@@ -1,7 +1,7 @@
 import {
   GrantId,
   GrantForbidden,
-  permitsDelivery,
+  deliveryRefusal,
   restrictMcpBackend,
   requestedMcpAddress,
 } from "@executor-js/mcp-auth";
@@ -9,7 +9,13 @@ import { localRequest } from "./auth.ts";
 import type { ServerConfig } from "../contracts/config.ts";
 import { LocalMcpUnauthorized, type LocalMcpOAuth } from "./mcp-oauth.ts";
 /** Local access and documentation I/O for the shared MCP implementation. */
-import { makeMcp, appTargets, type McpBackend, type McpLimits } from "@executor-js/mcp";
+import {
+  makeMcp,
+  appTargets,
+  refusedMcpRequest,
+  type McpBackend,
+  type McpLimits,
+} from "@executor-js/mcp";
 import { executorIntro } from "@executor-js/app-templates/executor";
 import {
   ElicitationFailed,
@@ -17,8 +23,6 @@ import {
   type ToolInvocationOptions,
 } from "@executor-js/sdk/core";
 import { Context, Effect, Redacted } from "effect";
-import { McpProtocol } from "effect/unstable/ai";
-import { HttpServerResponse } from "effect/unstable/http";
 
 /** The local bearer key authorizes the whole instance. No hosted owner or role model is imposed. */
 export const localMcpBackend = (executor: Executor) =>
@@ -92,12 +96,12 @@ export const localMcp = (
       caller: Caller,
       instructions: executorIntro,
       limits,
-      protocols: [McpProtocol.v2026_07_28, McpProtocol.v2025_11_25],
     });
     const http = Effect.gen(function* () {
       const request = yield* localRequest(config.port, config.browserOrigin);
       const address = requestedMcpAddress(new URL(request.url, oauth.origin));
-      if (address === undefined) return yield* new GrantForbidden();
+      // A malformed URL names no MCP address, so no credential is checked against it.
+      if (address === undefined) return oauth.invalidAddress;
       const current = Effect.gen(function* () {
         // The administrative key is full access on the plain URL only; it never enters a connection.
         const grant =
@@ -108,7 +112,8 @@ export const localMcp = (
                 target: { kind: "mcp" as const, mode: address.mode },
               }
             : (yield* oauth.authenticate(new Headers(request.headers))).grant;
-        if (!permitsDelivery(grant, address)) return yield* new GrantForbidden();
+        const refusal = deliveryRefusal(grant, address);
+        if (refusal !== undefined) return yield* new GrantForbidden({ refusal });
         return grant;
       });
       const grant = yield* current;
@@ -119,10 +124,11 @@ export const localMcp = (
       );
     }).pipe(
       Effect.catchTags({
-        AuthForbidden: () => Effect.succeed(HttpServerResponse.empty({ status: 403 })),
-        GrantForbidden: () => Effect.succeed(HttpServerResponse.empty({ status: 403 })),
+        // Clients print a refusal's body after their own prefix, so typed refusals keep their cause.
+        AuthForbidden: refusedMcpRequest,
+        GrantForbidden: refusedMcpRequest,
         LocalMcpUnauthorized: () => oauth.challenge,
-        LocalMcpAuthUnavailable: () => Effect.succeed(HttpServerResponse.empty({ status: 503 })),
+        LocalMcpAuthUnavailable: refusedMcpRequest,
       }),
     );
     return { http, approvals: host.approvals };

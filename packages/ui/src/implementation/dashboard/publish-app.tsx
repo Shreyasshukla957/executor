@@ -2,13 +2,13 @@ import { useState } from "react";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { Exit, Schema, type Cause } from "effect";
 import { AsyncResult } from "effect/unstable/reactivity";
-import type { App } from "@executor-js/sdk";
-import type { AppSourceDisplay } from "@executor-js/app-management/contracts";
 import {
-  type PublicationReadiness,
-  type PublicationIssue,
   registryPublicationPath,
-} from "@executor-js/app-registry/contracts";
+  type App,
+  type PublicationIssue,
+  type PublicationReadiness,
+} from "@executor-js/sdk";
+import type { AppSourceDisplay } from "@executor-js/app-management/contracts";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   Alert02Icon,

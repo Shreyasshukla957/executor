@@ -10,7 +10,7 @@ import { randomUUID } from "node:crypto";
 import { Actors } from "../support/actors.ts";
 import { Api, body } from "../support/api.ts";
 import { Browser } from "../support/browser.ts";
-import { appsManifest } from "../support/apps-release.ts";
+import { appsManifest, withApps } from "../support/apps-release.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { Resource } from "../support/contracts.ts";
 import { credentialUpstream, ReceivedRequest } from "../support/credential-upstream.ts";
@@ -38,6 +38,28 @@ const Run = Schema.Struct({
   output: Schema.optionalKey(Schema.Json),
 });
 const Sent = Schema.Struct({ status: Schema.Number, echoed: Schema.String, text: Schema.String });
+const ToolFailed = Schema.Struct({
+  _tag: Schema.Literal("ToolCallFailed"),
+  reason: Schema.String,
+  failure: Schema.Struct({
+    source: Schema.String,
+    errorName: Schema.String,
+    code: Schema.optional(Schema.String),
+    message: Schema.String,
+  }),
+});
+const Refusal = Schema.fromJsonString(
+  Schema.Struct({
+    _tag: Schema.Literal("NetworkRefused"),
+    host: Schema.String,
+    refusal: Schema.Struct({
+      reason: Schema.Literal("credential_host"),
+      provider: Schema.String,
+      allowedHosts: Schema.Array(Schema.String),
+    }),
+    message: Schema.String,
+  }),
+);
 const handle = /^exsec_[0-9a-f]+_$/;
 
 /**
@@ -98,8 +120,38 @@ export default defineApp({ accounts: { service }${options.database === true ? ",
     }),
     send: query({ input: object({ url: string() }) }, async (ctx, { url }) =>
       send(url, { headers: { authorization: "Bearer " + ctx.accounts.service.fields.token } })),
+    fetchSend: query({ input: object({ url: string() }) }, async (ctx, { url }) => {
+      const response = await ctx.fetch(url, { headers: { authorization: "Bearer " + ctx.accounts.service.fields.token } });
+      return { status: response.status, echoed: "", text: await response.text() };
+    }),
   }),
 });`;
+
+/**
+ * An app whose tools come from an MCP server at `url`, sent the provider's token. Its provider
+ * declares `host` only.
+ */
+const mcpApp = (options: { readonly name: string; readonly host: string; readonly url: string }) =>
+  `import { defineApp, defineProvider, secrets, object, string, plain, raw } from "apps";
+import { mcpRouter } from "apps/mcp";
+const service = defineProvider({
+  name: ${JSON.stringify(options.name)},
+  hosts: ${JSON.stringify([options.host])},
+  auth: {
+    key: secrets({
+      label: "Key",
+      fields: object({ region: plain(string()), token: string(), signing: raw(string()) }),
+    }),
+  },
+});
+export default defineApp({ accounts: { service } }, async (ctx) => ({
+  tools: await mcpRouter({
+    url: ${JSON.stringify(options.url)},
+    account: ctx.accounts.service,
+    headers: { authorization: "Bearer " + ctx.accounts.service.fields.token },
+    signal: ctx.signal,
+  }),
+}));`;
 
 /** An app with no accounts that sends whatever credential it is given. */
 const replayApp = `import { defineApp, object, string, query, router } from "apps";
@@ -116,11 +168,11 @@ const scenario = Effect.gen(function* () {
   const api = yield* Api,
     actors = yield* Actors;
   const prefix = `/api/organizations/${actors.organization.id}`;
-  const deploy = (name: string, content: string) =>
+  const deploy = (name: string, content: string, manifest = appsManifest) =>
     Effect.gen(function* () {
       const deployed = yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
         name,
-        files: [{ path: "index.ts", content }, appsManifest],
+        files: [{ path: "index.ts", content }, manifest],
       });
       expect(deployed.status, JSON.stringify(deployed.body)).toBe(200);
       const app = yield* body(App, deployed);
@@ -204,6 +256,17 @@ const scenario = Effect.gen(function* () {
       expect(response.status, JSON.stringify(response.body)).toBe(200);
       return yield* body(output, response);
     });
+  /** Call a tool that must fail, and return the failure the caller receives. */
+  const callFailure = (path: string, tool: string, input: object, profile: string) =>
+    Effect.gen(function* () {
+      const response = yield* api.request(actors.owner, "POST", `${path}/tools/call`, {
+        profile,
+        tool,
+        input,
+      });
+      expect(response.status, JSON.stringify(response.body)).not.toBe(200);
+      return yield* body(ToolFailed, response);
+    });
   /** Run a workflow to completion and return its output. */
   const runWorkflow = (path: string, workflow: string, profile: string) =>
     Effect.gen(function* () {
@@ -241,7 +304,7 @@ const scenario = Effect.gen(function* () {
     );
     return key.key;
   });
-  return { actors, deploy, check, connect, select, call, runWorkflow, apiKey };
+  return { actors, deploy, check, connect, select, call, callFailure, runWorkflow, apiKey };
 });
 
 const synthetic = () => ({
@@ -257,7 +320,7 @@ layer(HostedLive, { excludeTestServices: true })("Credential hosts", (it) => {
    */
   const sealedApp = (database: boolean) =>
     Effect.gen(function* () {
-      const { deploy, connect, call } = yield* scenario;
+      const { deploy, connect, call, callFailure } = yield* scenario;
       const upstream = yield* credentialUpstream;
       const name = `Credential hosts ${randomUUID().slice(0, 8)}`;
       const values = synthetic();
@@ -265,7 +328,7 @@ layer(HostedLive, { excludeTestServices: true })("Credential hosts", (it) => {
         name,
         credentialApp({ name, host: `127.0.0.1:${upstream.port}`, health: null, database }),
       );
-      const { profile } = yield* connect(path, name, values);
+      const { profile, account } = yield* connect(path, name, values);
 
       // Secret fields are handles; plain and raw fields keep their values.
       const fields = yield* call(path, Fields, "fields", {}, profile);
@@ -283,17 +346,43 @@ layer(HostedLive, { excludeTestServices: true })("Credential hosts", (it) => {
         profile,
       );
       expect(undeclared.status).toBe(421);
-      expect(undeclared.text).toContain(name);
-      expect(undeclared.text).toContain(`localhost:${upstream.port}`);
-      return { upstream, values, path, profile, sealed: fields.token };
+      const refusal = `Executor refused this request: ${name} credentials cannot be sent to localhost:${upstream.port}. The provider allows: 127.0.0.1:${upstream.port}.`;
+      expect(Schema.decodeUnknownSync(Refusal)(undeclared.text)).toEqual({
+        _tag: "NetworkRefused",
+        host: `localhost:${upstream.port}`,
+        refusal: {
+          reason: "credential_host",
+          provider: name,
+          allowedHosts: [`127.0.0.1:${upstream.port}`],
+        },
+        message: refusal,
+      });
+      // ctx.fetch rejects with the refusal, and the caller reads why: no service answered.
+      const fetched = yield* callFailure(
+        path,
+        "fetchSend",
+        { url: `${upstream.undeclaredOrigin}/fetched` },
+        profile,
+      );
+      expect(fetched.failure).toEqual({
+        source: "app",
+        errorName: "NetworkRefused",
+        code: "credential_host",
+        message: refusal,
+      });
+      expect(fetched.reason).toBe(`The app threw NetworkRefused (credential_host): ${refusal}`);
+      return { upstream, values, name, path, profile, account, refusal, sealed: fields.token };
     });
 
   it.effect(scenarios.credentialHostsRefused.title, (context) =>
     withHostedCase(
       context,
       Effect.gen(function* () {
-        const { deploy, call, runWorkflow } = yield* scenario;
-        const { upstream, values, path, profile, sealed } = yield* sealedApp(false);
+        const { deploy, call, runWorkflow, select } = yield* scenario;
+        const api = yield* Api,
+          actors = yield* Actors;
+        const { upstream, values, name, path, profile, account, refusal, sealed } =
+          yield* sealedApp(false);
 
         // Workflow steps receive the same handles, never the stored value.
         const stepped = Schema.decodeUnknownSync(Fields)(
@@ -311,8 +400,42 @@ layer(HostedLive, { excludeTestServices: true })("Credential hosts", (it) => {
         expect(replayed.status).toBe(421);
         expect(replayed.text).toContain("not valid for this app");
 
+        // A protocol helper reports the same refusal when its server is on an undeclared host.
+        const mcp = yield* deploy(
+          `Credential MCP ${randomUUID().slice(0, 8)}`,
+          mcpApp({
+            name,
+            host: `127.0.0.1:${upstream.port}`,
+            url: `${upstream.undeclaredOrigin}/mcp`,
+          }),
+          {
+            path: "package.json",
+            content: JSON.stringify({
+              dependencies: withApps({ "@modelcontextprotocol/sdk": "1.30.0" }),
+            }),
+          },
+        );
+        const mcpProfile = yield* select(mcp.path, account);
+        const listed = yield* api.request(
+          actors.owner,
+          "GET",
+          `${mcp.path}/tools?profile=${mcpProfile}`,
+        );
+        expect(listed.status, JSON.stringify(listed.body)).not.toBe(200);
+        expect(listed.body).toMatchObject({
+          _tag: "AppEvaluationFailed",
+          failure: {
+            source: "app",
+            errorName: "NetworkRefused",
+            code: "credential_host",
+            message: refusal,
+          },
+        });
+
         const received = yield* upstream.received;
-        expect(received.filter((entry) => /undeclared|replayed/.test(entry.url))).toEqual([]);
+        expect(
+          received.filter((entry) => /undeclared|replayed|fetched|mcp/.test(entry.url)),
+        ).toEqual([]);
         expect(JSON.stringify(received)).not.toContain(values.token);
       }),
     ),

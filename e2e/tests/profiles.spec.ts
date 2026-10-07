@@ -42,6 +42,12 @@ const Deployed = Schema.Struct({
   }),
 });
 const Completed = Schema.Struct({ status: Schema.Literal("completed"), value: Schema.Json });
+/** A search item's callable path and the paths of the same tool under other profiles. */
+const SearchedPaths = Schema.Struct({
+  path: Schema.String,
+  alsoAt: Schema.optional(Schema.Array(Schema.String)),
+});
+const callablePaths = (item: typeof SearchedPaths.Type) => [item.path, ...(item.alsoAt ?? [])];
 const files = [
   {
     path: "index.ts",
@@ -282,16 +288,14 @@ layer(TestLive, { excludeTestServices: true })("Profiles", (it) => {
           Schema.Struct({
             execution: Schema.Struct({
               ok: Schema.Literal(true),
-              value: Schema.Struct({ items: Schema.Array(Schema.Struct({ path: Schema.String })) }),
+              value: Schema.Struct({ items: Schema.Array(SearchedPaths) }),
             }),
           }),
         )(discovery.structuredContent);
-        expect(
-          found.execution.value.items.filter((item) => item.path.includes(alice.id)).length,
-        ).toBeGreaterThan(0);
-        expect(
-          found.execution.value.items.filter((item) => item.path.includes(bob.id)).length,
-        ).toBeGreaterThan(0);
+        // The two profiles expose the same tools, so each is one item that also names the other.
+        const discovered = found.execution.value.items.flatMap(callablePaths);
+        expect(discovered.filter((path) => path.includes(alice.id)).length).toBeGreaterThan(0);
+        expect(discovered.filter((path) => path.includes(bob.id)).length).toBeGreaterThan(0);
         const invoked = yield* client.use(
           "Run both scalar account contexts through MCP",
           (client, signal) =>
@@ -523,21 +527,16 @@ layer(TestLive, { excludeTestServices: true })("Profiles", (it) => {
           Schema.Struct({
             execution: Schema.Struct({
               ok: Schema.Literal(true),
-              value: Schema.Struct({
-                items: Schema.Array(Schema.Struct({ path: Schema.String })),
-              }),
+              value: Schema.Struct({ items: Schema.Array(SearchedPaths) }),
             }),
             unavailableApps: Schema.Array(
               Schema.Struct({ profile: Schema.optional(Schema.String) }),
             ),
           }),
         )(disabledDiscovery.structuredContent);
-        expect(
-          enabledCatalog.execution.value.items.some((item) => item.path.includes(alice.id)),
-        ).toBe(true);
-        expect(
-          enabledCatalog.execution.value.items.some((item) => item.path.includes(bob.id)),
-        ).toBe(false);
+        const enabled = enabledCatalog.execution.value.items.flatMap(callablePaths);
+        expect(enabled.some((path) => path.includes(alice.id))).toBe(true);
+        expect(enabled.some((path) => path.includes(bob.id))).toBe(false);
         expect(enabledCatalog.unavailableApps.some((item) => item.profile === bob.id)).toBe(false);
 
         const pauseDeadline = (yield* Clock.currentTimeMillis) + 40000;

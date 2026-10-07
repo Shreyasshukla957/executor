@@ -6,7 +6,8 @@ import { Random } from "alchemy";
 import { AlchemyContext } from "alchemy/AlchemyContext";
 import { adopt } from "alchemy/AdoptPolicy";
 import { retain } from "alchemy/RemovalPolicy";
-import { Config, Effect, Option, Redacted } from "effect";
+import { PgClient } from "@effect/sql-pg";
+import { Config, Context, Duration, Effect, Option, Redacted, type Scope } from "effect";
 import { developmentDatabase } from "./development.ts";
 import { cloudOrigin, testStage, type TestStage } from "./stage.ts";
 import { postgresUrl, previewDatabase } from "./preview-database.ts";
@@ -163,3 +164,44 @@ export const databaseInfrastructure = Effect.gen(function* () {
 export const cloudDatabaseConnection = Effect.gen(function* () {
   return { connectionString: yield* Output.named(yield* databaseInfrastructure, "DatabaseUrl") };
 });
+
+/**
+ * How long one attempt to open a runtime connection may take. A connection usually opens in
+ * about 100 ms, but a few attempts stall until they time out while connections opened just before
+ * and after take the usual time. An attempt that fails has sent no statement, so the pool makes
+ * it once more; two attempts take no longer than the one 5-second attempt before.
+ */
+const connectAttemptTimeout = Duration.millis(2500);
+
+/**
+ * A pool on the runtime database, for one Worker event or one Durable Object window. PgBouncer
+ * pools in transaction mode, so no consumer may rely on session state (`prepare: false`; no
+ * session `SET`, advisory locks or `LISTEN`). Building it opens no connection; the pool connects
+ * on first use. Opening a connection gets a second attempt when the first fails or times out.
+ * Each `sql.connect` span records its `db.connect.attempt`, and the second also records why the
+ * first failed as `db.connect.retry_reason`. When both fail, the statement fails with the
+ * driver's `SqlError`; statements themselves are never repeated.
+ */
+export const cloudDatabasePool = (options: {
+  readonly url: Redacted.Redacted;
+  readonly maxConnections: number;
+  readonly idleTimeout?: Duration.Input;
+  readonly applicationName?: string;
+}) =>
+  PgClient.layer({
+    ...options,
+    prepare: false,
+    connectTimeout: connectAttemptTimeout,
+    connectRetries: 1,
+  });
+
+/**
+ * Provided beside a SQL client, for a consumer that may have to give up a connection it reserved,
+ * such as one still inside a transaction it could not roll back. `scope` closes only after the
+ * client's pool has shut down, so a reservation still open in it then is closed instead of lent
+ * again. `retire` shuts the pool down as soon as no caller still uses it.
+ */
+export class ConnectionReservations extends Context.Service<
+  ConnectionReservations,
+  { readonly scope: Scope.Scope; readonly retire: Effect.Effect<void> }
+>()("executor/cloud/ConnectionReservations") {}

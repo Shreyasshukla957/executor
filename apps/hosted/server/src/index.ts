@@ -38,6 +38,12 @@ export { makeOrganizationRemovals } from "./implementation/organization-removals
 export { migrateOrganizationRemovals } from "./implementation/organization-removal-schema.ts";
 
 export { hostedOAuthCallback } from "./implementation/accounts.ts";
+export * from "./contracts/oauth-client-metadata.ts";
+export {
+  clientMetadataDocument,
+  clientMetadataSetting,
+  type ClientMetadataSetting,
+} from "./implementation/oauth-client-metadata.ts";
 export type {
   HostedAccountConnection,
   HostedOAuthSignIn,
@@ -48,7 +54,7 @@ export { hostedMcpBackend } from "./implementation/mcp.ts";
 
 export * from "./contracts/mcp.ts";
 export {
-  mcpAuthenticationError,
+  mcpBrowserGrantError,
   mcpConnectionStore,
   provisionHostedOAuthResources,
 } from "./implementation/mcp-oauth.ts";

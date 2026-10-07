@@ -24,10 +24,17 @@ import {
   Unauthorized,
 } from "../contracts/auth.ts";
 
-/** Connected-account OAuth uses the configured relay URL, or this host's callback. */
+/**
+ * Connected-account OAuth uses the configured relay URL, or this host's callback. It is returned
+ * serialized, the form the SDK parses it to and sends as `redirect_uri`, so setup screens and the
+ * client metadata document list that exact string, whatever form the operator configured.
+ */
 export const accountOAuthRedirectUri = (
   auth: Pick<typeof Authentication.Service, "origin" | "oauthRedirectUri">,
-) => HttpUrl.make(auth.oauthRedirectUri ?? new URL("/api/oauth/callback", auth.origin).href);
+) =>
+  HttpUrl.make(
+    new URL(auth.oauthRedirectUri ?? new URL("/api/oauth/callback", auth.origin).href).href,
+  );
 
 /** Explicit host configuration. Missing or weak signing secrets fail startup/deploy. */
 export const authSettings = Config.all({

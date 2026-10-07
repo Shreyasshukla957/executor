@@ -3,6 +3,7 @@ import {
   SourceDisplayFile,
   SourceDisplayFileQuery,
 } from "./source-display.ts";
+import { ApiError } from "@executor-js/utils/api-error";
 /** Shared app wire contracts; browser imports never load HTTP route or Git adapters. */
 import { Context, Schema } from "effect";
 import {
@@ -16,19 +17,26 @@ import {
   AccountSelectionInvalid,
   DeploymentBuildFailed,
   BuildMemoryExceeded,
+  CommittedSource,
   sourceErrors,
   SourceSnapshot,
   StorageError,
+  PublicationReadiness,
+  RegistryError,
 } from "@executor-js/sdk/core";
-import { PublicationReadiness, RegistryError } from "@executor-js/app-registry/contracts";
 export * from "./framework.ts";
 
 /** Authentication failures never expose whether another owner's app exists. */
-export class AppAccessDenied extends Schema.TaggedError<AppAccessDenied>()(
-  "AppAccessDenied",
-  { reason: Schema.Literals(["authentication", "forbidden"]) },
-  { httpApiStatus: 403 },
-) {}
+export const AppAccessDenied = ApiError.define({
+  tag: "AppAccessDenied",
+  status: 403,
+  fields: { reason: Schema.Literals(["authentication", "forbidden"]) },
+  message: ({ reason }) =>
+    reason === "authentication"
+      ? "This request is not authenticated for app management."
+      : "This caller may not perform this app operation, or cannot access this app.",
+});
+export type AppAccessDenied = typeof AppAccessDenied.Type;
 /** Expected operation failures are shared unchanged across the product transports. */
 export const appOperationErrors = [
   StorageError,
@@ -83,17 +91,15 @@ import {
   AppId,
   AppName,
   DeployedApp,
-  Deployment,
+  DeploymentMetadata,
+  GitCommit,
   OwnerId,
   SourceCommit,
   SourceFiles,
-} from "@executor-js/sdk/core";
-import {
   Publication,
   PackageName,
   PublicationReference,
-} from "@executor-js/app-registry/contracts";
-import { GitCommit } from "@executor-js/app-source/contracts";
+} from "@executor-js/sdk/core";
 /** Both public and owned copies use this one request and result contract. */
 export const CopyApp = Schema.Struct({
   from: Schema.Union([Schema.Struct({ app: AppId }), PublicationReference]),
@@ -144,7 +150,13 @@ export const appManagementApi = <I extends HttpApiMiddleware.AnyId, S>(
         }),
         HttpApiEndpoint.post("create", "/apps", {
           params: tenant,
-          payload: Schema.Struct({ name: AppName, files: SourceFiles }),
+          payload: Schema.Struct({
+            name: AppName,
+            files: SourceFiles.annotateKey({
+              description:
+                "The complete source: a root index.ts and a package.json whose dependencies.apps is the exact version framework.release returns.",
+            }),
+          }),
           success: App,
           error: appOperationErrors,
         }).annotate(
@@ -188,11 +200,11 @@ export const appManagementApi = <I extends HttpApiMiddleware.AnyId, S>(
             files: SourceFiles,
             message: Schema.NonEmptyString,
           }),
-          success: SourceSnapshot,
+          success: CommittedSource,
           error: appOperationErrors,
         }).annotate(
           OpenApi.Description,
-          "Save the complete file list as a Git commit. Omitted files are removed. expected must match the revision read before editing. A commit does not deploy.",
+          "Save the complete file list as a Git commit. Omitted files are removed. expected must match the revision read before editing. A commit does not deploy. Returns the new revision; the files are not echoed.",
         ),
         HttpApiEndpoint.post("deploy", "/apps/:app/deploy", {
           params: app,
@@ -200,11 +212,11 @@ export const appManagementApi = <I extends HttpApiMiddleware.AnyId, S>(
             Schema.Struct({ files: SourceFiles, commit: Schema.optional(Schema.Never) }),
             Schema.Struct({ commit: SourceCommit, files: Schema.optional(Schema.Never) }),
           ]),
-          success: Schema.Struct({ app: DeployedApp, deployment: Deployment }),
+          success: Schema.Struct({ app: DeployedApp, deployment: DeploymentMetadata }),
           error: appOperationErrors,
         }).annotate(
           OpenApi.Description,
-          "Deploy complete files or an immutable Git commit without changing the working branch. App identity, data, and compatible account selections are retained.",
+          "Deploy complete files or an immutable Git commit without changing the working branch. App identity, data, and compatible account selections are retained. Returns the app and the new deployment's metadata; the files are not echoed.",
         ),
         HttpApiEndpoint.post("copy", "/apps/copies", {
           params: tenant,

@@ -1,7 +1,7 @@
 import { AppProviderFailed } from "@executor-js/sdk";
 import { Cause, Option, Schema } from "effect";
 import { ProviderErrorNotice } from "@executor-js/ui/dashboard/provider-error-notice";
-import { ErrorNotice } from "@executor-js/ui/dashboard/error-notice";
+import { CompactFailure, ErrorNotice } from "@executor-js/ui/dashboard/error-notice";
 import { UserFacingError } from "@executor-js/utils/user-facing-error";
 import { Alert } from "@executor-js/ui/components/alert";
 import { Button } from "@executor-js/ui/components/button";
@@ -26,6 +26,7 @@ export function Failure({
   cause,
   retry,
   retrying,
+  layout,
   recovery,
 }: FailureProps<DashboardError> & {
   /** The page's own next step, when it cannot offer the one the error's recovery names. */
@@ -39,6 +40,7 @@ export function Failure({
         context="While using this app and selected profile."
         retry={retry}
         retrying={retrying}
+        layout={layout}
       />
     );
   const { title, description, account } = failureMessage(cause);
@@ -58,7 +60,24 @@ export function Failure({
         recovery={recovery}
         retry={retry}
         retrying={retrying}
+        layout={layout}
       />
+    );
+  if (layout === "compact")
+    return (
+      <CompactFailure title={title}>
+        <div>{description}</div>
+        {(reconnect || retry) && (
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            {reconnect ||
+              (retry && (
+                <Button variant="outline" size="xs" onClick={retry}>
+                  Retry
+                </Button>
+              ))}
+          </div>
+        )}
+      </CompactFailure>
     );
   return (
     <Alert className="error-state flex items-start gap-2.5 p-[15px] border border-border rounded-[7px] mb-4 [&_>_svg]:text-destructive [&_>_svg]:shrink-0 [&_>_svg]:mt-0.5 [&_>_div]:min-w-0 [&_>_div]:wrap-anywhere [&_>_div]:flex-1 [&_strong]:text-[13px] [&_strong]:font-medium [&_p]:text-[12px] [&_p]:text-muted-foreground [&_p]:mt-0.75 max-[740px]:flex-wrap max-[740px]:[&_>_div]:basis-[calc(100%_-_30px)] max-[740px]:[&_>_button]:ml-6.75">
@@ -77,12 +96,18 @@ export function Failure({
   );
 }
 /** Failures on a connection link page, where only the agent that sent the link can start again. */
-export function ConnectionLinkFailure({ cause, retry, retrying }: FailureProps<DashboardError>) {
+export function ConnectionLinkFailure({
+  cause,
+  retry,
+  retrying,
+  layout,
+}: FailureProps<DashboardError>) {
   return (
     <Failure
       cause={cause}
       retry={retry}
       retrying={retrying}
+      layout={layout}
       recovery={Option.match(Cause.findErrorOption(cause), {
         onSome: connectionLinkRecovery,
         onNone: () => undefined,

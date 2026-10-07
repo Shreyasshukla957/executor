@@ -105,7 +105,11 @@ export const requirePinnedOrganization = (
         }),
       );
 
-/** Verify expiry, revocation and usage through Better Auth before applying product authorization. */
+/**
+ * Verify expiry, revocation and usage through Better Auth before applying product authorization.
+ * `valid: false` means Better Auth refused the key. A storage failure rejects instead (see the
+ * pinned api-key patch), and `authCall` reports it as SERVICE_UNAVAILABLE, never as a bad key.
+ */
 export const apiKeyAccess = (ctx: GenericEndpointContext, token: Redacted.Redacted<string>) =>
   Effect.gen(function* () {
     const result = yield* authCall(() =>

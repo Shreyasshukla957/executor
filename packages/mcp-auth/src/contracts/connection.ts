@@ -3,6 +3,7 @@
  * connection's URL take their authority from the current connection record on every request.
  */
 import { RunTarget, ToolScope, type AppPermission } from "@executor-js/authorization";
+import { ApiError } from "@executor-js/utils/api-error";
 import {
   AccountId,
   AppId,
@@ -79,23 +80,37 @@ export const ConnectionView = Schema.Struct({ ...Connection.fields, url: Schema.
 export type ConnectionView = typeof ConnectionView.Type;
 
 /** The connection does not exist, is revoked, or belongs to someone else. */
-export class ConnectionNotFound extends Schema.TaggedError<ConnectionNotFound>()(
-  "ConnectionNotFound",
-  { connection: ConnectionId },
-  { httpApiStatus: 404 },
-) {}
+export const ConnectionNotFound = ApiError.define({
+  tag: "ConnectionNotFound",
+  status: 404,
+  fields: { connection: ConnectionId },
+  message: ({ connection }) => `No MCP connection “${connection}” exists for this user.`,
+});
+export type ConnectionNotFound = typeof ConnectionNotFound.Type;
 /** Another user, organization, or a revoked connection already uses this client-chosen ID. */
-export class ConnectionIdTaken extends Schema.TaggedError<ConnectionIdTaken>()(
-  "ConnectionIdTaken",
-  { connection: ConnectionId },
-  { httpApiStatus: 409 },
-) {}
+export const ConnectionIdTaken = ApiError.define({
+  tag: "ConnectionIdTaken",
+  status: 409,
+  fields: { connection: ConnectionId },
+  message: ({ connection }) =>
+    `The MCP connection ID “${connection}” is already in use. Choose another ID.`,
+});
+export type ConnectionIdTaken = typeof ConnectionIdTaken.Type;
+const connectionAccessFailures = {
+  app: "is not available to this user",
+  profile: "names a profile that is not available to this user",
+  account: "names an account that is not available to this user",
+  target: "names a target that is not available to this user",
+} as const;
 /** An app, profile, or account in the request is not available to this user. */
-export class ConnectionAccessInvalid extends Schema.TaggedError<ConnectionAccessInvalid>()(
-  "ConnectionAccessInvalid",
-  { app: AppId, reason: Schema.Literals(["app", "profile", "account", "target"]) },
-  { httpApiStatus: 400 },
-) {}
+export const ConnectionAccessInvalid = ApiError.define({
+  tag: "ConnectionAccessInvalid",
+  status: 400,
+  fields: { app: AppId, reason: Schema.Literals(["app", "profile", "account", "target"]) },
+  message: ({ app, reason }) =>
+    `The connection's entry for app ${app} ${connectionAccessFailures[reason]}.`,
+});
+export type ConnectionAccessInvalid = typeof ConnectionAccessInvalid.Type;
 
 /** The connection's apps as shared authorization permissions. Targets are always explicit. */
 export const connectionPermissions = (policy: ConnectionPolicy): readonly AppPermission[] =>

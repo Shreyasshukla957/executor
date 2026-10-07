@@ -1,5 +1,6 @@
 /** Removing an organization is a separate capability; a host composes it only where it applies. */
 import { Context, Effect, Schema } from "effect";
+import { ApiError } from "@executor-js/utils/api-error";
 import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi";
 import { StorageError, AppWorkflowsActive, AccountWorkflowsActive } from "@executor-js/sdk/core";
 import { AuthenticationUnavailable } from "./auth.ts";
@@ -19,11 +20,12 @@ export const OrganizationRemoved = Schema.Struct({
 export type OrganizationRemoved = typeof OrganizationRemoved.Type;
 
 /** The tombstone store is unreachable, so removal can neither start nor be hidden safely. */
-export class OrganizationRemovalUnavailable extends Schema.TaggedError<OrganizationRemovalUnavailable>()(
-  "OrganizationRemovalUnavailable",
-  {},
-  { httpApiStatus: 503 },
-) {}
+export const OrganizationRemovalUnavailable = ApiError.define({
+  tag: "OrganizationRemovalUnavailable",
+  status: 503,
+  message: "Executor could not start or read the organization's removal. Try again.",
+});
+export type OrganizationRemovalUnavailable = typeof OrganizationRemovalUnavailable.Type;
 
 /**
  * The ordered durable steps. Each name is the step identity in the engine's

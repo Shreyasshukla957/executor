@@ -1,6 +1,6 @@
 {
   "name": "apps",
-  "version": "0.0.1-beta.26",
+  "version": "0.0.1-beta.34",
   "private": true,
   "description": "TypeScript apps with typed tools, accounts, storage, and UI.",
   "type": "module",
@@ -40,6 +40,7 @@
     "@executor-js/app-cache": "workspace:*",
     "@executor-js/app-data": "workspace:*",
     "@executor-js/telemetry": "workspace:*",
+    "@executor-js/utils": "workspace:*",
     "@scalar/helpers": "0.14.0",
     "@scalar/openapi-upgrader": "0.3.1",
     "effect": "https://pkg.pr.new/Effect-TS/effect/effect@c7d1ffff31a3e2ae0b0b0796b742bddeb797269d",

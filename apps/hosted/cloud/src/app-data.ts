@@ -10,12 +10,17 @@ import {
   FacetInvocation,
   type FacetBundle,
 } from "@executor-js/app-data/cloudflare";
-import { AppData } from "./infrastructure/app-data-worker.ts";
+import { AppData, runnerReadsBuilds } from "./infrastructure/app-data-worker.ts";
 import { AppDataSupervisor, appDataSupervisors } from "./infrastructure/app-data.ts";
 import { RuntimeContext } from "alchemy";
 import { CacheCommand } from "@executor-js/app-cache/contracts";
+import { BlobStore } from "@executor-js/sdk/core";
 import { makeAppRunner, serveAppRunner, type RemoteCapabilities } from "@executor-js/sdk/workerd";
-import { appCredentialOutbound } from "./infrastructure/app-outbound.ts";
+import { cloudBuildReader } from "./infrastructure/blobs.ts";
+import { cloudOrigin } from "./infrastructure/stage.ts";
+import { loadCloudBuildRecord, loadCloudFramework } from "./implementation/build-storage.ts";
+import { cachedRuntimeBuilds } from "./implementation/runtime-build-cache.ts";
+import { appCredentialOutbound, appOutboundBindings } from "./infrastructure/app-outbound.ts";
 import { HttpServerResponse } from "effect/unstable/http";
 import {
   cloudObservability,
@@ -77,18 +82,42 @@ export default AppData.make(
       ...(yield* cloudObservability),
       workersDev: false,
       compatibility: { date: "2026-09-08", flags: ["nodejs_compat"] },
-      env: yield* telemetryBindings,
+      env: {
+        ...(yield* telemetryBindings),
+        ...(yield* appOutboundBindings),
+        [runnerReadsBuilds.name]: runnerReadsBuilds.value,
+      },
     };
   }),
   Effect.gen(function* () {
     const credentials = yield* appCredentialOutbound;
     const databases = yield* appDataSupervisors;
     const environment = yield* Cloudflare.WorkerEnvironment;
+    // The runner reads builds itself, by the ID each invocation names, so callers never load,
+    // decode or send app code. The cache keys match the ones a deploy warms.
+    const blobs = yield* cloudBuildReader;
+    const origin = yield* cloudOrigin.pipe(Effect.orDie);
     // Built for each call, never shared across requests: a fiber woken by another request's
     // shared Effect continues in that request's I/O context, so concurrent calls waiting on one
     // shared build would count their Dynamic Workers against the first caller's limit.
     const runner = Effect.gen(function* () {
       const { waitUntil } = yield* Effect.promise(() => import("cloudflare:workers"));
+      const read = cachedRuntimeBuilds(
+        origin,
+        {
+          record: (build) =>
+            loadCloudBuildRecord(build).pipe(Effect.provideService(BlobStore, blobs)),
+          framework: (identity) =>
+            loadCloudFramework(identity).pipe(Effect.provideService(BlobStore, blobs)),
+        },
+        // A cache write outlives the read that missed; the call's own work does not wait on it.
+        (write) =>
+          Effect.context<never>().pipe(
+            Effect.flatMap((services) =>
+              Effect.sync(() => waitUntil(Effect.runPromiseWith(services)(write))),
+            ),
+          ),
+      );
       return serveAppRunner(
         makeAppRunner({
           loader: yield* Schema.decodeUnknownEffect(NativeLoader)(environment.AppDataLoader).pipe(
@@ -117,6 +146,7 @@ export default AppData.make(
           },
           waitUntil,
         }),
+        read,
       );
     });
     return {

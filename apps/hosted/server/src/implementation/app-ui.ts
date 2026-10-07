@@ -11,6 +11,7 @@ import {
   AccountNotFound,
   AccountSelectionInvalid,
   OAuthReconnectRequired,
+  AppNotDeployed,
   AppNotFound,
   credentialsRejected,
   profileAccountProblems,
@@ -46,6 +47,7 @@ import { Clock, Context, Effect, Option, Redacted, Schema, Stream } from "effect
 import { HttpApiBuilder } from "effect/unstable/httpapi";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import {
+  AppUiUnavailable,
   HostedAppRuntime,
   HostedAppSessions,
   HostedAppUiApi,
@@ -285,18 +287,33 @@ export const hostedAppUi = <R = never>(
     handlers.handle("location", ({ params }) =>
       Effect.gen(function* () {
         const access = yield* CurrentOrganization;
-        yield* requireAppAccess(params.app, "use").pipe(Effect.mapError(() => new UiForbidden()));
-        const executor = yield* Effect.flatten(HostedExecutor).pipe(Effect.mapError(unavailable));
-        const app = yield* executor.apps
-          .get({ owner: access.owner, app: params.app })
-          .pipe(Effect.mapError(unavailable));
-        const version = yield* deployment(app);
-        if (!addresses.enabled || (yield* assets(version, "index.html")) === undefined)
+        // Missing and inaccessible apps fail alike, before the app is read.
+        yield* requireAppAccess(params.app, "use");
+        const executor = yield* Effect.flatten(HostedExecutor);
+        const app = yield* executor.apps.get({ owner: access.owner, app: params.app });
+        if (app.activeDeployment === null) return yield* new AppNotDeployed({ app: app.id });
+        const version = yield* executor.apps.deployment({
+          owner: app.owner,
+          app: app.id,
+          deployment: app.activeDeployment,
+          deploymentOwner: app.owner,
+        });
+        // The build, organization and domain reads below fail only when their records are unavailable.
+        const page = yield* assets(version, "index.html").pipe(
+          Effect.mapError(() => new AppUiUnavailable()),
+        );
+        if (!addresses.enabled || page === undefined)
           return { status: "unavailable" as const, url: null };
         const sessions = yield* HostedAppSessions;
-        const organization = yield* sessions.organization({ id: access.organization });
-        const url = yield* addresses.origin(app, organization.slug);
-        const status = yield* domainStatus(organization);
+        const organization = yield* sessions
+          .organization({ id: access.organization })
+          .pipe(Effect.mapError(() => new AppUiUnavailable()));
+        const url = yield* addresses
+          .origin(app, organization.slug)
+          .pipe(Effect.catchTag("UiFailed", () => Effect.fail(new AppUiUnavailable())));
+        const status = yield* domainStatus(organization).pipe(
+          Effect.catchTag("UiFailed", () => Effect.fail(new AppUiUnavailable())),
+        );
         return status === "ready" ? { status, url } : { status, url: null };
       }),
     ),

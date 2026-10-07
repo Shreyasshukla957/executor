@@ -11,6 +11,14 @@ export {
 } from "./api-response-error.ts";
 export { ProviderError } from "./provider-error.ts";
 export { McpError } from "./mcp.ts";
+export {
+  FetchOptionUnsupported,
+  NetworkRefusal,
+  NetworkRefused,
+  networkRefusalHeader,
+  networkRefusalResponse,
+  networkRefusalStatus,
+} from "./network.ts";
 import {
   WorkflowFailure,
   type WorkflowExecution,

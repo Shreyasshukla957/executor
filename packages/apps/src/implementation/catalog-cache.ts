@@ -1,7 +1,7 @@
 /** Revisioned catalog storage shared by remote protocols. Executables are never persisted. */
 import { CacheError } from "@executor-js/app-cache";
 import { Duration, Effect, Schema } from "effect";
-import type { AppCache, CacheLoadContext } from "../contracts/cache.ts";
+import type { AccountCredential, AppCache, CacheLoadContext } from "../contracts/cache.ts";
 import { JsonObject, type JsonValue } from "../contracts/schema.ts";
 import { wrap } from "./schema.ts";
 
@@ -15,34 +15,39 @@ export interface CatalogCacheOptions {
   /** Await a fresh revision at an explicit logical connection or refresh boundary. */
   readonly revalidate?: boolean;
 }
-/**
- * Whose catalog a remote router reads. A public server takes neither field. Credential headers
- * come only with the account they belong to, so an authenticated catalog always has its account.
- */
-export type CatalogAccount =
-  | { readonly account?: undefined; readonly headers?: undefined }
-  | {
-      /** The selected account, as `accounts.<slot>` provides it. */
-      readonly account: { readonly id: string };
-      /** Headers for this account's requests, such as its credentials. */
-      readonly headers?: Readonly<Record<string, string>>;
-    };
+/** Whose catalog a remote router reads, and the headers, such as credentials, it sends. */
+export type CatalogAccount = AccountCredential<{
+  /** Headers for this account's requests, such as its credentials. */
+  readonly headers?: Readonly<Record<string, string>>;
+}>;
+
+/** Why a read cannot use its account's scope. */
+export type CatalogScopeProblem = "missing-account" | "unselected-account";
 
 /**
  * The cache an account's catalog lives in: the account's own scope, which token renewals keep.
- * Credentials never enter a key. Headers without an account, or an account the app was not
- * given, fail with `invalid`.
+ * `credential` is what the read sends, such as headers or a token; it never enters a key. A
+ * credential without an account, or an account the app was not given, fails with `invalid`.
  */
 export const catalogScope = <E>(
-  options: CatalogCacheOptions & CatalogAccount,
-  invalid: () => E,
+  options: {
+    readonly cache?: AppCache | undefined;
+    readonly account?: { readonly id: string } | undefined;
+  },
+  credential: unknown,
+  invalid: (problem: CatalogScopeProblem) => E,
 ): Effect.Effect<AppCache | undefined, E> => {
-  const { account, cache, headers } = options;
+  const { account, cache } = options;
   if (account === undefined)
-    return headers === undefined ? Effect.succeed(cache) : Effect.fail(invalid());
+    return credential === undefined
+      ? Effect.succeed(cache)
+      : Effect.fail(invalid("missing-account"));
   if (cache === undefined) return Effect.succeed(undefined);
   // The cache refuses an account that is not one of the app's selected accounts.
-  return Effect.try({ try: () => cache.forAccount(account), catch: invalid });
+  return Effect.try({
+    try: () => cache.forAccount(account),
+    catch: () => invalid("unselected-account"),
+  });
 };
 
 const schema = <A>(decoder: Schema.Decoder<A>) => wrap(decoder, false);

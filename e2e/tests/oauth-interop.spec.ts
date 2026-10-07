@@ -23,7 +23,11 @@ const Failure = Schema.Struct({
   _tag: Schema.String,
   reason: Schema.String,
   message: Schema.String,
+  recovery: Schema.optional(Schema.Struct({ action: Schema.String, instructions: Schema.String })),
   callbackUrl: Schema.optional(Schema.String),
+  serviceError: Schema.optional(
+    Schema.Struct({ error: Schema.String, description: Schema.optional(Schema.String) }),
+  ),
 });
 const Echo = Schema.Struct({
   refreshed: Schema.Boolean,
@@ -259,12 +263,22 @@ layer(HostedLive, { excludeTestServices: true })("OAuth service interoperability
             "apple",
             ["/.well-known/oauth-authorization-server", "/.well-known/openid-configuration"],
           ],
-          // Atlassian refuses the path-inserted RFC 8414 location with 401.
+          // An issuer with a path: MCP's order is RFC 8414 and then OpenID configuration with
+          // the path inserted, then OpenID configuration appended. Atlassian refuses the first
+          // with 401 and publishes at the last.
           [
             "atlassian",
             [
               "/.well-known/oauth-authorization-server/oauth",
+              "/.well-known/openid-configuration/oauth",
               "/oauth/.well-known/openid-configuration",
+            ],
+          ],
+          [
+            "openid-inserted",
+            [
+              "/.well-known/oauth-authorization-server/oauth",
+              "/.well-known/openid-configuration/oauth",
             ],
           ],
         ] as const) {
@@ -319,7 +333,14 @@ layer(HostedLive, { excludeTestServices: true })("OAuth service interoperability
         expect(new URL(failure.callbackUrl ?? "http://missing").pathname).toBe(
           "/api/oauth/callback",
         );
-        expect(JSON.stringify(started.body)).not.toContain("PRIVATE_PROVIDER_ERROR");
+        // Its own words are shown as its response, apart from the curated explanation.
+        expect(failure.serviceError).toEqual({
+          error: "invalid_client_metadata",
+          description: "PRIVATE_PROVIDER_ERROR",
+        });
+        expect(JSON.stringify([failure.message, failure.recovery])).not.toContain(
+          "PRIVATE_PROVIDER_ERROR",
+        );
         expect((yield* access.metrics).registrations).toEqual([
           { grantTypes: ["authorization_code", "refresh_token"], accepted: false },
         ]);

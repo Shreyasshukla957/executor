@@ -88,6 +88,8 @@ export interface AppInvocation {
   readonly approval?: typeof TrustedToolApproval.Type;
   readonly replay?: typeof WorkflowReplay.Type;
   readonly deadline?: typeof InvocationDeadline.Type;
+  /** The scheduled run the invocation serves, for telemetry; see `InvocationRun`. */
+  readonly run?: string;
   readonly headers: Readonly<Record<string, string>>;
 }
 

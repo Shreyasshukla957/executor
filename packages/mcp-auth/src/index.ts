@@ -15,7 +15,8 @@ export {
   Grant,
   AppPermission,
   GrantForbidden,
-  permitsDelivery,
+  GrantRefusal,
+  deliveryRefusal,
   permitsBrowserApproval,
 } from "./contracts/grant.ts";
 export { restrictMcpBackend } from "./implementation/backend.ts";

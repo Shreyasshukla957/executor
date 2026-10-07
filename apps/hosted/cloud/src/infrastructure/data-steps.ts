@@ -11,6 +11,7 @@ import { hostDataSteps, runDataSteps } from "@executor-js/app-management/data-st
 import { GroupDatabase } from "@executor-js/hosted-server/groups";
 import { Clock, Config, Effect } from "effect";
 import { SqlClient } from "effect/unstable/sql";
+import { cloudBlobs } from "./blobs.ts";
 
 /** A tick stops starting items after this long, then resumes from its cursor on the next tick. */
 const tickBudgetMs = 20_000;
@@ -41,11 +42,13 @@ export const cloudDataSteps = Effect.gen(function* () {
   // The deploy workflow passes an unset repository variable as an empty string.
   const named = yield* Config.String("CLOUD_DATA_STEPS_APPLY_THROUGH").pipe(Config.withDefault(""));
   const applyThrough = named === "" ? reviewedThrough : named;
+  // The build framework step rewrites retained builds in the same bucket the executor reads.
+  const blobs = yield* cloudBlobs;
   return Effect.gen(function* () {
-    const host = yield* Effect.flatten(AppManagementHost);
+    const { executor } = yield* Effect.flatten(AppManagementHost);
     const sql = yield* Effect.flatten(GroupDatabase);
     const deadline = (yield* Clock.currentTimeMillis) + tickBudgetMs;
-    const steps = hostDataSteps(host);
+    const steps = hostDataSteps({ executor, blobs });
     const run = (selected: typeof steps, selectedMode: typeof mode) =>
       runDataSteps(selected, {
         journal: "private_hosted",

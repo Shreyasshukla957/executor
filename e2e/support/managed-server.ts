@@ -40,6 +40,11 @@ import { scenarios } from "../test-plan.ts";
 class ServerFailed extends Schema.TaggedError<ServerFailed>()("ServerFailed", {
   message: Schema.String,
 }) {}
+
+/** Operator settings a scenario may turn on between product generations. */
+export const OperatorSettings = Schema.Struct({
+  EXECUTOR_OAUTH_CLIENT_METADATA_URL: Schema.NonEmptyString,
+});
 /** The runner owns every process generation and keeps the same synthetic secrets across restarts. */
 export const startManagedServer = (
   target: typeof Target.Service,
@@ -64,7 +69,10 @@ export const startManagedServer = (
     const npmRegistry = yield* Config.NonEmptyString("E2E_NPM_REGISTRY").pipe(Config.option);
     const entry =
       target.metadata.target === "local" && Option.isSome(packagedEntry)
-        ? { command: [packagedEntry.value, "serve"], cwd: target.directory }
+        ? // Run the installed CLI from its package, as the desktop runs its backend from its
+          // install root. Product processes can outlive the server's reported exit on Windows
+          // while they terminate, and a working directory there cannot be removed.
+          { command: [packagedEntry.value, "serve"], cwd: path.dirname(packagedEntry.value) }
         : {
             command: [
               target.metadata.target === "local"
@@ -266,6 +274,27 @@ export const startManagedServer = (
               if (offset > 86_400_000) return HttpServerResponse.empty({ status: 400 });
               env.EXECUTOR_TEST_CLOCK_OFFSET_MS = String(offset);
               return HttpServerResponse.jsonUnsafe({ offset });
+            }),
+          );
+        }),
+      ),
+      // A later start reads an operator setting the install did not have, as when an operator
+      // turns it on. Only settings a scenario turns on mid-life are accepted.
+      HttpRouter.add(
+        "POST",
+        "/environment",
+        Effect.gen(function* () {
+          const request = yield* HttpServerRequest.HttpServerRequest;
+          if (request.headers.authorization !== `Bearer ${Redacted.value(target.apiKey)}`)
+            return HttpServerResponse.empty({ status: 401 });
+          const body = yield* request.json.pipe(
+            Effect.flatMap(Schema.decodeUnknownEffect(OperatorSettings)),
+          );
+          return yield* gate.withPermits(1)(
+            Effect.sync(() => {
+              if (current !== undefined) return HttpServerResponse.empty({ status: 409 });
+              Object.assign(env, body);
+              return HttpServerResponse.jsonUnsafe({ ok: true });
             }),
           );
         }),

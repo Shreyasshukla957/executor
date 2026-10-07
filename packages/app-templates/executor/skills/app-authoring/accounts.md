@@ -51,8 +51,10 @@ export default defineApp(requirements, { tools: router({ listProjects }) });
 Declare `hosts` so app code never holds the secret values. Each unmarked string
 field then reaches the app as an opaque handle. Executor's network replaces a
 handle with the real value only on requests to a declared host, in the URL,
-headers, Basic credentials, and JSON, form or text bodies up to 1 MiB. A request
-that sends a handle anywhere else fails with status 421. Values the service
+headers, Basic credentials, and JSON, form or text bodies up to 1 MiB. Executor
+refuses a request that sends a handle anywhere else: `ctx.fetch` rejects with
+`NetworkRefused`, naming the host and the provider's allowed hosts, and the
+global `fetch` receives status 421 with the same details. Values the service
 echoes back reach the app as handles.
 
 ```ts
@@ -147,10 +149,19 @@ if (response.status === 403 && (await response.json()).error?.code === "missing_
 ```
 
 Any error or a timeout means the check could not verify the account.
-Executor never treats that as bad credentials.
+Executor never treats that as bad credentials. The check also receives `deadline`, the time in
+epoch milliseconds when Executor stops waiting for it. A check still running then fails without a
+message, so a check that waits on its own timer should end before it to say why.
 
 Account forms run the same check on entered credentials before saving them, so the user sees
 whether they work, and the name they belong to, before connecting.
+
+For an MCP server, use `mcpHealth` from `apps/mcp` instead of a REST or GraphQL
+read: `health: (check) => mcpHealth(check, { url, headers: headers(check.account) })`.
+It takes the account, `signal` and `deadline` from the check context; see
+[integrations.md](integrations.md#check-an-mcp-account). It verifies an account
+only on a server that refuses requests without credentials. On a server that
+answers anyone, it reports that it could not verify the account.
 
 Each app checks with its own `health` function, so two apps can verify the same
 account differently. Adding or editing `health` does not change the provider's
@@ -208,10 +219,10 @@ The host adds `offline_access` when advertised and `scopes` is omitted.
 
 Standard discovery requires the metadata's `issuer` to equal the issuer used to
 construct the well-known metadata URL.
-Multi-tenant endpoints that publish a template instead, such as Microsoft's
-`common` endpoint (`https://login.microsoftonline.com/{tenantid}/v2.0`), cannot
-pass that check: use a tenant-specific issuer URL, or declare the endpoints
-without `issuer`.
+Microsoft Entra ID's multi-tenant `common` and `organizations` endpoints publish
+the template `https://login.microsoftonline.com/{tenantid}/v2.0` instead, which
+discovery accepts. Its `consumers` endpoint names a different issuer in its
+metadata and fails the check: declare its endpoints and issuer.
 
 `authorizationParams` adds service-defined parameters to the sign-in request,
 from the service's docs. Use it for settings such as offline access or a
@@ -308,6 +319,7 @@ const connection = await executor.accountConnections.get({
   path: { connection: "<connection-id>" },
 });
 return connection.state; // { status: "completed", account } means setup finished.
+// A pending state with `failure` holds the error the user saw, including the service's own error.
 ```
 
 Completing a targeted request saves the account and selects it for the named profile in

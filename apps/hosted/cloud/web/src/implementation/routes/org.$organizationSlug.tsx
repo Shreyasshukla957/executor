@@ -26,7 +26,7 @@ function OrganizationLayout() {
           banner={<BetaNotice />}
           support={<CloudSupport />}
         >
-          <OrganizationContent>
+          <OrganizationContent pending={<CloudPagePending />}>
             <Outlet />
             <NameAccountDialog />
           </OrganizationContent>

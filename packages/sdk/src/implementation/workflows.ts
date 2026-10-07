@@ -24,6 +24,7 @@ import { AppId, DeploymentId, OwnerId, StorageError, type Json } from "../contra
 import type { Credentials } from "../contracts/storage.ts";
 import type { Runtime } from "../contracts/runtime.ts";
 import type { ExecutorDatabase } from "./storage.ts";
+import type { Executor } from "../contracts/executor.ts";
 import type { AppDatabases } from "@executor-js/app-data";
 import type { makeOAuth } from "./oauth.ts";
 import { database, query, transaction } from "./database.ts";
@@ -582,6 +583,7 @@ export const makeWorkflowRuns = (
                     ? []
                     : [b("profile", "=", input.profile)]),
               ...(input.workflow === undefined ? [] : [b("name", "=", input.workflow)]),
+              ...(input.key === undefined ? [] : [b("key", "=", input.key)]),
               ...(input.cursor === undefined ? [] : [b("id", ">", input.cursor)]),
             ),
           orderBy: ["id", "asc"],
@@ -671,6 +673,14 @@ export const makeWorkflowRuns = (
       get,
       terminate,
       list,
+      pinned: (input: Parameters<Executor["apps"]["workflowRuns"]["pinned"]>[0]) =>
+        Effect.gen(function* () {
+          yield* storedApp(db, { app: input.app, owner: input.owner });
+          const row = yield* read(input.run, input.app);
+          if (input.owner !== undefined && row.owner !== input.owner)
+            return yield* failure("not_found");
+          return { accounts: row.accounts, profile: row.profile };
+        }),
     },
     host: {
       get: (run) => safe(read(run).pipe(Effect.flatMap(view)), "engine", true),

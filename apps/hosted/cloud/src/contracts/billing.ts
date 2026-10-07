@@ -4,6 +4,7 @@ import {
   OrganizationReference,
   RequireOrganization,
 } from "@executor-js/hosted-server/organization";
+import { ApiError } from "@executor-js/utils/api-error";
 import { Context, Effect, Schema } from "effect";
 import { HttpApiEndpoint, HttpApiGroup } from "effect/unstable/httpapi";
 import { RequireUser } from "@executor-js/hosted-server";
@@ -35,17 +36,19 @@ export const MemberLimit = Schema.Struct({
   limit: Schema.NullOr(Schema.Int.check(Schema.isGreaterThan(0))),
 });
 /** Autumn could not complete the request. No provider secrets or raw errors are exposed. */
-export class BillingUnavailable extends Schema.TaggedError<BillingUnavailable>()(
-  "BillingUnavailable",
-  {},
-  { httpApiStatus: 503 },
-) {}
+export const BillingUnavailable = ApiError.define({
+  tag: "BillingUnavailable",
+  status: 503,
+  message: "Executor could not reach its billing service. Try again.",
+});
+export type BillingUnavailable = typeof BillingUnavailable.Type;
 /** The requested plan is not in the available catalog. */
-export class BillingPlanUnavailable extends Schema.TaggedError<BillingPlanUnavailable>()(
-  "BillingPlanUnavailable",
-  {},
-  { httpApiStatus: 400 },
-) {}
+export const BillingPlanUnavailable = ApiError.define({
+  tag: "BillingPlanUnavailable",
+  status: 400,
+  message: "The requested plan is not available.",
+});
+export type BillingPlanUnavailable = typeof BillingPlanUnavailable.Type;
 /** Cloud-only billing operations, with the authorized organization as customer identity. */
 export class Billing extends Context.Service<
   Billing,

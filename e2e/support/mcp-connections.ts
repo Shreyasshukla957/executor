@@ -143,6 +143,16 @@ export const consentTo = (
     };
   });
 
+/** The ID of the grant this session issued to a client, read from the public grants list. */
+export const clientGrantId = (session: Session, clientId: string) =>
+  Effect.gen(function* () {
+    const api = yield* Api;
+    const grants = yield* body(Grants, yield* api.request(session, "GET", "/api/auth/mcp/grants"));
+    const grant = grants.find((item) => item.clientId === clientId);
+    if (grant === undefined) return yield* Effect.die(`No grant was issued to ${clientId}`);
+    return grant.grant.id;
+  });
+
 /** Revoke every grant this session issued to the given clients, even after a failed scenario. */
 export const revokeClientGrants = (session: Session, clients: () => readonly string[]) =>
   Effect.addFinalizer(() =>

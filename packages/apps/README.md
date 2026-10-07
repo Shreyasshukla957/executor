@@ -21,12 +21,12 @@ export default defineApp({ accounts: {} }, async ({ signal }) => ({
 }));
 ```
 
-| Import           | Helper          | App dependency              |
-| ---------------- | --------------- | --------------------------- |
-| `apps/mcp`       | `mcpRouter`     | `@modelcontextprotocol/sdk` |
-| `apps/mcp/stdio` | `stdioRouter`   | `@modelcontextprotocol/sdk` |
-| `apps/graphql`   | `graphqlRouter` | `graphql`                   |
-| `apps/openapi`   | `openapiRouter` | None                        |
+| Import           | Helper                   | App dependency              |
+| ---------------- | ------------------------ | --------------------------- |
+| `apps/mcp`       | `mcpRouter`, `mcpHealth` | `@modelcontextprotocol/sdk` |
+| `apps/mcp/stdio` | `stdioRouter`            | `@modelcontextprotocol/sdk` |
+| `apps/graphql`   | `graphqlRouter`          | `graphql`                   |
+| `apps/openapi`   | `openapiRouter`          | None                        |
 
 MCP and GraphQL are optional peers. Subpath imports isolate their module graphs;
 optional peers keep unused libraries out of the dependency installation. The

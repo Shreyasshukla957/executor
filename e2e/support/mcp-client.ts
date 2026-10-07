@@ -16,10 +16,13 @@ const make = Effect.gen(function* () {
       accessToken: Redacted.Redacted<string>,
       label: string,
       options: {
-        readonly organization?: string;
+        /** X-Executor-Organization, read for every request so a client can follow a renamed slug. */
+        readonly organization?: string | (() => string);
         readonly mode?: "model" | "native" | "browser";
         /** A scoped connection's URL; its grants are only valid at that URL. */
         readonly connection?: string;
+        /** Runs while a native client holds an approval request, before it accepts. */
+        readonly whileApproving?: Effect.Effect<void, unknown>;
       } = {},
     ) =>
       Effect.gen(function* () {
@@ -35,10 +38,14 @@ const make = Effect.gen(function* () {
           (client) => driver("close MCP client", () => client.close()).pipe(Effect.orDie),
         );
         let elicitationCount = 0;
+        const whileApproving = options.whileApproving ?? Effect.void;
         if (options.mode === "native")
           client.setRequestHandler(ElicitRequestSchema, () => {
             elicitationCount += 1;
-            return Promise.resolve({ action: "accept" as const, content: {} });
+            // oxlint-disable-next-line executor/no-manual-effect-runtime-in-tests -- the MCP SDK request handler returns a Promise
+            return Effect.runPromise(
+              whileApproving.pipe(Effect.as({ action: "accept" as const, content: {} })),
+            );
           });
         // Record methods, revisions and timing only. OAuth headers and tool arguments are excluded.
         const observedFetch: typeof fetch = (input, init) =>
@@ -46,6 +53,12 @@ const make = Effect.gen(function* () {
           Effect.runPromise(
             Effect.gen(function* () {
               const request = new Request(input, init);
+              const organization = options.organization;
+              if (organization !== undefined)
+                request.headers.set(
+                  "X-Executor-Organization",
+                  typeof organization === "string" ? organization : organization(),
+                );
               const started = yield* Clock.currentTimeMillis;
               const traceId = randomBytes(16).toString("hex"),
                 spanId = randomBytes(8).toString("hex");
@@ -95,12 +108,7 @@ const make = Effect.gen(function* () {
         if (options.mode !== undefined) endpoint.searchParams.set("elicitation_mode", options.mode);
         const transport = new StreamableHTTPClientTransport(endpoint, {
           requestInit: {
-            headers: {
-              authorization: `Bearer ${Redacted.value(accessToken)}`,
-              ...(options.organization === undefined
-                ? {}
-                : { "X-Executor-Organization": options.organization }),
-            },
+            headers: { authorization: `Bearer ${Redacted.value(accessToken)}` },
           },
           fetch: observedFetch,
         });

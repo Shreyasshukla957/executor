@@ -27,11 +27,27 @@ import {
   OAuthSetupFailed,
 } from "./oauth.ts";
 
+/**
+ * Why the connection's latest sign-in ended without an account: the same typed error its starter
+ * or callback page received, with the stage, HTTP status and the service's own error it recorded.
+ * Starting a new sign-in clears it. Connections store it in this error vocabulary; a stored failure
+ * a later release can no longer read is left out rather than failing the connection.
+ */
+export const AccountConnectionFailure = Schema.Struct({
+  at: Schema.Date,
+  error: Schema.Union([OAuthSetupFailed, OAuthCompletionFailed]),
+});
+export type AccountConnectionFailure = typeof AccountConnectionFailure.Type;
 /** Public progress never contains submitted fields, grants, or OAuth protocol state. */
 export const AccountConnectionState = Schema.Union([
-  Schema.Struct({ status: Schema.Literals(["pending", "cancelled", "expired"]) }),
+  Schema.Struct({
+    status: Schema.Literals(["pending", "expired"]),
+    failure: Schema.optional(AccountConnectionFailure),
+  }),
+  Schema.Struct({ status: Schema.Literal("cancelled") }),
   Schema.Struct({ status: Schema.Literal("completed"), account: Account }),
 ]);
+export type AccountConnectionState = typeof AccountConnectionState.Type;
 /** An app profile requirement to fill when account setup finishes. */
 export const AccountConnectionTarget = Schema.Struct({
   app: AppId,
@@ -197,7 +213,7 @@ export const AccountConnectionsGroup = HttpApiGroup.make("accountConnections")
       error: [...errors, AccountConnectionTargetChanged],
     }).annotate(
       OpenApi.Description,
-      "Check a connection request: pending, completed with account metadata, cancelled or expired. Credentials are never returned. Do not busy-poll; check after the user finishes. Completed targeted requests have already selected the account for the named profile. Provider-only requests save standalone accounts. A pending targeted request whose app no longer requires its provider fails with AccountConnectionTargetChanged; request a new connection.",
+      "Check a connection request: pending, completed with account metadata, cancelled or expired. A pending or expired request whose latest OAuth sign-in failed has state.failure: the error the user saw, with its reason, cause (stage and HTTP status) and serviceError (the service's own error and description, or the bounded text of another error body). A rate_limited failure has retryAfter when the service said when to try again. Credentials are never returned. Do not busy-poll; check after the user finishes. Completed targeted requests have already selected the account for the named profile. Provider-only requests save standalone accounts. A pending targeted request whose app no longer requires its provider fails with AccountConnectionTargetChanged; request a new connection.",
     ),
   )
   .add(

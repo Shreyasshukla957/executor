@@ -21,9 +21,10 @@ renamed). Read its other skills with the `skills` tool, for example
 
 Write a JavaScript program for `execute`. Start with
 `return await tools.search({ query: "..." })`, then call the exact paths it
-returns, such as `await tools.<slug>.<tool>({ ... })`. Return only the data you
-need. When a program pauses for approval or input, resume it; never run its
-source again. For depth, read the `code-mode` skill.
+returns, such as `await tools.<slug>.<tool>({ ... })`. Search shows each tool's
+input type; `tools.search.describe({ paths })` returns full signatures. Return
+only the data you need. When a program pauses for approval or input, resume it;
+never run its source again. For depth, read the `code-mode` skill.
 
 ## Build an app
 

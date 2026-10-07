@@ -134,7 +134,11 @@ export const makeAppManagementAtoms = <R, E>(
             params: { ...params, app },
             payload: { expected: current.revision.commit, files, message: input.message },
           });
-          acknowledge(get, workspace(app), (previous) => ({ ...previous, ...saved }));
+          acknowledge(get, workspace(app), (previous) => ({
+            ...previous,
+            revision: saved.revision,
+            files,
+          }));
           get.refresh(source(app));
           get.refresh(history(app));
           return { _tag: "Committed" as const, commit: saved.revision.commit };

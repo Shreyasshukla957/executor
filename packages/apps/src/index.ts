@@ -1,4 +1,5 @@
 export { ProviderError } from "./contracts/provider-error.ts";
+export { FetchOptionUnsupported, NetworkRefused } from "./contracts/network.ts";
 export type { AppCache, CacheLoadContext, CacheGetOptions } from "./contracts/cache.ts";
 export { CacheError } from "@executor-js/app-cache/contracts";
 /**

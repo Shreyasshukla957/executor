@@ -39,7 +39,7 @@
     },
     "apps/cli": {
       "name": "executor",
-      "version": "2.0.0-beta.9",
+      "version": "2.0.0-beta.10",
     },
     "apps/docs": {
       "name": "@executor-js/docs",
@@ -148,7 +148,6 @@
         "@effect/sql-pglite": "https://pkg.pr.new/Effect-TS/effect/@effect/sql-pglite@c7d1ffff31a3e2ae0b0b0796b742bddeb797269d",
         "@electric-sql/pglite": "0.5.8",
         "@executor-js/app-management": "workspace:*",
-        "@executor-js/app-registry": "workspace:*",
         "@executor-js/app-source": "workspace:*",
         "@executor-js/app-templates": "workspace:*",
         "@executor-js/dashboard-start": "workspace:*",
@@ -206,7 +205,6 @@
         "@better-auth/core": "1.7.5",
         "@better-auth/oauth-provider": "1.7.5",
         "@executor-js/app-management": "workspace:*",
-        "@executor-js/app-registry": "workspace:*",
         "@executor-js/app-templates": "workspace:*",
         "@executor-js/authorization": "workspace:*",
         "@executor-js/catalog": "workspace:*",
@@ -226,6 +224,7 @@
       "dependencies": {
         "@effect/platform-bun": "https://pkg.pr.new/Effect-TS/effect/@effect/platform-bun@c7d1ffff31a3e2ae0b0b0796b742bddeb797269d",
         "@effect/platform-node": "https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@c7d1ffff31a3e2ae0b0b0796b742bddeb797269d",
+        "@executor-js/dashboard-start": "workspace:*",
         "@executor-js/devtools": "workspace:*",
         "@executor-js/hosted-server": "workspace:*",
         "@executor-js/telemetry": "workspace:*",
@@ -243,7 +242,6 @@
       "dependencies": {
         "@better-auth/oauth-provider": "1.7.5",
         "@effect/atom-react": "https://pkg.pr.new/Effect-TS/effect/@effect/atom-react@c7d1ffff31a3e2ae0b0b0796b742bddeb797269d",
-        "@executor-js/app-registry": "workspace:*",
         "@executor-js/catalog": "workspace:*",
         "@executor-js/dashboard-start": "workspace:*",
         "@executor-js/hosted-server": "workspace:*",
@@ -303,7 +301,6 @@
         "@effect/platform-node": "https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@c7d1ffff31a3e2ae0b0b0796b742bddeb797269d",
         "@effect/sql-pglite": "https://pkg.pr.new/Effect-TS/effect/@effect/sql-pglite@c7d1ffff31a3e2ae0b0b0796b742bddeb797269d",
         "@executor-js/app-management": "workspace:*",
-        "@executor-js/app-registry": "workspace:*",
         "@executor-js/app-source": "workspace:*",
         "@executor-js/app-templates": "workspace:*",
         "@executor-js/catalog": "workspace:*",
@@ -332,7 +329,6 @@
       "name": "@executor-js/local-web",
       "dependencies": {
         "@effect/atom-react": "https://pkg.pr.new/Effect-TS/effect/@effect/atom-react@c7d1ffff31a3e2ae0b0b0796b742bddeb797269d",
-        "@executor-js/app-registry": "workspace:*",
         "@executor-js/catalog": "workspace:*",
         "@executor-js/dashboard-start": "workspace:*",
         "@executor-js/devtools": "workspace:*",
@@ -369,7 +365,7 @@
       "dependencies": {
         "@astrojs/react": "^6.0.5",
         "@effect/atom-react": "https://pkg.pr.new/Effect-TS/effect/@effect/atom-react@c7d1ffff31a3e2ae0b0b0796b742bddeb797269d",
-        "@executor-js/app-registry": "workspace:*",
+        "@executor-js/sdk": "workspace:*",
         "@executor-js/telemetry": "workspace:*",
         "@executor-js/ui": "workspace:*",
         "@sentry/browser": "10.75.0",
@@ -433,10 +429,10 @@
       "name": "@executor-js/app-management",
       "dependencies": {
         "@effect/platform-node": "https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@c7d1ffff31a3e2ae0b0b0796b742bddeb797269d",
-        "@executor-js/app-registry": "workspace:*",
         "@executor-js/app-source": "workspace:*",
         "@executor-js/app-templates": "workspace:*",
         "@executor-js/sdk": "workspace:*",
+        "@executor-js/utils": "workspace:*",
         "@napi-rs/keyring": "2.1.0",
         "effect": "https://pkg.pr.new/Effect-TS/effect/effect@c7d1ffff31a3e2ae0b0b0796b742bddeb797269d",
         "jsonc-parser": "3.3.1",
@@ -452,6 +448,7 @@
       "name": "@executor-js/app-registry",
       "dependencies": {
         "@executor-js/sdk": "workspace:*",
+        "@executor-js/utils": "workspace:*",
         "effect": "https://pkg.pr.new/Effect-TS/effect/effect@c7d1ffff31a3e2ae0b0b0796b742bddeb797269d",
         "fumadb-effect": "workspace:*",
       },
@@ -482,7 +479,7 @@
     },
     "packages/apps": {
       "name": "apps",
-      "version": "0.0.1-beta.26",
+      "version": "0.0.1-beta.34",
       "dependencies": {
         "@cfworker/json-schema": "4.1.1",
         "@csstools/css-tokenizer": "4.0.2",
@@ -490,6 +487,7 @@
         "@executor-js/app-cache": "workspace:*",
         "@executor-js/app-data": "workspace:*",
         "@executor-js/telemetry": "workspace:*",
+        "@executor-js/utils": "workspace:*",
         "@scalar/helpers": "0.14.0",
         "@scalar/openapi-upgrader": "0.3.1",
         "effect": "https://pkg.pr.new/Effect-TS/effect/effect@c7d1ffff31a3e2ae0b0b0796b742bddeb797269d",
@@ -618,6 +616,7 @@
         "@executor-js/authorization": "workspace:*",
         "@executor-js/mcp": "workspace:*",
         "@executor-js/sdk": "workspace:*",
+        "@executor-js/utils": "workspace:*",
         "better-auth": "1.7.5",
         "effect": "https://pkg.pr.new/Effect-TS/effect/effect@c7d1ffff31a3e2ae0b0b0796b742bddeb797269d",
         "kysely": "0.29.6",
@@ -647,6 +646,7 @@
         "@executor-js/reactivity": "workspace:*",
         "@executor-js/telemetry": "workspace:*",
         "@executor-js/utils": "workspace:*",
+        "@jridgewell/trace-mapping": "0.3.31",
         "ajv": "^8.17.1",
         "apps": "workspace:*",
         "capnweb": "0.12.0",
@@ -671,6 +671,7 @@
       "name": "@executor-js/telemetry",
       "dependencies": {
         "@bufbuild/protobuf": "2.11.0",
+        "@executor-js/utils": "workspace:*",
         "effect": "https://pkg.pr.new/Effect-TS/effect/effect@c7d1ffff31a3e2ae0b0b0796b742bddeb797269d",
         "workerd": "1.20260901.1",
       },
@@ -688,7 +689,6 @@
         "@codemirror/view": "^6.43.13",
         "@effect/atom-react": "https://pkg.pr.new/Effect-TS/effect/@effect/atom-react@c7d1ffff31a3e2ae0b0b0796b742bddeb797269d",
         "@executor-js/app-management": "workspace:*",
-        "@executor-js/app-registry": "workspace:*",
         "@executor-js/app-source": "workspace:*",
         "@executor-js/catalog": "workspace:*",
         "@executor-js/mcp": "workspace:*",
@@ -829,6 +829,7 @@
     "workerd",
   ],
   "patchedDependencies": {
+    "@better-auth/api-key@1.7.5": "patches/@better-auth%2Fapi-key@1.7.5.patch",
     "@alchemy.run/cloudflare-runtime@2.0.0-beta.79": "patches/@alchemy.run%2Fcloudflare-runtime@2.0.0-beta.79.patch",
     "@cfworker/json-schema@4.1.1": "patches/@cfworker%2Fjson-schema@4.1.1.patch",
     "effect@https://pkg.pr.new/Effect-TS/effect/effect@c7d1ffff31a3e2ae0b0b0796b742bddeb797269d": "patches/effect@c7d1ffff.patch",
@@ -1561,7 +1562,7 @@
 
     "@jridgewell/sourcemap-codec": ["@jridgewell/sourcemap-codec@1.6.0", "", {}, "sha512-T7jf+5zgsZHwNJ4lvQ7/aezbyk0nNX+zJVWpmHA7VYsEx7a7qr5Rg5IbtJFqkgze5Y2sruq1RUY8Q837Od7iFw=="],
 
-    "@jridgewell/trace-mapping": ["@jridgewell/trace-mapping@0.3.9", "", { "dependencies": { "@jridgewell/resolve-uri": "^3.0.3", "@jridgewell/sourcemap-codec": "^1.4.10" } }, "sha512-3Belt6tdc8bPgAtbcmdtNJlirVoTmEb5e2gC94PnkwEW9jI6CAHUeoG85tjWP5WquqfavoMtMwiG4P926ZKKuQ=="],
+    "@jridgewell/trace-mapping": ["@jridgewell/trace-mapping@0.3.31", "", { "dependencies": { "@jridgewell/resolve-uri": "^3.1.0", "@jridgewell/sourcemap-codec": "^1.4.14" } }, "sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw=="],
 
     "@js-joda/core": ["@js-joda/core@6.1.0", "", {}, "sha512-H8NTMRDJqad/leyv/D/A3kSOsf5/58Ydj4DJGDyaCWk9OU/zuZOLhndVffJgQjsgrn5GC0znHMHie7TfvPPG4w=="],
 
@@ -5137,8 +5138,6 @@
 
     "@babel/core/semver": ["semver@6.3.1", "", { "bin": { "semver": "bin/semver.js" } }, "sha512-BR7VvDCVHO+q2xBEWskxS6DJE1qRnb7DxzUrogb71CWoSficBxYsiAGd+Kl0mmq/MprG9yArRkyrQxTO6XjMzA=="],
 
-    "@babel/generator/@jridgewell/trace-mapping": ["@jridgewell/trace-mapping@0.3.31", "", { "dependencies": { "@jridgewell/resolve-uri": "^3.1.0", "@jridgewell/sourcemap-codec": "^1.4.14" } }, "sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw=="],
-
     "@babel/helper-compilation-targets/lru-cache": ["lru-cache@5.1.1", "", { "dependencies": { "yallist": "^3.0.2" } }, "sha512-KpNARQA3Iwv+jTA0utUVVbrh+Jlrr1Fv0e56GGzAFOXN7dk/FviaDW8LHmK52DlcH4WP2n6gI8vN1aesBFgo9w=="],
 
     "@babel/helper-compilation-targets/semver": ["semver@6.3.1", "", { "bin": { "semver": "bin/semver.js" } }, "sha512-BR7VvDCVHO+q2xBEWskxS6DJE1qRnb7DxzUrogb71CWoSficBxYsiAGd+Kl0mmq/MprG9yArRkyrQxTO6XjMzA=="],
@@ -5164,6 +5163,8 @@
     "@chevrotain/gast/lodash-es": ["lodash-es@4.17.23", "", {}, "sha512-kVI48u3PZr38HdYz98UmfPnXl2DXrpdctLrFLCd3kOx1xUkOmpFPx7gCWWM5MPkL/fD8zb+Ph0QzjGFs4+hHWg=="],
 
     "@cloudflare/worker-bundler/typescript": ["typescript@6.0.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw=="],
+
+    "@cspotcode/source-map-support/@jridgewell/trace-mapping": ["@jridgewell/trace-mapping@0.3.9", "", { "dependencies": { "@jridgewell/resolve-uri": "^3.0.3", "@jridgewell/sourcemap-codec": "^1.4.10" } }, "sha512-3Belt6tdc8bPgAtbcmdtNJlirVoTmEb5e2gC94PnkwEW9jI6CAHUeoG85tjWP5WquqfavoMtMwiG4P926ZKKuQ=="],
 
     "@effect/platform-node/undici": ["undici@8.10.2", "", {}, "sha512-/y4/bH9YNU5hi9NIrpOuvGXFcxrj3CMrV+/AYpowAYTpHn8gX/XPFjNy766FPoYY0miQhdW977JFWKGNhBdwyQ=="],
 
@@ -5194,10 +5195,6 @@
     "@electron/windows-sign/fs-extra": ["fs-extra@11.4.1", "", { "dependencies": { "graceful-fs": "^4.2.0", "jsonfile": "^6.0.1", "universalify": "^2.0.0" } }, "sha512-KYAb4c9BJQI6QqGKthV68OHe0badztdXJWKo0WtBA9IuCFPTKvE5ZdUBglP833aMjhaSPNO4A5j/EkzZtGlKjA=="],
 
     "@img/sharp-wasm32/@emnapi/runtime": ["@emnapi/runtime@1.11.3", "", { "dependencies": { "tslib": "^2.4.0" } }, "sha512-Xz4Tpyki7XyrpbUK1jR1AhdAdaXyhhY4lZ3neLodmhpuWfy2PAQN5B46sAiU4liOXGLkHypn/qU+jvfWSCYYLA=="],
-
-    "@jridgewell/gen-mapping/@jridgewell/trace-mapping": ["@jridgewell/trace-mapping@0.3.31", "", { "dependencies": { "@jridgewell/resolve-uri": "^3.1.0", "@jridgewell/sourcemap-codec": "^1.4.14" } }, "sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw=="],
-
-    "@jridgewell/remapping/@jridgewell/trace-mapping": ["@jridgewell/trace-mapping@0.3.31", "", { "dependencies": { "@jridgewell/resolve-uri": "^3.1.0", "@jridgewell/sourcemap-codec": "^1.4.14" } }, "sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw=="],
 
     "@jsonjoy.com/fs-snapshot/@jsonjoy.com/json-pack": ["@jsonjoy.com/json-pack@17.67.0", "", { "dependencies": { "@jsonjoy.com/base64": "17.67.0", "@jsonjoy.com/buffers": "17.67.0", "@jsonjoy.com/codegen": "17.67.0", "@jsonjoy.com/json-pointer": "17.67.0", "@jsonjoy.com/util": "17.67.0", "hyperdyperid": "^1.2.0", "thingies": "^2.5.0", "tree-dump": "^1.1.0" }, "peerDependencies": { "tslib": "2" } }, "sha512-t0ejURcGaZsn1ClbJ/3kFqSOjlryd92eQY465IYrezsXmPcfHPE/av4twRSxf6WE+TkZgLY+71vCZbiIiFKA/w=="],
 
@@ -5368,8 +5365,6 @@
     "@vitest/browser/ws": ["ws@8.21.3", "", { "peerDependencies": { "bufferutil": "^4.0.1", "utf-8-validate": ">=5.0.2" }, "optionalPeers": ["bufferutil", "utf-8-validate"] }, "sha512-201TZ/kPWxoPr/OKWjquZR1SWKXcvxdH+e1xrx89b3YbmzLMFCLfnaG1HFIgWzJOEWZ7MvpK++odZufgYR50Rw=="],
 
     "@vitest/expect/@vitest/utils": ["@vitest/utils@4.1.11", "", { "dependencies": { "@vitest/pretty-format": "4.1.11", "convert-source-map": "^2.0.0", "tinyrainbow": "^3.1.0" } }, "sha512-zTCVGpyFsGWBhllOyKlTw/vnr6D9qxsfSDyfbyZmTyjHw5N/VuvzHpHoQjm2ZJzn4RJgx5w4r7V0er69CmLgPQ=="],
-
-    "@vitest/mocker/@jridgewell/trace-mapping": ["@jridgewell/trace-mapping@0.3.31", "", { "dependencies": { "@jridgewell/resolve-uri": "^3.1.0", "@jridgewell/sourcemap-codec": "^1.4.14" } }, "sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw=="],
 
     "@vitest/mocker/@vitest/spy": ["@vitest/spy@5.0.1", "", {}, "sha512-rbto/mF/SGERxEgYOek7Xm6B9b+y+mVoo+f4b2LymYO8zM1b7uB5nHuhVMTP2hxdzgxvGiZYGxGIaMvL5y180Q=="],
 

@@ -15,6 +15,8 @@ export const workerFirstRoutes = [
   "/health",
   "/openapi.json",
   "/mcp",
+  // The OAuth Client ID Metadata Document; see `client-metadata.ts`.
+  "/oauth/client-metadata.json",
   "/git/*",
   "/.well-known/*",
 ];

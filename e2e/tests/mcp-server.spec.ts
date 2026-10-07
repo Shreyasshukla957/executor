@@ -18,6 +18,21 @@ const Completed = Schema.Struct({
   status: Schema.Literal("completed"),
   execution: Schema.Struct({ ok: Schema.Literal(true), value: Schema.Unknown }),
 });
+/**
+ * MCP clients print a refused request's body after their own prefix, such as "Error POSTing to
+ * endpoint:", so the JSON-RPC error names the grant's own reason for the refusal.
+ */
+const refusal = (message: string) => ({
+  jsonrpc: "2.0",
+  id: null,
+  error: {
+    // JSON-RPC Invalid Request, as for the MCP transport's own rejections.
+    code: -32600,
+    message: `GrantForbidden (HTTP 403): ${message}`,
+    data: { code: "GrantForbidden", status: 403 },
+  },
+});
+const listTools = { jsonrpc: "2.0", id: 1, method: "tools/list" };
 
 layer(HostedLive, { excludeTestServices: true })("MCP server", (it) => {
   it.effect(scenarios.mcpProtocol.title, (context) =>
@@ -164,7 +179,8 @@ layer(HostedLive, { excludeTestServices: true })("MCP server", (it) => {
     withHostedCase(
       context,
       Effect.gen(function* () {
-        const actors = yield* Actors,
+        const api = yield* Api,
+          actors = yield* Actors,
           browser = yield* Browser,
           evidence = yield* Evidence;
         const oauth = yield* McpOAuth,
@@ -189,6 +205,49 @@ layer(HostedLive, { excludeTestServices: true })("MCP server", (it) => {
           mcp.connect(token, "without-resource-browser-mode", { mode: "browser" }),
         );
         expect(Exit.isFailure(other)).toBe(true);
+        const anonymous = yield* api.session();
+        const bearer = { authorization: `Bearer ${Redacted.value(token)}` };
+        const browserMode = yield* api.request(
+          anonymous,
+          "POST",
+          "/mcp?elicitation_mode=browser",
+          listTools,
+          bearer,
+        );
+        expect(browserMode.status).toBe(403);
+        expect(browserMode.body).toMatchObject(
+          refusal(
+            "This credential works only at the MCP URL ending in /mcp, not at the URL of this request. Recovery: Connect at the MCP URL ending in /mcp, or connect again at this URL to get a credential for it, then retry.",
+          ),
+        );
+        yield* evidence.step(
+          "A grant issued at the model-mode URL cannot be narrowed to browser approval",
+          Effect.gen(function* () {
+            // No URL could serve it: its own URL cannot ask for browser approval.
+            const narrowed = yield* api.request(
+              actors.owner,
+              "POST",
+              "/api/auth/mcp/grants/narrow",
+              {
+                id: grant.grantId,
+                policy: { kind: "tools", apps: [], approval: "browser" },
+              },
+            );
+            expect(narrowed.status, JSON.stringify(narrowed.body)).toBe(403);
+            expect(narrowed.body).toMatchObject({
+              message:
+                "Browser approval needs a grant issued at an MCP URL with elicitation_mode=browser.",
+            });
+            const relisted = yield* client.use("The grant still serves its own URL", (client) =>
+              client.listTools(),
+            );
+            expect(relisted.tools.map((tool) => tool.name).sort()).toEqual([
+              "execute",
+              "resume",
+              "skills",
+            ]);
+          }),
+        );
         yield* oauth.revoke(grant);
       }).pipe(Effect.provide(Layer.mergeAll(McpOAuth.layer, McpClient.layer))),
     ),

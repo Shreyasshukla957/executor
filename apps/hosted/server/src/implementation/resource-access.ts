@@ -109,9 +109,10 @@ export const resourceDirectory = (view: "available" | "managed" = "available") =
     );
     const pendingApp =
       policy.tools.kind === "all" && (view === "available" || actor.role !== "member")
-        ? yield* teamAppPending(actor.organization).pipe(
-            Effect.provideService(SqlClient.SqlClient, yield* policyDatabase),
-          )
+        ? yield* teamAppPending(
+            actor.organization,
+            (yield* executor.apps.list({ owner, name: "Executor" })).length > 0,
+          ).pipe(Effect.provideService(SqlClient.SqlClient, yield* policyDatabase))
         : false;
     return { apps: appEntries, accounts: accountEntries.flat(), pendingApp };
   });

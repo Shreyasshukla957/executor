@@ -1,21 +1,20 @@
-/** Git source storage shared by local, self-host, and cloud apps. */
+/** Revision storage over a host's Git backend. Each protected ref pins a complete snapshot. */
 import { Effect } from "effect";
 import {
   SourceError,
   SourceRevision,
   type AppSourceStorage,
+  type RepositoryBackend,
   type SourceFiles,
-} from "@executor-js/sdk/core";
-import type { RepositoryBackend } from "./contracts/repositories.ts";
-export * from "./contracts/repositories.ts";
+} from "../contracts/source.ts";
 
 /** Stable file ordering makes retries and migration comparisons independent of input order. */
-export const encodeSource = (files: SourceFiles) =>
+const encodeSource = (files: SourceFiles) =>
   new TextEncoder().encode(
     JSON.stringify([...files].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))),
   );
 
-/** Each protected ref pins a complete snapshot; ordinary Git pushes cannot change it. */
+/** Ordinary Git pushes cannot change a retained snapshot; only the protected ref names it. */
 export const gitSourceStorage = (repositories: RepositoryBackend): AppSourceStorage => ({
   workspace: (code) =>
     repositories.read(code, "main").pipe(

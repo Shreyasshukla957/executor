@@ -34,6 +34,7 @@ import {
   ElicitationResponseInvalid,
   ResumeInput,
   type InteractionId,
+  type InteractionTool,
   type ToolInputPending,
   type ExecuteResult,
   type McpExecutionResult,
@@ -61,6 +62,21 @@ class ApprovalUnavailable extends Schema.TaggedError<ApprovalUnavailable>()(
   "ApprovalUnavailable",
   {},
 ) {}
+
+/** The asking call's identity. A call without a profile omits the keys; MCP results are JSON. */
+const interactionTool = (call: {
+  readonly app: InteractionTool["app"];
+  readonly tool: InteractionTool["tool"];
+  readonly profile?: InteractionTool["profile"] | undefined;
+  readonly expectedProfileRevision?: InteractionTool["expectedProfileRevision"] | undefined;
+}): InteractionTool => ({
+  app: call.app,
+  tool: call.tool,
+  ...(call.profile === undefined ? {} : { profile: call.profile }),
+  ...(call.expectedProfileRevision === undefined
+    ? {}
+    : { expectedProfileRevision: call.expectedProfileRevision }),
+});
 
 type Operation = { readonly waiting: Set<InteractionId> };
 type Pending = {
@@ -221,11 +237,7 @@ export const makeExecutions = (
       });
 
     const elicitation =
-      (
-        run: Run,
-        operation: Operation,
-        tool: (typeof ToolInputPending.Type)["tool"],
-      ): ElicitationHandler =>
+      (run: Run, operation: Operation, tool: InteractionTool): ElicitationHandler =>
       (input, signal) =>
         Effect.gen(function* () {
           const form = yield* prepareElicitation(input);
@@ -341,12 +353,7 @@ export const makeExecutions = (
               (backend, operation) =>
                 backend
                   .callTool(input, {
-                    elicitation: elicitation(run, operation, {
-                      app: input.app,
-                      tool: input.tool,
-                      profile: input.profile,
-                      expectedProfileRevision: input.expectedProfileRevision,
-                    }),
+                    elicitation: elicitation(run, operation, interactionTool(input)),
                   })
                   .pipe(
                     Effect.withSpan("mcp.tool.call", {
@@ -615,12 +622,16 @@ export const makeExecutions = (
               launch(run, backend, (active, operation) =>
                 active
                   .resumeInvocation(pending.request, response, {
-                    elicitation: elicitation(run, operation, {
-                      app: pending.request.invocation.app,
-                      tool: pending.request.invocation.tool,
-                      profile: pending.request.invocation.profile,
-                      expectedProfileRevision: pending.request.invocation.profileRevision,
-                    }),
+                    elicitation: elicitation(
+                      run,
+                      operation,
+                      interactionTool({
+                        app: pending.request.invocation.app,
+                        tool: pending.request.invocation.tool,
+                        profile: pending.request.invocation.profile,
+                        expectedProfileRevision: pending.request.invocation.profileRevision,
+                      }),
+                    ),
                   })
                   .pipe(
                     Effect.withSpan("mcp.tool.resume", {

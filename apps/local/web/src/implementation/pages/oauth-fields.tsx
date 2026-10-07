@@ -3,6 +3,7 @@ import type { OAuthSubmission } from "@executor-js/ui/contracts/credentials";
 import { useAtomSet } from "@effect/atom-react";
 import type { Atom } from "effect/unstable/reactivity";
 import { Cause, Effect, Option, Schema } from "effect";
+import type { ReactNode } from "react";
 import {
   OAuthClientUnavailable,
   OAuthSetupFailed,
@@ -34,6 +35,7 @@ export function OAuthFields({
   onSaved,
   returnTo,
   onPendingChange,
+  access,
   disabled = false,
 }: {
   readonly provider: Provider;
@@ -43,6 +45,8 @@ export function OAuthFields({
   readonly onSaved: (account: Account) => void;
   readonly returnTo?: typeof OAuthAppReturn.Type;
   readonly onPendingChange?: (pending: boolean) => void;
+  /** Where the sign-in goes once saved; the shared form shows it above Connect. */
+  readonly access?: ReactNode;
   readonly disabled?: boolean;
 }) {
   const page = usePageUrl();
@@ -64,6 +68,7 @@ export function OAuthFields({
           Failure={connection ? ConnectionLinkFailure : Failure}
           setup={setup}
           setupAction={action}
+          access={access}
           disabled={disabled}
           {...(onPendingChange ? { onPendingChange } : {})}
           redirectUri={new URL(OAuthCallbackPath, page.origin).href}

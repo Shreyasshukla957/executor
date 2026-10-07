@@ -1,12 +1,11 @@
 import { useEffect, useState } from "react";
-import { ArrowDown01Icon, InformationCircleIcon } from "@hugeicons/core-free-icons";
+import { ArrowDown01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Cause, Exit, Option, Redacted } from "effect";
 import type { Account, OAuthClientSetup } from "@executor-js/sdk";
 import type { OAuthSubmission } from "../../contracts/credentials.ts";
 import type { FailureProps, Query } from "../../contracts/dashboard.ts";
 import type { ComponentType, ReactNode } from "react";
-import { Alert, AlertDescription, AlertTitle } from "../components/alert.tsx";
 import { Button } from "../components/button.tsx";
 import { Input } from "../components/input.tsx";
 import { Skeleton } from "../components/skeleton.tsx";
@@ -65,6 +64,7 @@ export function OAuthFields<A, E>({
   onAuthorized,
   requiresClient,
   Failure,
+  access,
   onPendingChange,
   manualClient = false,
   setup,
@@ -79,6 +79,8 @@ export function OAuthFields<A, E>({
   readonly onAuthorized: (value: NoInfer<A>) => "navigating" | "done";
   readonly requiresClient: (cause: Cause.Cause<NoInfer<E>>) => boolean;
   readonly Failure: ComponentType<FailureProps<NoInfer<E>>>;
+  /** Where the sign-in goes once saved, shown just above the Connect action. */
+  readonly access?: ReactNode;
   readonly disabled?: boolean;
   readonly onPendingChange?: (pending: boolean) => void;
   readonly manualClient?: boolean | undefined;
@@ -94,6 +96,17 @@ export function OAuthFields<A, E>({
   // An undeclared method accepts either a public client or one with a secret.
   const acceptsSecret = method !== "none";
   const needsSecret = method !== undefined && method !== "none";
+  const details = needsSecret
+    ? "client ID and secret"
+    : acceptsSecret
+      ? "client ID (and secret, if it has one)"
+      : "client ID";
+  // Client entry's one line of help; a failure, which carries its own recovery, replaces it.
+  const guidance = machine
+    ? `Create an OAuth client in ${providerName}’s developer settings${setup.scopes.length > 0 ? " with the permissions under Advanced" : ""}, then enter its ${details}.`
+    : setup !== "unresolved" && setup.mode === "client-required"
+      ? `Executor can’t set up sign-in for ${providerName} automatically. Create an OAuth app there with this redirect URL, then enter its ${details}.`
+      : `Use an OAuth app in ${providerName} that allows this redirect URL, and enter its ${details}.`;
   const [clientId, setClientId] = useState("");
   const [clientSecret, setClientSecret] = useState("");
   const [pending, setPending] = useState(false);
@@ -142,46 +155,29 @@ export function OAuthFields<A, E>({
   }, [onPendingChange]);
   return (
     <>
-      {manual && (
-        <>
-          <Alert role="note" className="gap-y-2 bg-muted/30 px-3 py-3">
-            <HugeiconsIcon icon={InformationCircleIcon} aria-hidden="true" />
-            <AlertTitle className="text-[13px]">Set up an OAuth client</AlertTitle>
-            <AlertDescription className="gap-2 text-xs leading-relaxed">
-              <p>
-                {machine
-                  ? "This service uses an OAuth client ID and secret to connect."
-                  : setup !== "unresolved" && setup.mode === "client-required"
-                    ? "Executor can’t set up sign-in automatically for this service."
-                    : "Use your OAuth app’s details to connect this account."}
-              </p>
-              <ol className="list-decimal space-y-1 pl-4">
-                <li>Open or create an OAuth app in {providerName}’s developer settings.</li>
-                {!machine ? (
-                  <li>Add the redirect URL below to that app.</li>
-                ) : setup.scopes.length > 0 ? (
-                  <li>Enable the permissions listed below for that app.</li>
-                ) : null}
-                <li>
-                  {needsSecret
-                    ? "Enter its client ID and client secret here."
-                    : acceptsSecret
-                      ? "Enter its client ID here, and its client secret if it has one."
-                      : "Enter its client ID here."}
-                </li>
-              </ol>
-            </AlertDescription>
-          </Alert>
-          {!machine && (
-            <div className="field-label flex flex-col gap-2.25 text-[13px] font-medium">
-              <span>Redirect URL</span>
-              <div className="oauth-redirect flex items-start gap-3 [&_>_code]:flex-1 [&_>_code]:min-w-0 [&_>_code]:py-[3px] [&_>_code]:px-0 [&_>_code]:font-mono [&_>_code]:text-[12px] [&_>_code]:font-normal [&_>_code]:wrap-anywhere [&_>_code]:[user-select:all]">
-                <code>{redirectUri}</code>
-                <CopyButton code={redirectUri} label="Copy redirect URL" inline />
-              </div>
-            </div>
-          )}
-        </>
+      {error ? (
+        <Failure cause={error} layout="compact" />
+      ) : (
+        manual && (
+          <p className="text-[13px] leading-5 text-pretty text-muted-foreground">{guidance}</p>
+        )
+      )}
+      {manual && !machine && (
+        <div className="field-label flex flex-col gap-2.25 text-[13px] font-medium">
+          <span>Redirect URL</span>
+          <div className="oauth-redirect flex min-h-9 items-center gap-1 rounded-md border bg-muted/60 py-0.5 pr-0.5 pl-3">
+            <code className="min-w-0 flex-1 font-mono text-xs font-normal wrap-anywhere [user-select:all]">
+              {redirectUri}
+            </code>
+            <CopyButton
+              code={redirectUri}
+              label="Copy redirect URL"
+              text=""
+              size="icon-sm"
+              inline
+            />
+          </div>
+        </div>
       )}
       {manual && (
         <>
@@ -214,8 +210,8 @@ export function OAuthFields<A, E>({
           )}
         </>
       )}
-      {error && <Failure cause={error} />}
-      <div className="form-actions pt-1">
+      <div className="form-actions flex flex-col gap-3 pt-1">
+        {access}
         <div role="group" aria-label="Connection options" className="relative flex flex-col gap-4">
           <div className="flex min-h-9 flex-col max-[740px]:min-h-11">
             {setupAction ?? (

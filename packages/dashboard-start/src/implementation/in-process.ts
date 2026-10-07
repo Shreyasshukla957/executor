@@ -22,6 +22,19 @@ export class HostPipeline extends Context.Service<
   (request: Request) => Promise<Response>
 >()("@executor-js/dashboard-start/HostPipeline") {}
 
+type WebHandler = (request: Request) => Promise<Response>;
+
+/**
+ * Stands between a document's in-process reads and the host pipeline. Product hosts never provide
+ * it, so reads reach the pipeline unchanged. A test host composition provides it to give a read an
+ * answer that no request from outside can provoke, such as an access check that fails while the
+ * page's own reads succeed. One instance wraps the reads of one document.
+ */
+export const InProcessReadFixture = Context.Reference<(pipeline: WebHandler) => WebHandler>(
+  "@executor-js/dashboard-start/InProcessReadFixture",
+  { defaultValue: () => (pipeline) => pipeline },
+);
+
 /**
  * Make `serve` available to the documents it renders. The handler captures the services of the
  * request that reached the host, including its trace span, so each in-process read is recorded
@@ -31,7 +44,7 @@ export const withHostPipeline = <E, R>(
   serve: Effect.Effect<HttpServerResponse.HttpServerResponse, E, R>,
 ): Effect.Effect<HttpServerResponse.HttpServerResponse, E, Exclude<R, HostPipeline>> =>
   Effect.flatMap(Effect.context<Exclude<R, HostPipeline>>(), (context) => {
-    const handler: (request: Request) => Promise<Response> = (request) => pipeline(request);
+    const handler = Context.get(context, InProcessReadFixture)((request) => pipeline(request));
     const self = Effect.provideService(serve, HostPipeline, handler);
     const pipeline = HttpEffect.toWebHandlerWith<
       Exclude<R, HostPipeline>,

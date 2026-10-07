@@ -23,6 +23,8 @@ import { tokenRequestParameters } from "./client-credentials-issuer.ts";
  * - `apple`: the RFC 8414 location redirects (302); OpenID configuration is at the origin.
  * - `atlassian`: the path-inserted RFC 8414 location refuses with 401; the issuer's appended
  *   OpenID configuration serves its metadata.
+ * - `openid-inserted`: an issuer with a path publishes only OpenID configuration with that path
+ *   inserted after the well-known segment (RFC 8414 §5).
  * - `singular`: advertises only the authorization_code grant and rejects a registration that
  *   asks for refresh_token with `invalid_client_metadata`.
  * - `cloudflare-access`: rejects a registration whose redirect URI is not on its allowlist with
@@ -35,12 +37,15 @@ import { tokenRequestParameters } from "./client-credentials-issuer.ts";
  *   other label, including a `charset` parameter, with a non-OAuth error body.
  *
  * Both Entra services issue refresh tokens, and a refreshed ID token names a tenant again.
+ * Like Microsoft's and Apple's published metadata, the Entra and Apple fixtures list no
+ * `code_challenge_methods_supported`; every service requires an S256 challenge at `/authorize`.
  */
 export type InteropService =
   | "entra-tenant"
   | "entra-common"
   | "apple"
   | "atlassian"
+  | "openid-inserted"
   | "singular"
   | "cloudflare-access"
   | "facebook"
@@ -70,7 +75,7 @@ export const oauthInteropIssuer = (service: InteropService) =>
         ? `/${entraTenant}/v2.0`
         : service === "entra-common"
           ? "/common/v2.0"
-          : service === "atlassian"
+          : service === "atlassian" || service === "openid-inserted"
             ? "/oauth"
             : ahrefs
               ? "/"
@@ -132,7 +137,7 @@ export const oauthInteropIssuer = (service: InteropService) =>
         token_endpoint: `${origin}/token`,
         jwks_uri: `${origin}/jwks`,
         response_types_supported: ["code"],
-        code_challenge_methods_supported: ["S256"],
+        ...(entra || service === "apple" ? {} : { code_challenge_methods_supported: ["S256"] }),
         token_endpoint_auth_methods_supported: ["client_secret_post", "client_secret_basic"],
         id_token_signing_alg_values_supported: ["RS256"],
         scopes_supported: entra ? ["openid", "profile", "email", "offline_access"] : ["read"],
@@ -152,8 +157,9 @@ export const oauthInteropIssuer = (service: InteropService) =>
     const locations = {
       rfc8414: "/.well-known/oauth-authorization-server",
       openId: "/.well-known/openid-configuration",
-      atlassianRfc8414: "/.well-known/oauth-authorization-server/oauth",
-      atlassianOpenId: "/oauth/.well-known/openid-configuration",
+      insertedRfc8414: "/.well-known/oauth-authorization-server/oauth",
+      insertedOpenId: "/.well-known/openid-configuration/oauth",
+      appendedOpenId: "/oauth/.well-known/openid-configuration",
       entraCommon: "/common/v2.0/.well-known/openid-configuration",
       entraTenant: `/${entraTenant}/v2.0/.well-known/openid-configuration`,
     } as const;
@@ -161,12 +167,14 @@ export const oauthInteropIssuer = (service: InteropService) =>
       service === "apple"
         ? { rfc8414: "redirect", openId: "metadata" }
         : service === "atlassian"
-          ? { atlassianRfc8414: "refused", atlassianOpenId: "metadata" }
-          : service === "entra-common"
-            ? { entraCommon: "metadata" }
-            : service === "entra-tenant"
-              ? { entraTenant: "metadata" }
-              : { rfc8414: "metadata" };
+          ? { insertedRfc8414: "refused", appendedOpenId: "metadata" }
+          : service === "openid-inserted"
+            ? { insertedOpenId: "metadata" }
+            : service === "entra-common"
+              ? { entraCommon: "metadata" }
+              : service === "entra-tenant"
+                ? { entraTenant: "metadata" }
+                : { rfc8414: "metadata" };
     const wellKnown = (location: keyof typeof locations) =>
       HttpRouter.add(
         "GET",
@@ -205,8 +213,9 @@ export const oauthInteropIssuer = (service: InteropService) =>
     const routes = Layer.mergeAll(
       wellKnown("rfc8414"),
       wellKnown("openId"),
-      wellKnown("atlassianRfc8414"),
-      wellKnown("atlassianOpenId"),
+      wellKnown("insertedRfc8414"),
+      wellKnown("insertedOpenId"),
+      wellKnown("appendedOpenId"),
       wellKnown("entraCommon"),
       wellKnown("entraTenant"),
       HttpRouter.add(

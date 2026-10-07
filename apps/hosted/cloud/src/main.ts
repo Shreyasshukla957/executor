@@ -14,7 +14,6 @@ import { AppWorkflows } from "./infrastructure/workflows.ts";
 import { cloudDataSteps } from "./infrastructure/data-steps.ts";
 import {
   OrganizationRemoval,
-  OrganizationRemovalHost,
   OrganizationRemovalStart,
   dispatchOrganizationRemovals,
   startOrganizationRemoval,
@@ -30,6 +29,9 @@ import { hideRemovedOrganizations } from "./implementation/organization-removal.
 import {
   browserTelemetry,
   hostedOAuthCallback,
+  clientMetadataDocument,
+  clientMetadataDocumentPath,
+  clientMetadataSetting,
   hostedWebhookCallback,
   catalogLive,
   hostedMiddlewareLive,
@@ -42,21 +44,27 @@ import * as Cloudflare from "alchemy/Cloudflare";
 import { cloudSite } from "./infrastructure/site.ts";
 import * as Output from "alchemy/Output";
 import { AlchemyContext } from "alchemy/AlchemyContext";
-import { Config, Effect, Layer, Option, Path, Ref } from "effect";
+import { Config, Effect, Layer, Path, Ref } from "effect";
 import { HttpRouter, HttpServer, HttpServerResponse } from "effect/unstable/http";
 import { cloudAuth } from "./infrastructure/auth.ts";
 import { cloudOnboarding } from "./infrastructure/onboarding.ts";
-import { cloudMcp, McpSessionsLive } from "./infrastructure/mcp.ts";
+import { cloudMcp } from "./infrastructure/mcp.ts";
 import { cloudApi } from "./implementation/api.ts";
 import { billingLive } from "./implementation/billing.ts";
-import { cloudSchedules, ScheduleCoordinatorLive } from "./infrastructure/schedules.ts";
+import {
+  cloudSchedules,
+  PlacedScheduleCoordinatorLive,
+  ScheduleCoordinatorLive,
+} from "./infrastructure/schedules.ts";
 import {
   cloudBackgroundJobs,
   selfBinding,
   type BackgroundJob,
 } from "./infrastructure/background-jobs.ts";
-import { cloudEgress, cloudExecutor } from "./infrastructure/executor.ts";
+import { cloudEgress } from "./infrastructure/executor.ts";
+import { cloudProduct } from "./infrastructure/product.ts";
 import { cloudAuthDatabase } from "./infrastructure/auth-database.ts";
+import { EventCleanup, sqlCancellation } from "./infrastructure/event-cleanup.ts";
 import {
   cloudObservability,
   cloudTelemetry,
@@ -86,6 +94,7 @@ import { sentryBindings } from "./infrastructure/sentry.ts";
 import { cloudErrorTunnel } from "./implementation/error-tunnel.ts";
 import { cloudSentry } from "./implementation/error-reporting.ts";
 import { cloudOrigin, customDomain } from "./infrastructure/stage.ts";
+import { clientMetadataBinding } from "./infrastructure/client-metadata.ts";
 import { appDataSupervisors } from "./infrastructure/app-data.ts";
 import { cloudDevelopment } from "./contracts/development.ts";
 import { requestServices } from "@executor-js/hosted-server";
@@ -104,9 +113,11 @@ export default Api.make(
     const { dev } = yield* AlchemyContext;
     const path = yield* Path.Path;
     const origin = dev ? undefined : new URL(yield* cloudOrigin.pipe(Effect.orDie));
-    const placementRegion = yield* Config.NonEmptyString("CLOUD_PLACEMENT_REGION").pipe(
-      Config.option,
-    );
+    // The schedule coordinator is created beside its first caller, which must be this Worker's
+    // placed fetch handler, so a deployed API Worker cannot go out unplaced.
+    const placement = dev
+      ? undefined
+      : { region: yield* Config.NonEmptyString("CLOUD_PLACEMENT_REGION") };
     const analytics = yield* postHogBindings;
     const sentry = yield* sentryBindings;
     const site = yield* cloudSite;
@@ -121,18 +132,15 @@ export default Api.make(
         [selfBinding]: Cloudflare.Workers.Self,
         ...sentry.env,
         ...(yield* billingBindings),
+        // A deployed stage identifies Executor to authorization servers by its own document.
+        ...(origin === undefined ? {} : yield* clientMetadataBinding(origin)),
       },
       build: workerBuild("api"),
       // Auth callbacks and the dashboard share the configured canonical origin.
       ...(origin === undefined ? {} : { domain: yield* customDomain(origin) }),
-      // Opt in per deployment; the database's cloud region is a proximity hint,
-      // not a Cloudflare data center or a change to local development routing.
-      ...(dev
-        ? {}
-        : Option.match(placementRegion, {
-            onNone: () => ({}),
-            onSome: (region) => ({ placement: { region } }),
-          })),
+      // The database's cloud region is a proximity hint, not a Cloudflare data center or a
+      // change to local development routing.
+      ...(placement === undefined ? {} : { placement }),
       compatibility: {
         date: "2026-09-08",
         flags: ["nodejs_compat", "global_fetch_strictly_public", "enable_request_signal"],
@@ -166,18 +174,14 @@ export default Api.make(
     const welcomeEmails = yield* cloudWelcomeEmails(email.welcome);
     yield* AppWorkflows;
     yield* Provisioning;
-    const executor = yield* cloudExecutor(
+    const executor = yield* cloudProduct(
       yield* appDataSupervisors,
       yield* cloudArtifactsTokensLive,
     );
     const billing = yield* billingLive.pipe(Effect.orDie);
     // The removal workflow runs in this isolate and shares its services.
     const removal = yield* OrganizationRemoval.pipe(
-      Effect.provideService(OrganizationRemovalHost, {
-        executor,
-        identity: auth.identity,
-        billing,
-      }),
+      Effect.provide(Layer.mergeAll(executor, auth.identity, billing)),
     );
     const removals = Layer.succeed(OrganizationRemovalStart, startOrganizationRemoval(removal));
     const schedules = yield* cloudSchedules;
@@ -212,15 +216,12 @@ export default Api.make(
     // Jobs are queued by triggers on users, teams and members. Only auth and dashboard API
     // writes change those rows, so only their requests start the jobs at once. MCP, telemetry
     // and the other routes skip the extra connection and query. Cron recovers any lost dispatch.
-    // The bound stays inside the 30 seconds Cloudflare allows after the response.
-    const startJobs = dispatchWith(installTeam).pipe(
-      lifetime.background,
-      Effect.timeoutOption("25 seconds"),
-      Effect.asVoid,
-    );
+    const startJobs = dispatchWith(installTeam).pipe(lifetime.background);
+    const cleanup = yield* EventCleanup;
     // The event scope closes through waitUntil after a complete response is sent, so it waits
     // for the jobs and exports their telemetry. A streamed body closes that scope at EOF instead;
-    // the jobs then detach so they cannot hold EOF.
+    // the jobs then detach so they cannot hold EOF. Either way they end by the event's cleanup
+    // deadline, after the Better Auth work the request left running, and before the export.
     const dispatchAfterWrites = <E, R>(
       handler: Effect.Effect<HttpServerResponse.HttpServerResponse, E, R>,
     ) =>
@@ -228,10 +229,13 @@ export default Api.make(
         const request = yield* HttpServerRequest.HttpServerRequest;
         if (["GET", "HEAD", "OPTIONS"].includes(request.method)) return yield* handler;
         const execution = yield* Cloudflare.WorkerExecutionContext;
+        const jobs = (yield* cleanup.deadline)
+          .within(startJobs, { reserve: sqlCancellation })
+          .pipe(Effect.asVoid);
         const streamed = yield* Ref.make(false);
         yield* Effect.addFinalizer(() =>
           Ref.get(streamed).pipe(
-            Effect.flatMap((detach) => (detach ? execution.waitUntil(startJobs) : startJobs)),
+            Effect.flatMap((detach) => (detach ? execution.waitUntil(jobs) : jobs)),
           ),
         );
         return yield* handler.pipe(
@@ -257,10 +261,8 @@ export default Api.make(
       appAddresses(auth.origin, yield* cloudAppUiBase.pipe(Effect.orDie)),
       appDomains.status,
     );
-    // Session objects run in this isolate and share its executor and MCP identity.
-    const mcp = yield* cloudMcp.pipe(
-      Effect.provide(McpSessionsLive({ executor, identity: auth.mcpIdentity })),
-    );
+    // Session objects run in the MCP server Worker; this isolate authenticates and forwards.
+    const mcp = yield* cloudMcp;
     const meter = yield* BillingMeter.pipe(Effect.provide(billing));
     // Each job reports its own failure, so a workflow problem cannot prevent email delivery.
     const workflowReconcile = Effect.flatten(HostedExecutor).pipe(
@@ -309,6 +311,7 @@ export default Api.make(
 
     const onboarding = yield* cloudOnboarding.pipe(Effect.orDie);
     const egress = yield* cloudEgress;
+    const clientMetadata = yield* clientMetadataSetting(auth.origin).pipe(Effect.orDie);
     // Only /openapi.json and preparing the Executor catalog app read the document.
     const document = lazyHostedApiDocument(() => executorCloudApiDocument(auth.origin));
     // Only framework lookups and the published skills read the large authoring reference.
@@ -320,7 +323,7 @@ export default Api.make(
       HttpRouter.provideRequest(yield* cloudSourceFormatter),
       Layer.provide(appUi.dashboard),
       Layer.provide(requestServices(auth.appSessions).layer),
-      HttpRouter.provideRequest(catalogLive(document.document, egress)),
+      HttpRouter.provideRequest(catalogLive(document.document, egress, clientMetadata)),
       Layer.provide(schedules.layer),
       Layer.provide(billing),
       Layer.provide(removals),
@@ -430,6 +433,11 @@ export default Api.make(
       HttpRouter.add("GET", "/api/oauth/callback", hostedOAuthCallback).pipe(
         HttpRouter.provideRequest(auth.identity),
       ),
+      HttpRouter.add(
+        "GET",
+        clientMetadataDocumentPath,
+        clientMetadataDocument(clientMetadata),
+      ).pipe(HttpRouter.provideRequest(auth.identity)),
       mcpRoutes,
       HttpRouter.add("GET", "/.well-known/openai-apps-challenge", openAiAppsChallenge),
       Layer.mergeAll(
@@ -472,7 +480,8 @@ export default Api.make(
   }).pipe(
     Effect.provide(
       Layer.mergeAll(
-        ScheduleCoordinatorLive,
+        // The coordinator calls the retired one once, at handover.
+        PlacedScheduleCoordinatorLive.pipe(Layer.provideMerge(ScheduleCoordinatorLive)),
         cloudAuthDatabase,
         cloudTelemetry,
         Cloudflare.Workers.CronEventSourceLive,

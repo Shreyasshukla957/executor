@@ -1,6 +1,5 @@
 /** One execution manager with model, native and browser delivery adapters. */
 import {
-  Array as Arr,
   Cause,
   Clock,
   Context,
@@ -13,7 +12,7 @@ import {
   Tracer,
   type Scope,
 } from "effect";
-import { McpServer } from "effect/unstable/ai";
+import { McpProtocol, McpServer } from "effect/unstable/ai";
 import { HttpBody, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import { ElicitationMode } from "../contracts/elicitation.ts";
 import {
@@ -90,6 +89,20 @@ const observeExecution =
       );
     }).pipe(Effect.withSpan(name));
 
+/**
+ * MCP revisions every product serves, newest first. An initialize offering an unlisted revision
+ * negotiates the newest initialize-based one; a session without an MCP-Protocol-Version header
+ * keeps the revision it negotiated.
+ */
+const protocols = [
+  McpProtocol.v2026_07_28,
+  McpProtocol.v2025_11_25,
+  McpProtocol.v2025_06_18,
+  McpProtocol.v2025_03_26,
+] as const;
+/** Native approval needs form elicitation, which 2025-06-18 introduced. */
+const nativeProtocols = [McpProtocol.v2025_11_25, McpProtocol.v2025_06_18] as const;
+
 const query = Schema.Struct({ elicitation_mode: Schema.optionalKey(ElicitationMode) });
 const identity = (product: string, mode: ElicitationMode, session: string) =>
   JSON.stringify([product, mode, session]);
@@ -141,21 +154,7 @@ export const makeMcp = (options: McpOptions) =>
               { status: 400 },
             ),
           );
-        const protocols =
-          mode === "native"
-            ? options.protocols.filter(
-                (protocol) =>
-                  protocol.protocolVersion === "2025-06-18" ||
-                  protocol.protocolVersion === "2025-11-25",
-              )
-            : options.protocols;
-        if (!Arr.isReadonlyArrayNonEmpty(protocols))
-          return Effect.succeed(
-            HttpServerResponse.jsonUnsafe(
-              { error: "Native approval requires a host protocol with form elicitation support." },
-              { status: 400 },
-            ),
-          );
+        const served = mode === "native" ? nativeProtocols : protocols;
         const caller = Effect.gen(function* () {
           const request = yield* HttpServerRequest.HttpServerRequest;
           const product = options.caller === undefined ? "" : yield* options.caller;
@@ -248,7 +247,7 @@ export const makeMcp = (options: McpOptions) =>
               version: "0.1.0",
               instructions: options.instructions,
               path: "/mcp",
-              protocols,
+              protocols: served,
             }),
           ),
           HttpRouter.toHttpEffect,

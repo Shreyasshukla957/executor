@@ -18,6 +18,7 @@ const Row = Schema.Struct({
   parentSpanId: Schema.NullOr(Schema.String),
   operationName: Schema.String,
   serviceName: Schema.String,
+  startTime: Schema.String,
   durationMs: Schema.Number,
   status: Schema.String,
   tags: Schema.NullOr(Schema.Record(Schema.String, Schema.Json)),
@@ -124,7 +125,7 @@ export const axiomTraceQuery = Effect.gen(function* () {
           Option.isSome(organization) ? { "x-axiom-org-id": organization.value } : {},
         ),
         HttpClientRequest.bodyJson({
-          apl: `['${dataset}'] | where trace_id == '${id}' | project traceId=trace_id, spanId=span_id, parentSpanId=parent_span_id, operationName=name, serviceName=['service.name'], durationMs=duration/1ms, status=['status.code'], tags=['attributes.custom'], build=['resource.custom']['executor.build.id'], links, events=column_ifexists('events', dynamic(null)), statusMessage=column_ifexists('status.message', ''), standard=${standard} | take 5000`,
+          apl: `['${dataset}'] | where trace_id == '${id}' | project traceId=trace_id, spanId=span_id, parentSpanId=parent_span_id, operationName=name, serviceName=['service.name'], startTime=_time, durationMs=duration/1ms, status=['status.code'], tags=['attributes.custom'], build=['resource.custom']['executor.build.id'], links, events=column_ifexists('events', dynamic(null)), statusMessage=column_ifexists('status.message', ''), standard=${standard} | take 5000`,
           startTime: new Date(start - 60_000).toISOString(),
           endTime: new Date(now + 60_000).toISOString(),
         }),
@@ -157,6 +158,7 @@ export const axiomTraceQuery = Effect.gen(function* () {
             parentSpanId: row.parentSpanId === "" ? null : row.parentSpanId,
             operationName: row.operationName,
             serviceName: row.serviceName,
+            startTime: row.startTime,
             durationMs: row.durationMs,
             status: row.status === "Error" || row.status === "ERROR" ? "error" : "ok",
             links: (row.links ?? []).map((link) => ({

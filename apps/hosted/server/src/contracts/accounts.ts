@@ -39,7 +39,7 @@ import {
   StorageError,
 } from "@executor-js/sdk/core";
 import { Schema } from "effect";
-import { HttpApiEndpoint, HttpApiGroup } from "effect/unstable/httpapi";
+import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi";
 import {
   OrganizationSlug,
   OrganizationReference,
@@ -195,7 +195,12 @@ export const HostedAccounts = HttpApiGroup.make("accounts")
       params: connection,
       success: HostedAccountConnection,
       error: [...connectionErrors, AccountConnectionTargetChanged],
-    }).annotate(RequiredAction, "manage"),
+    })
+      .annotate(RequiredAction, "manage")
+      .annotate(
+        OpenApi.Description,
+        "Check a connection request: pending, completed with account metadata, cancelled or expired. A pending or expired request whose latest OAuth sign-in failed has state.failure: the error the user saw, with its reason, cause (stage and HTTP status) and serviceError (the service's own error and description, or the bounded text of another error body). A rate_limited failure has retryAfter when the service said when to try again. Check after the user finishes; do not busy-poll.",
+      ),
   )
   .add(
     HttpApiEndpoint.post("submit", `${prefix}/connections/:connection/submit`, {

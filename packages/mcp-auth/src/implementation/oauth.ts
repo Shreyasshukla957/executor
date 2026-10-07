@@ -24,6 +24,7 @@ import {
   GrantId,
   GrantPolicy,
   GrantTarget,
+  approvalRefusal,
   defaultResource,
   grantTarget,
   mcpOAuthResources,
@@ -302,6 +303,16 @@ export const grantOAuthPlugins = (settings: GrantOAuthOptions) => {
         ],
       }),
     ).pipe(Effect.flatMap(consentTarget));
+  /** Consent and narrowing refuse a policy that even the grant's own URL could not serve. */
+  const requireServable = (policy: GrantPolicy, target: GrantTarget) =>
+    approvalRefusal(policy, target) === undefined
+      ? Effect.void
+      : Effect.fail(
+          new APIError("FORBIDDEN", {
+            message:
+              "Browser approval needs a grant issued at an MCP URL with elicitation_mode=browser.",
+          }),
+        );
   const access = (context: GenericEndpointContext, kind: "mcp" | "api") =>
     Effect.gen(function* () {
       const token = context.headers?.get("authorization")?.match(/^Bearer ([^\s]+)$/i)?.[1];
@@ -650,7 +661,8 @@ export const grantOAuthPlugins = (settings: GrantOAuthOptions) => {
               // A connection's grants follow the connection; edit the connection instead.
               if (row.userId !== userId || (row.connection ?? undefined) !== undefined)
                 return yield* Effect.fail(new APIError("FORBIDDEN"));
-              const previous = (yield* project(ctx, row, yield* targetFor(ctx, row))).grant.policy;
+              const target = yield* targetFor(ctx, row);
+              const previous = (yield* project(ctx, row, target)).grant.policy;
               if (
                 !isToolSelectionSubset(previous, policy) ||
                 (previous.kind === "tools" &&
@@ -659,6 +671,9 @@ export const grantOAuthPlugins = (settings: GrantOAuthOptions) => {
                   policy.approval !== "browser")
               )
                 return yield* Effect.fail(new APIError("FORBIDDEN"));
+              // Narrowing a full-access grant to browser approval at a model- or native-mode URL
+              // would leave no URL that could use it.
+              yield* requireServable(policy, target);
               yield* authCall(() =>
                 ctx.context.adapter.update({
                   model: "mcpGrant",
@@ -777,13 +792,7 @@ export const grantOAuthPlugins = (settings: GrantOAuthOptions) => {
                     : policyHeader === null || policyHeader === undefined
                       ? GrantPolicy.make({ kind: "all" })
                       : yield* parse(Schema.fromJsonString(GrantPolicy), policyHeader);
-                if (
-                  target.kind === "mcp" &&
-                  policy.kind === "tools" &&
-                  policy.approval === "browser" &&
-                  target.mode !== "browser"
-                )
-                  return yield* Effect.fail(new APIError("FORBIDDEN"));
+                yield* requireServable(policy, target);
                 const resource = yield* settings.selectResource(ctx, userId, connection?.resource);
                 const clientId = yield* parse(
                   Schema.NonEmptyString,

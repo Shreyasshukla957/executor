@@ -1,6 +1,7 @@
 import { storedApp, storedDeployment } from "./apps.ts";
 import { snapshot as invocation } from "./tools.ts";
-import { AppSkills } from "apps/contracts";
+import { appProviderFailure } from "./provider-error.ts";
+import { AppSkills, ProviderError } from "apps/contracts";
 import { AppEvaluationFailed, evaluationFailure } from "../contracts/tools.ts";
 import { AppNotDeployed } from "../contracts/apps.ts";
 /** Skill reads project one authorized runtime catalog, or a retained pre-capability folder. */
@@ -88,12 +89,15 @@ export const makeSkills = (
                   runtime
                     .skills({ app: app.id, build: state.deployment.build, sources, ...context })
                     .pipe(
+                      // A service's rejection names the selected account, as in tool listing.
                       Effect.mapError((error) =>
-                        evaluationFailure(
-                          { app: app.id, deployment },
-                          error,
-                          "Skill evaluation failed",
-                        ),
+                        Schema.is(ProviderError)(error)
+                          ? appProviderFailure(state, error)
+                          : evaluationFailure(
+                              { app: app.id, deployment },
+                              error,
+                              "Skill evaluation failed",
+                            ),
                       ),
                     ),
                 {

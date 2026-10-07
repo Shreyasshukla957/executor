@@ -7,7 +7,7 @@
  * all, so it needs no workflow here.
  */
 import * as Cloudflare from "alchemy/Cloudflare";
-import { Cause, Context, Effect, Layer, Schema } from "effect";
+import { Cause, Context, Effect, Schema } from "effect";
 import { GroupDatabase } from "@executor-js/hosted-server/groups";
 import {
   Authentication,
@@ -57,38 +57,38 @@ const runner =
       { retries },
     );
 
-/**
- * The API Worker's executor, auth identity and billing. This workflow runs in the
- * same isolate, so it uses the services its host already built instead of a second copy.
- */
-export class OrganizationRemovalHost extends Context.Service<
-  OrganizationRemovalHost,
-  {
-    readonly executor: Layer.Layer<HostedExecutor | OrganizationIcons | OrganizationRemovals>;
-    readonly identity: Layer.Layer<Authentication>;
-    readonly billing: Layer.Layer<Billing>;
-  }
->()("executor/cloud/OrganizationRemovalHost") {}
-
 export class OrganizationRemoval extends Cloudflare.Workflow<OrganizationRemoval>()(
   "OrganizationRemoval",
   Effect.gen(function* () {
     const reportErrors = yield* cloudSentry;
-    const host = yield* OrganizationRemovalHost;
+    // The Worker that yields this class supplies the services; Alchemy captures them. Only
+    // these: the Worker's context also holds its own scope, and providing that to a run would
+    // replace the run's scope, so per-execution resources would outlive the run.
+    const services = yield* Effect.context<
+      HostedExecutor | OrganizationIcons | OrganizationRemovals | Authentication | Billing
+    >().pipe(
+      Effect.map(
+        Context.pick(
+          HostedExecutor,
+          OrganizationIcons,
+          OrganizationRemovals,
+          Authentication,
+          Billing,
+        ),
+      ),
+    );
     // Cancellation reaches the workflow as the host's billing service, not as a
     // branch on the deployment. A host without one keeps the inert default.
-    const cancellation = Layer.effect(
-      OrganizationBilling,
-      Effect.map(Billing, (service) => ({
-        cancel: (organization: OrganizationId) => service.cancel(organization),
-      })),
-    ).pipe(Layer.provide(host.billing));
-    const services = Layer.mergeAll(host.executor, host.identity, cancellation);
+    const billing = Context.get(services, Billing);
+    const cancellation = OrganizationBilling.of({
+      cancel: (organization: OrganizationId) => billing.cancel(organization),
+    });
     return (input: { organization: string }) =>
       Effect.suspend(() => {
         const organization = OrganizationId.make(input.organization);
         return removeOrganizationDurably(organization, runner(organization)).pipe(
           Effect.provide(services),
+          Effect.provideService(OrganizationBilling, cancellation),
           // Report through the same Sentry boundary the API uses, carrying the
           // organization and the step in the failure itself, and then leave the
           // instance failed: nothing else watches a workflow that stops part

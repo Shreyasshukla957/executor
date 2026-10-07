@@ -30,6 +30,15 @@ export const AppCacheChanges = Context.Reference<{
   readonly changed: (app: string) => Effect.Effect<void>;
 }>("executor/AppCacheChanges", { defaultValue: () => ({ changed: () => Effect.void }) });
 
+/**
+ * The scheduled run an app invocation serves, if any. The runner records it on the build loads it
+ * makes for the invocation, so a query can tell a run's own build loads from those of other runs
+ * that share its scheduler trace. Telemetry only: nothing decides on it.
+ */
+export const InvocationRun = Context.Reference<string | undefined>("executor/InvocationRun", {
+  defaultValue: () => undefined,
+});
+
 /** Retained compiled output and declarations obtained without running the app factory. */
 export const UiAsset = Schema.Struct({
   path: Schema.NonEmptyString,

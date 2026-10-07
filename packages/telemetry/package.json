@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@bufbuild/protobuf": "2.11.0",
+    "@executor-js/utils": "workspace:*",
     "effect": "https://pkg.pr.new/Effect-TS/effect/effect@c7d1ffff31a3e2ae0b0b0796b742bddeb797269d",
     "workerd": "1.20260901.1"
   },

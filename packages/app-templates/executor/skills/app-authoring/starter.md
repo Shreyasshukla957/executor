@@ -8,8 +8,9 @@ instead of reconstructing the framework setup. Choose another approach when
 the requested app does not fit this example.
 
 Discover the management app's `framework.search` and `framework.describe`
-through `tools.search`. Search for `apps/client.createAppClient`, then describe
-that symbol with the search result's `version` and `digest`. Read the complete
+through `tools.search`. Call `framework.search({ query: { text: "createAppClient" } })`,
+then `framework.describe({ query: { symbol: "apps/client.createAppClient", version, digest } })`
+with the search result's `version` and `digest`. Read the complete
 `live-inbox` entry in `examples`, including its `files`. Keep this reference
 identity when fetching it again; a different pinned package needs its own
 reference.

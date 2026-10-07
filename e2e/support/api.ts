@@ -38,8 +38,16 @@ export class RequestFailed extends Schema.TaggedError<RequestFailed>()("RequestF
   }
 }
 /** A server response may be decoded only against its public contract. */
+/** A decode failure names the status and body it rejected, so a wrong-shape error page is visible. */
 export const body = <A>(schema: Schema.ConstraintDecoder<A, never>, response: Response) =>
-  Schema.decodeUnknownEffect(schema)(response.body);
+  Schema.decodeUnknownEffect(schema)(response.body).pipe(
+    Effect.tapError(() =>
+      Effect.logError("Response body did not match the expected shape", {
+        status: response.status,
+        body: JSON.stringify(response.body).slice(0, 2000),
+      }),
+    ),
+  );
 interface Sessions {
   readonly session: (cookies?: Redacted.Redacted<BrowserCookies>) => Effect.Effect<Session>;
   readonly request: (

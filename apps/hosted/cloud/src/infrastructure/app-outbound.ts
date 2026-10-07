@@ -1,5 +1,6 @@
 /** Dynamic app Workers need a real Fetcher; native Workflows cannot lend their implicit network. */
 import * as Cloudflare from "alchemy/Cloudflare";
+import { AlchemyContext } from "alchemy/AlchemyContext";
 import { Random } from "alchemy";
 import { Effect, Redacted, Schema } from "effect";
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
@@ -16,6 +17,16 @@ export const AppOutbound = Effect.gen(function* () {
       fetch(request) { return fetch(request); }
     };`,
   });
+});
+
+/**
+ * Worker props for the Worker that serves app requests. Deployed, `AppOutbound`'s public-only
+ * network refuses private, loopback and internal destinations with Cloudflare's own 403 or 530,
+ * so Executor refuses them by name first and app code reads why. The local test Worker shares
+ * the host's network, and scenarios reach fixtures on loopback through it.
+ */
+export const appOutboundBindings = Effect.gen(function* () {
+  return { APPS_PRIVATE_FETCH: (yield* AlchemyContext).dev };
 });
 
 /** What the runner binds to one app's outbound network. App code cannot set it. */
@@ -88,10 +99,15 @@ export const appCredentialOutbound = Effect.gen(function* () {
         );
         // The secret is read from this event's Worker environment.
         const sealing = yield* key;
+        const privateFetch = yield* Schema.decodeUnknownEffect(Schema.Boolean)(
+          environment.APPS_PRIVATE_FETCH,
+        ).pipe(Effect.orDie);
         const response = yield* Effect.promise(() =>
           credentialFetch(source, {
             app: props.value.appOutbound,
             key: sealing,
+            // Cloud's own origin is public, so it needs no exemption.
+            egress: { refusePrivateAddresses: !privateFetch, selfOrigin: undefined },
             send: (request) => send.fetch(request),
           }),
         );

@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node prepare.ts"
+    "start": "node prepare.ts",
+    "sweep": "node sweep.ts"
   },
   "dependencies": {
     "@executor-js/catalog": "workspace:*",

@@ -1,5 +1,7 @@
 /** Shared OpenAPI compilation diagnostics. */
 import { Schema } from "effect";
+
+/** Which part of an OpenAPI document could not be compiled into tools. */
 export const OpenapiCompileErrorCode = Schema.Literals([
   "server_protocol",
   "server_url",

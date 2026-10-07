@@ -1,5 +1,6 @@
 import { Schema, SchemaGetter, type Cause } from "effect";
 import "effect/unstable/httpapi";
+import { MessageField } from "./api-error.ts";
 
 /** Curated explanation and recovery. Never include raw diagnostics, credentials, or form values. */
 export interface ErrorPresentation {
@@ -50,14 +51,8 @@ type Definition<Tag extends string, Fields extends Schema.Struct.Fields> = Heade
         readonly presentation: (fields: Schema.Struct.Type<Fields>) => ErrorPresentation;
       }
   );
-// Encode the class getter as a required string. Decode validates the wire field,
-// then omits it so the class restores its own presentation from the parsed payload.
-const MessageField = Schema.String.pipe(
-  Schema.decodeTo(Schema.optionalKey(Schema.String), {
-    decode: SchemaGetter.omit(),
-    encode: SchemaGetter.passthrough(),
-  }),
-);
+// The message getter is encoded as a required string, as for every API error. Decoding
+// validates the wire field, then omits it so the class restores its own presentation.
 // Recovery follows the same rule, so API and MCP callers receive the curated recovery.
 const Recovery = Schema.Struct({ action: Schema.String, instructions: Schema.String });
 const RecoveryField = Recovery.pipe(

@@ -206,6 +206,31 @@ const Diagnostic = Schema.fromJsonString(
   Schema.Struct({ code: Schema.String, status: Schema.Number, message: Schema.String }),
 );
 
+// A nested authored object, as agents most often misplace a field inside one. The optional
+// object decodes as a union with an absent value. `tree` nests its whole input, union included,
+// through a `$recursiveRef`. `pick` fixes an authored literal and an imported enum longer than
+// a problem lists.
+const pickColors = [
+  "red",
+  "orange",
+  "yellow",
+  "green",
+  "blue",
+  "indigo",
+  "violet",
+  "black",
+  "white",
+  "gray",
+  "teal",
+  "pink",
+];
+const inputAppSource = `import { defineApp, query, object, string, number, literal, jsonSchema, router } from "apps";
+export default defineApp({ accounts: {} }, async () => ({ tools: router({
+  find: query({ input: object({ query: object({ text: string(), limit: number().default(10) }), filter: object({ tag: string() }).optional() }) }, async (_, input) => input.query.text),
+  tree: query({ input: jsonSchema({ $schema: "https://json-schema.org/draft/2019-09/schema", $recursiveAnchor: true, type: "object", properties: { child: { $recursiveRef: "#" } }, anyOf: [{ required: ["name"] }, { required: ["id"] }] }) }, async () => "tree"),
+  pick: query({ input: object({ version: literal("v1"), color: jsonSchema({ type: "string", enum: ${JSON.stringify(pickColors)} }) }) }, async (_, input) => input.color),
+}) }));`;
+
 const Failed = Schema.Struct({
   status: Schema.Literal("completed"),
   execution: Schema.Struct({
@@ -575,6 +600,68 @@ layer(HostedLive, { excludeTestServices: true })("Hosted MCP execute failures", 
         expectThrownDetail(
           (yield* Schema.decodeUnknownEffect(Failed)(called.structured)).execution.error.message,
         );
+      }).pipe(Effect.provide(McpClient.layer)),
+    ),
+  );
+  it.effect(scenarios.mcpExecuteInputShape.title, (context) =>
+    withHostedCase(
+      context,
+      Effect.gen(function* () {
+        const { client, slug } = yield* hostedApp("Input shape", inputAppSource);
+        const rejected = yield* executeOnce(
+          client,
+          "Pass the query text in place of the query object",
+          `return await tools[${JSON.stringify(slug)}].find({query: "fixture text"});`,
+          "input-shape-result.json",
+        );
+        const { error } = (yield* Schema.decodeUnknownEffect(Failed)(rejected.structured))
+          .execution;
+        // The problem names the keys the object takes; the supplied text is not echoed.
+        expect(error.message).toBe(
+          "InputInvalid (HTTP 422): Input failed validation: input.query: Expected object {text, limit?} Recovery: Change the input to the shape each problem expects, then call the tool again.",
+        );
+        const optional = yield* executeOnce(
+          client,
+          "Pass the filter text in place of the optional filter object",
+          `return await tools[${JSON.stringify(slug)}].find({query: {text: "fixture text"}, filter: "fixture filter"});`,
+          "input-shape-optional-result.json",
+        );
+        // An optional object is described by its keys, not as a union with undefined.
+        expect(
+          (yield* Schema.decodeUnknownEffect(Failed)(optional.structured)).execution.error.message,
+        ).toBe(
+          "InputInvalid (HTTP 422): Input failed validation: input.filter: Expected object {tag} Recovery: Change the input to the shape each problem expects, then call the tool again.",
+        );
+        const nested = yield* executeOnce(
+          client,
+          "Pass a nested tree node that names neither alternative's key",
+          `return await tools[${JSON.stringify(slug)}].tree({name: "fixture root", child: {label: "fixture child"}});`,
+          "input-shape-recursive-result.json",
+        );
+        // A union reached through a recursive reference is described like any other.
+        expect(
+          (yield* Schema.decodeUnknownEffect(Failed)(nested.structured)).execution.error.message,
+        ).toBe(
+          "InputInvalid (HTTP 422): Input failed validation: input.child: Expected object {child?, name, ...} or object {child?, id, ...}. Closest is alternative 1, whose problems follow; input.child.name: Missing key Recovery: Change the input to the shape each problem expects, then call the tool again.",
+        );
+        // Fixed values are listed, as the signature shows them: a literal quoted, and an enum up
+        // to ten values before the rest are counted. Each call fails on its one wrong field.
+        const values = yield* executeOnce(
+          client,
+          "Pass a wrong literal version, then a color outside the enum",
+          `const messages = [];
+for (const input of [{version: "v2", color: "red"}, {version: "v1", color: "fixture color"}]) {
+  try { await tools[${JSON.stringify(slug)}].pick(input); } catch (error) { messages.push(JSON.parse(error.message).message); }
+}
+return messages;`,
+          "input-shape-values-result.json",
+        );
+        expect(
+          (yield* Schema.decodeUnknownEffect(Completed)(values.structured)).execution.value,
+        ).toEqual([
+          'Input failed validation: input.version: Expected "v1"',
+          'Input failed validation: input.color: Expected one of "red", "orange", "yellow", "green", "blue", "indigo", "violet", "black", "white", "gray" and 2 more',
+        ]);
       }).pipe(Effect.provide(McpClient.layer)),
     ),
   );

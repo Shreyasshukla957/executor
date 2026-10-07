@@ -350,8 +350,8 @@ export default defineApp({accounts:{service}},async({accounts})=>({tools: router
             .waitFor({ state: "visible" })
             .then(() =>
               dialog
-                .getByText("Enter its client ID here, and its client secret if it has one.", {
-                  exact: true,
+                .getByText("then enter its client ID (and secret, if it has one).", {
+                  exact: false,
                 })
                 .count(),
             )

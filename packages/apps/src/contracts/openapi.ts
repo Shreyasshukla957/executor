@@ -1,4 +1,5 @@
 import type { ProviderError } from "./provider-error.ts";
+import type { NetworkRefused } from "./network.ts";
 /** Credential-free OpenAPI request declarations and validation schemas retained with app source. */
 import { Schema, type Effect } from "effect";
 import { AccountId, HttpUrl, JsonObject } from "./schema.ts";
@@ -130,10 +131,33 @@ export type OpenapiToolsOptions = Omit<
   readonly definitions?: unknown;
 };
 
-/** Safe failures omit request headers, credentials and upstream bodies. */
+/** The operation a failed call addressed: its method and templated path, never parameter values. */
+export const OpenapiFailedOperation = Schema.Struct({
+  method: OpenapiOperation.fields.method,
+  path: Schema.String,
+});
+export type OpenapiFailedOperation = typeof OpenapiFailedOperation.Type;
+
+/** A response media type without parameters, such as `text/html`. */
+export const OpenapiMediaType = Schema.String.check(
+  Schema.isMaxLength(128),
+  Schema.isPattern(/^[\w!#$&^.+-]+\/[\w!#$&^.+-]+$/),
+);
+
+/**
+ * Safe failures omit request headers, credentials and upstream body text: the failure message is
+ * also recorded in traces. A `request` failure with a status names the response that no declared
+ * error matched, or the success response whose body could not be read, by its media type and
+ * declared length.
+ */
 export class OpenapiError extends Schema.TaggedError<OpenapiError>()("OpenapiError", {
   reason: Schema.Literals(["invalid_definition", "invalid_input", "request"]),
   status: Schema.optional(Schema.Number),
+  /** Absent only when the definition itself could not be read. */
+  operation: Schema.optional(OpenapiFailedOperation),
+  contentType: Schema.optional(OpenapiMediaType),
+  /** The response's `content-length`, when it declared one. */
+  bytes: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
 }) {}
 
 /** An ordinary native tool bound to one selected account. */
@@ -145,7 +169,7 @@ export interface OpenapiTool {
   readonly run: (
     context: unknown,
     input: Schema.Json,
-  ) => Effect.Effect<unknown, OpenapiError | OpenapiResponseError | ProviderError>;
+  ) => Effect.Effect<unknown, OpenapiError | OpenapiResponseError | ProviderError | NetworkRefused>;
 }
 /** Executable operations keyed by their generated names. */
 export type OpenapiTools = Readonly<Record<string, OpenapiTool>>;

@@ -110,6 +110,8 @@ export default defineApp({ accounts: { service } }, async ({ accounts }) => ({
           label: "Synthetic rotating account",
         });
         expect(started.status, JSON.stringify(started.body)).toBe(200);
+        // The local callback is a loopback redirect, which registers as a native client.
+        expect((yield* issuer.metrics).lastRegistration?.applicationType).toBe("native");
         const { authorizationUrl } = yield* body(Redirect, started);
         const callbackUrl = yield* Effect.scoped(
           Effect.gen(function* () {

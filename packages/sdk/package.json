@@ -29,6 +29,7 @@
     "@executor-js/reactivity": "workspace:*",
     "@executor-js/telemetry": "workspace:*",
     "@executor-js/utils": "workspace:*",
+    "@jridgewell/trace-mapping": "0.3.31",
     "ajv": "^8.17.1",
     "apps": "workspace:*",
     "capnweb": "0.12.0",

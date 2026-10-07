@@ -16,7 +16,7 @@ import {
 import { AuthenticationUnavailable } from "../contracts/auth.ts";
 import {
   McpAccess,
-  McpForbidden,
+  McpApprovalForbidden,
   McpUnauthorized,
   type McpConnectionStore,
 } from "../contracts/mcp.ts";
@@ -174,10 +174,10 @@ export const mcpOAuthPlugins = (origin: string) => {
   return [...oauth.plugins, hosted] as const;
 };
 
-/** Preserve invalid grants, denied membership, and storage outages as different outcomes. */
-export const mcpAuthenticationError = (cause: unknown) =>
+/** Browser approval pages state no cause, so every refusal there is one outcome. */
+export const mcpBrowserGrantError = (cause: unknown) =>
   isAPIError(cause) && cause.statusCode === 403
-    ? new McpForbidden()
+    ? new McpApprovalForbidden()
     : isAPIError(cause) && (cause.statusCode === 400 || cause.statusCode === 401)
       ? new McpUnauthorized()
       : new AuthenticationUnavailable();

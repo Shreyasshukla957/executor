@@ -13,7 +13,6 @@ import {
   type Executor,
   type SourceSnapshot,
 } from "@executor-js/sdk/core";
-import type { RepositoryBackend } from "@executor-js/app-source/contracts";
 import {
   frameworkPinBehindMessage,
   frameworkPinCatchUpRelease,
@@ -57,7 +56,6 @@ const pinManifest = (content: string | undefined, apps: string): Manifest => {
 /** The host services the pin reads and writes through. */
 export interface FrameworkPinHost {
   readonly executor: Executor;
-  readonly repositories: Pick<RepositoryBackend, "history" | "read">;
 }
 
 /**
@@ -82,15 +80,15 @@ const workspacePosition = (
       const source = yield* host.executor.apps.source({ ...target, deployment: deployment.id });
       if (sourceFilesEqual(workspace.files, source.files)) return "behind" as const;
     }
-    const history = yield* host.repositories.history(app.code);
+    const history = yield* host.executor.apps.history(target);
     if (running.sourceCommit !== null)
       return history.some((entry) => entry.commit === running.sourceCommit)
         ? ("unpublished" as const)
         : ("diverged" as const);
     // A direct file deploy has no commit; main may still have saved the same files earlier.
     for (const entry of history) {
-      const saved = yield* host.repositories.read(app.code, entry.commit);
-      if (sourceFilesEqual(saved.files, running.files)) return "unpublished" as const;
+      const saved = yield* host.executor.apps.revision({ ...target, commit: entry.commit });
+      if (sourceFilesEqual(saved, running.files)) return "unpublished" as const;
     }
     return "diverged" as const;
   });

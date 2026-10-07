@@ -17,15 +17,7 @@ import {
   frameworkRoutes,
   gitRoutes,
 } from "@executor-js/app-management";
-import {
-  OwnerId,
-  type AppId,
-  type AppSourceStorage,
-  type BlobStorage,
-  type Executor,
-} from "@executor-js/sdk/core";
-import type { RepositoryBackend } from "@executor-js/app-source/contracts";
-import type { Registry } from "@executor-js/app-registry";
+import { OwnerId, type AppId, type Executor } from "@executor-js/sdk/core";
 import { HttpRouter, HttpServerRequest } from "effect/unstable/http";
 import { Effect, Encoding, Layer, Redacted } from "effect";
 import { localRequest, type LocalAuth } from "./auth.ts";
@@ -36,13 +28,7 @@ export const localAppManagement = (
   config: ServerConfig,
   auth: LocalAuth,
   managedApp: AppId,
-  resources: {
-    readonly executor: Executor;
-    readonly sources: AppSourceStorage;
-    readonly repositories: RepositoryBackend;
-    readonly registry: Registry;
-    readonly blobs: BlobStorage;
-  },
+  resources: { readonly executor: Executor },
   /** Packaged authoring assets; they include this build's framework reference. */
   assets: readonly { readonly path: string; readonly content: string }[],
 ) =>
@@ -109,8 +95,6 @@ export const localAppManagement = (
       Layer.provide(access),
       HttpRouter.provideRequest(localSourceFormatter),
       HttpRouter.provideRequest(gitAccess),
-      HttpRouter.provideRequest(
-        Layer.succeed(AppManagementHost, Effect.succeed({ ...resources, publisher: undefined })),
-      ),
+      HttpRouter.provideRequest(Layer.succeed(AppManagementHost, Effect.succeed(resources))),
     );
   });

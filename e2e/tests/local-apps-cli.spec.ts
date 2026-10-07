@@ -7,7 +7,7 @@ import { Api } from "../support/api.ts";
 import { TestLive, withCase } from "../support/case.ts";
 import { Target } from "../support/platform.ts";
 import { Evidence } from "../support/evidence.ts";
-import { Workspace } from "../support/app-authoring.ts";
+import { Workspace, helloIndex, helloPackage } from "../support/app-authoring.ts";
 import { appsVersion, declaredApps } from "../support/apps-release.ts";
 
 const Catalogs = Schema.fromJsonString(
@@ -24,6 +24,7 @@ const Document = Schema.fromJsonString(
   Schema.Struct({ content: Schema.String, files: Schema.Array(Schema.String) }),
 );
 const Created = Schema.fromJsonString(Schema.Struct({ id: Schema.String }));
+const Release = Schema.fromJsonString(Schema.Struct({ version: Schema.String }));
 const Apps = Schema.Array(Schema.Struct({ id: Schema.String, name: Schema.String }));
 const Deployed = Schema.Struct({
   files: Schema.Array(Schema.Struct({ path: Schema.String, content: Schema.String })),
@@ -252,44 +253,56 @@ layer(TestLive, { excludeTestServices: true })("Local apps CLI", (it) => {
       }),
     ),
   );
-  it.effect(scenarios.localAppsCliStarter.title, (context) =>
+  it.effect(scenarios.localAppsCliRelease.title, (context) =>
     withCase(
       context,
       Effect.gen(function* () {
         const target = yield* Target,
+          evidence = yield* Evidence,
           api = yield* Api;
-        const { run, origin } = yield* cli;
+        const { run, origin, fs } = yield* cli;
         const session = yield* api.session();
-        // Without --files the starter declares the exact apps release this host ships, and builds.
-        const starter = yield* run(["create", "--host", origin, "--name", "CLI starter"], true);
-        expect(starter.code, starter.stderr).toBe(0);
-        const starterApp = yield* Schema.decodeUnknownEffect(Created)(starter.stdout);
+        // The host reports the exact apps release; the CLI holds no version of its own.
+        const framework = yield* run(["framework", "--host", origin], true);
+        expect(framework.code, framework.stderr).toBe(0);
+        const { version } = yield* Schema.decodeUnknownEffect(Release)(framework.stdout);
+        expect(version).toBe(appsVersion);
+
+        // Create requires the source, and its help names the command that prints the version.
+        const withoutFiles = yield* run(["create", "--host", origin, "--name", "No files"], true);
+        yield* evidence.json("create-without-files.json", withoutFiles);
+        expect(withoutFiles.code).toBe(1);
+        expect(withoutFiles.stderr).toContain("Missing required flag: --files");
+        expect(withoutFiles.stdout).toContain(
+          "a package.json whose dependencies.apps is the version executor apps framework prints",
+        );
+
+        // deploy.md's CLI flow: index.ts and a package.json pinning that version, then create,
+        // read the first commit and deploy it.
+        const hello = yield* fs.makeTempDirectoryScoped({ prefix: "executor-apps-hello-" });
+        yield* fs.writeFileString(`${hello}/index.ts`, helloIndex);
+        yield* fs.writeFileString(`${hello}/package.json`, `${helloPackage(version)}\n`);
+        const created = yield* run(
+          ["create", "--host", origin, "--name", "CLI hello", "--files", hello],
+          true,
+        );
+        expect(created.code, created.stderr).toBe(0);
+        const app = yield* Schema.decodeUnknownEffect(Created)(created.stdout);
         yield* Effect.addFinalizer(() =>
           session
-            .send("DELETE", `/v1/apps/${starterApp.id}`, undefined, {
+            .send("DELETE", `/v1/apps/${app.id}`, undefined, {
               authorization: `Bearer ${Redacted.value(target.apiKey)}`,
             })
             .pipe(Effect.orDie),
         );
-        const starterSource = yield* run(
-          ["source", "--host", origin, "--app", starterApp.id],
-          true,
+        const source = yield* run(["source", "--host", origin, "--app", app.id], true);
+        expect(source.code, source.stderr).toBe(0);
+        const workspace = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Workspace))(
+          source.stdout,
         );
-        expect(starterSource.code, starterSource.stderr).toBe(0);
-        const starterWorkspace = yield* Schema.decodeUnknownEffect(
-          Schema.fromJsonString(Workspace),
-        )(starterSource.stdout);
-        expect(declaredApps(starterWorkspace.files)).toBe(appsVersion);
+        expect(declaredApps(workspace.files)).toBe(appsVersion);
         const deployed = yield* run(
-          [
-            "deploy",
-            "--host",
-            origin,
-            "--app",
-            starterApp.id,
-            "--commit",
-            starterWorkspace.revision.commit,
-          ],
+          ["deploy", "--host", origin, "--app", app.id, "--commit", workspace.revision.commit],
           true,
         );
         expect(deployed.code, deployed.stderr).toBe(0);

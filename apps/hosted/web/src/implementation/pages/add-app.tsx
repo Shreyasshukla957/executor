@@ -9,7 +9,7 @@ import { CatalogPage as Catalog, CatalogInstall } from "@executor-js/ui/dashboar
 import { InstallPublication } from "@executor-js/ui/dashboard/install-publication";
 import { type AppAcknowledgement } from "@executor-js/ui/contracts/app-management";
 import type { CatalogEntry } from "@executor-js/catalog/contracts";
-import type { Publication } from "@executor-js/app-registry/contracts";
+import type { Publication } from "@executor-js/sdk";
 import type { App } from "@executor-js/sdk";
 import { useState } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";

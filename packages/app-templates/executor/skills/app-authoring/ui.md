@@ -31,8 +31,9 @@ return await tools.executor.profiles["<management-profile-id>"].appUi.location({
 
 The response is `{ url: "https://<app-slug>.<org-slug>.executor.website" }`
 on Executor Cloud. Self-host uses its configured app domain. Use the returned
-URL rather than constructing one. `url: null` means the app has no UI or the
-host has no app domain configured. Deployment builds and activates the UI;
+URL rather than constructing one. Before the first deployment it fails with
+`AppNotDeployed`. `url: null` means the app has no UI or the host has no app
+domain configured. Deployment builds and activates the UI;
 there is no separate publish step. Give the URL to the user to open in a
 browser. The browser completes sign-in using their Executor session. MCP
 credentials do not grant a browser session. A `403` response alone does not

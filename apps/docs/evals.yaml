@@ -83,7 +83,7 @@ questions:
     question: How does an agent call one of my app's tools through the MCP endpoint?
     expected:
       - the agent writes a JavaScript program and runs it with the execute tool
-      - tools.search returns the callable path and signature
+      - tools.search returns the callable path and input type, and tools.search.describe returns the full signature
       - a tool is called as tools.<app>.<name>, with router groups as nested paths such as tools.<app>.<group>.<name>
     routes:
       - /mcp

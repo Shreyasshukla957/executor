@@ -24,6 +24,7 @@ import {
   targetProvider,
 } from "./connection-target.ts";
 import { query, transaction, type Query } from "./database.ts";
+import { storedProfile } from "./profiles.ts";
 
 /** Requests survive host restarts. Pending requests expire after thirty minutes. */
 export const makeAccountConnections = (
@@ -184,7 +185,22 @@ export const makeAccountConnections = (
               ...(input.label === undefined ? {} : { label: input.label }),
               fields: input.fields,
             });
-          if (lifecycle) yield* lifecycle.connectionCompleting(input.connection);
+          if (lifecycle)
+            yield* lifecycle.connectionCompleting({
+              id: row.id,
+              owner: row.owner,
+              reconnectAccount: row.reconnectAccount,
+              target:
+                row.target === null
+                  ? null
+                  : {
+                      app: row.target.app,
+                      profile: yield* storedProfile(tx, {
+                        app: row.target.app,
+                        profile: row.target.profile,
+                      }),
+                    },
+            });
           yield* finishConnection(tx, row, account);
           return account;
         }),

@@ -70,7 +70,7 @@
     "format:check": "oxfmt --check .",
     "lint": "oxlint -c .oxlintrc.jsonc . --deny-warnings",
     "lint:fix": "oxlint -c .oxlintrc.jsonc --fix .",
-    "check": "bun run format:check && bun run lint && bun run typecheck && bun run apps:protocols && node packages/apps/scripts/browser-scripts.mjs --check && node packages/app-templates/scripts/executor-intro.ts --check && bun run e2e:check",
+    "check": "bun run format:check && bun run lint && bun run typecheck && bun run apps:protocols && bun run api:errors && node packages/apps/scripts/browser-scripts.mjs --check && node packages/app-templates/scripts/executor-intro.ts --check && bun run e2e:check",
     "e2e:prepare": "bun run apps:build && bun run telemetry:build && bun run e2e:runtime && bun run e2e:apps && bun run hosted:self-host:web:build && bun run web:build",
     "e2e:runtime": "node scripts/build-test-runtime.ts",
     "e2e:apps": "node scripts/pack-test-apps.ts",
@@ -104,6 +104,7 @@
     "executor:intro": "node packages/app-templates/scripts/executor-intro.ts",
     "apps:check": "bun run apps:build && bun run --cwd packages/apps test:package",
     "apps:protocols": "node scripts/check-app-protocols.ts",
+    "api:errors": "node scripts/check-api-errors.ts",
     "release:cli": "node scripts/releases/package.ts",
     "release:wrapper": "node scripts/releases/wrapper.ts",
     "release:desktop": "node scripts/releases/desktop.ts"
@@ -167,7 +168,8 @@
     "tree-sitter@0.22.4": "patches/tree-sitter@0.22.4.patch",
     "pg-cloudflare@1.4.0": "patches/pg-cloudflare@1.4.0.patch",
     "@better-auth/passkey@1.7.5": "patches/@better-auth%2Fpasskey@1.7.5.patch",
-    "@electric-sql/pglite@0.5.8": "patches/@electric-sql%2Fpglite@0.5.8.patch"
+    "@electric-sql/pglite@0.5.8": "patches/@electric-sql%2Fpglite@0.5.8.patch",
+    "@better-auth/api-key@1.7.5": "patches/@better-auth%2Fapi-key@1.7.5.patch"
   },
   "trustedDependencies": [
     "dugite",

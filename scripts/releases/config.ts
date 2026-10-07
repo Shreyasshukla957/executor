@@ -124,15 +124,28 @@ export const platformPackage = (target: Platform): string =>
 export const platformArchive = (target: Platform): string =>
   `executor-${platformVersion(target)}.tgz`;
 
-/** Primary downloads follow electron-builder's target-specific architecture names. */
-export const desktopAsset = (target: Platform): string => {
+/** The version-free end of a primary download, following electron-builder's architecture names. */
+export const desktopAssetSuffix = (target: Platform): string => {
   const arch = target.extension === "AppImage" && target.arch === "x64" ? "x86_64" : target.arch;
-  return `${release.desktop.artifactPrefix}-${release.version}-${target.desktopOs}-${arch}.${target.extension}`;
+  return `-${target.desktopOs}-${arch}.${target.extension}`;
 };
 
-/** Public download for this exact release, never the legacy latest release. */
-export const desktopDownload = (target: Platform): string =>
-  `https://github.com/${release.repository}/releases/download/${encodeURIComponent(release.tag)}/${desktopAsset(target)}`;
+export const desktopAsset = (target: Platform): string =>
+  `${release.desktop.artifactPrefix}-${release.version}${desktopAssetSuffix(target)}`;
+
+/**
+ * The website resolves desktop downloads in the browser from the public
+ * release list, as GitHub only lists a release once it is published. A merged
+ * version bump therefore never links to installers that are not public yet.
+ * GitHub's `latest` release belongs to Executor 1 and skips prereleases, so the
+ * list is filtered by this major version's tag prefix instead.
+ */
+export const desktopDownloads = {
+  releasesApi: `https://api.github.com/repos/${repository}/releases?per_page=100`,
+  releasesPage: `https://github.com/${repository}/releases`,
+  tagPrefix: `executor@${version.split(".")[0]}.`,
+  stableOnly: channel === "latest",
+} as const;
 
 /** Fail at the build boundary if the host cannot produce a supported native artifact. */
 export const nativePlatform = (platform: string, arch: string): Platform => {

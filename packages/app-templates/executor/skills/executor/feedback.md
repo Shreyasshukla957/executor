@@ -1,8 +1,9 @@
 # Send feedback
 
 Executor's team reads feedback from agents and the people they work for. Send
-it with the Executor app's `feedback.submit` tool. Find the exact signature with
-`tools.search`. Hosted Executor also needs the organization from `context.get`.
+it with the Executor app's `feedback.submit` tool. Find its path with
+`tools.search` and its signature with `tools.search.describe`. Hosted Executor
+also needs the organization from `context.get`.
 If the tool reports that feedback is disabled on this instance, skip it.
 
 Use your judgement. Send feedback when it would help Executor improve, for

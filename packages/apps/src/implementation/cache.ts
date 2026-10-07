@@ -1,12 +1,12 @@
 /** Bind the portable Effect cache to an app invocation's author API. */
 import { Effect, Schema } from "effect";
 import { makeCache, CacheError } from "@executor-js/app-cache";
-import { invocationFetch } from "@executor-js/telemetry";
 import type { AppCache, CacheGetOptions, HostCache } from "../contracts/cache.ts";
 import type { ResolvedAccounts } from "../contracts/host.ts";
 import type { JsonValue } from "../contracts/schema.ts";
 import { decoderOf, type Schema as AppSchema } from "./schema.ts";
 import { fromPromise, toPromise } from "./authoring.ts";
+import { appInvocationFetch } from "./network.ts";
 
 /** Missing host support is explicit on use; ordinary apps do not need cache support. */
 export const unavailableCache: HostCache = {
@@ -33,7 +33,7 @@ export const authorCache = (
         load: Effect.acquireUseRelease(
           Effect.sync(() => new AbortController()),
           (controller) =>
-            invocationFetch(controller.signal).pipe(
+            appInvocationFetch(controller.signal).pipe(
               Effect.flatMap((fetch) =>
                 fromPromise(options.load)({
                   fetch,

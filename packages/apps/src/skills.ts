@@ -23,14 +23,16 @@ export {
   type FolderSkillsOptions,
   type AppSkillSource as Skill,
   type SkillFile,
+  type GitHubSkillsAccount,
   type GitHubSkillsOptions,
   type SkillCacheOptions,
   type WellKnownSkillsOptions,
 } from "./contracts/skills.ts";
 
 /**
- * Fetch a public GitHub skill collection from one resolved commit. Pass `cache: ctx.cache` to reuse
- * the catalog; without it, mutable refs resolve again on each call.
+ * Fetch a GitHub skill collection from one resolved commit. A private repository takes `account`
+ * and its `token`. Pass `cache: ctx.cache` to reuse the catalog; without it, mutable refs resolve
+ * again on each call.
  */
 export const githubSkills = (options: GitHubSkillsOptions) =>
   Effect.runPromise(

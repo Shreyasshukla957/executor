@@ -5,7 +5,7 @@ import type { AppContext, QueryContext, MutationContext } from "../contracts/con
 import type { Approval } from "../approval.ts";
 import type { ToolAnnotations } from "../contracts/tools.ts";
 import type { JsonObject } from "../contracts/schema.ts";
-import { decoderOf, type Schema } from "./schema.ts";
+import { decoderOf, schemaArgument, type Schema } from "./schema.ts";
 
 const NativeOperation = Symbol("apps.Operation");
 declare const QueryHandlerContext: unique symbol;
@@ -136,10 +136,12 @@ const make = <Input, Output, Kind extends "query" | "mutation", Context extends 
   run: (context: Context, input: Input) => Promise<Output>,
 ): Operation<Input, Output, Kind, Context> =>
   operationDeclaration({
-    ...operationOptions(options),
+    ...operationOptions({ ...options, input: schemaArgument(options.input, `The ${kind} input`) }),
     kind,
     // The host always validates JSON serialization, even without a stronger output declaration.
-    ...(options.output === undefined ? {} : { output: decoderOf(options.output) }),
+    ...(options.output === undefined
+      ? {}
+      : { output: decoderOf(schemaArgument(options.output, `The ${kind} output`)) }),
     run: (context, input) =>
       Effect.tryPromise({
         // SAFETY: defineApp checks the handler context against its requirements.

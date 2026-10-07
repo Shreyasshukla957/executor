@@ -1,8 +1,10 @@
-import type { ProviderError } from "./provider-error.ts";
+import { ProviderError } from "./provider-error.ts";
+import type { NetworkRefused } from "./network.ts";
 /** MCP protocol data uses Effect Schema; executable tool methods use Effect. */
 import { type Effect, type Redacted, Schema } from "effect";
 import type { Elicit, ElicitationFailed } from "./elicitation.ts";
 import { UpstreamError } from "./failure.ts";
+import type { AccountCheckContext, AuthMethods } from "./provider.ts";
 import { AccountId, HttpUrl } from "./schema.ts";
 import { JsonObject, type JsonValue } from "./schema.ts";
 import { RouterIcon } from "./router.ts";
@@ -41,6 +43,36 @@ export const McpToolsOptions = Schema.Struct({
   ),
 });
 export type McpToolsOptions = typeof McpToolsOptions.Type;
+
+/**
+ * What `mcpHealth` checks, as decoded: its options, with the account's ID, signal and deadline
+ * taken from the check context.
+ */
+export const McpHealthInput = Schema.Struct({
+  ...McpToolsOptions.fields,
+  headers: Schema.Record(Schema.String, Schema.String),
+  deadline: Schema.optional(Schema.Finite),
+});
+
+/**
+ * The server a provider check verifies, and the headers that send the checked account's
+ * credentials. The account, signal and deadline come from the check context instead. Both attempts
+ * share one budget that ends `mcpHealthReserveMs` before the deadline. `timeoutMs` bounds the whole
+ * check too; it can shorten the budget, never extend it.
+ */
+export type McpHealthOptions = Pick<typeof McpHealthInput.Type, "url" | "headers" | "timeoutMs">;
+
+/** What `mcpHealth` reads from the check context the host passes to a provider's `health`. */
+export type McpHealthCheck = Pick<AccountCheckContext<AuthMethods>, "signal" | "deadline"> & {
+  readonly account: { readonly id: string };
+};
+
+/**
+ * How long before an account check's deadline `mcpHealth` stops waiting for the server, so it can
+ * still close its session, ending it and then its transport, each within `cleanupTimeoutMs`, and
+ * report why before the host stops waiting.
+ */
+export const mcpHealthReserveMs = 2 * defaultMcpClientLimits.cleanupTimeoutMs + 250;
 
 /** One parsed server and credential snapshot; never shared across account evaluations. */
 export interface McpConnection {
@@ -109,14 +141,17 @@ export interface McpTool extends Omit<McpToolMetadata, "outputSchema"> {
   readonly run: (
     context: McpToolContext,
     input: JsonValue,
-  ) => Effect.Effect<McpToolResult, McpError | ProviderError | ElicitationFailed>;
+  ) => Effect.Effect<McpToolResult, McpError | ProviderError | NetworkRefused | ElicitationFailed>;
 }
 /** The discovered catalog keyed by remote tool name. */
 export type McpTools = Readonly<Record<string, McpTool>>;
 
 /**
- * Safe protocol/transport failure; no raw upstream payloads or credentials. `upstream` is the
- * JSON-RPC error the server answered with, bounded and with account secrets replaced.
+ * Safe protocol/transport failure; no raw upstream payloads or credentials. `status` is the HTTP
+ * status a `request` failure was redirected or refused with. Without one, a `request` failure in
+ * the `transport` phase never reached the server; in another phase it may be a JSON-RPC error the
+ * server answered with. `upstream` is that JSON-RPC error, bounded and with account secrets
+ * replaced. A response that is not MCP is `invalid_response`.
  */
 export class McpError extends Schema.TaggedError<McpError>()("McpError", {
   phase: Schema.Literals(["connect", "discover", "call", "schema", "transport"]),
@@ -130,6 +165,17 @@ export class McpError extends Schema.TaggedError<McpError>()("McpError", {
   status: Schema.optional(Schema.Number),
   upstream: Schema.optional(UpstreamError),
 }) {}
+
+/**
+ * `mcpHealth` could not show that the server needs the account's credentials, although it accepted
+ * them. `anonymous` is what the same check without credentials met: `answered` when it succeeded,
+ * so a refused key would pass too, or the failure, other than a refusal, that left it undecided.
+ * Only app code raises it; the host reports its fixed message, so no host protocol carries it.
+ */
+export class McpCredentialsUnverified extends Schema.TaggedError<McpCredentialsUnverified>()(
+  "McpCredentialsUnverified",
+  { anonymous: Schema.Union([Schema.Literal("answered"), McpError, ProviderError]) },
+) {}
 
 /** Public process configuration. Credentials arrive through the selected account. */
 export const ProcessConfig = Schema.Struct({

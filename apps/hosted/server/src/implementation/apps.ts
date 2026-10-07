@@ -2,9 +2,13 @@ import { sourceDisplay, sourceDisplayFile } from "@executor-js/app-management/so
 import { requireAppAccess } from "./resource-policy.ts";
 /** App use cases and routes. Hosts supply an SDK; they do not enumerate these operations. */
 import { CatalogImportFailed, type CustomAppInput } from "@executor-js/catalog";
-import { type AppId, type DeploymentId, type OwnerId } from "@executor-js/sdk/core";
+import {
+  scopeGeneratedPackage,
+  type AppId,
+  type DeploymentId,
+  type OwnerId,
+} from "@executor-js/sdk/core";
 import { Effect } from "effect";
-import { scopeGeneratedPackage } from "@executor-js/app-registry";
 import { CurrentOrganizationNamespace } from "../contracts/organization.ts";
 import { HttpApiBuilder } from "effect/unstable/httpapi";
 import { HostedApi } from "../contracts/api.ts";
