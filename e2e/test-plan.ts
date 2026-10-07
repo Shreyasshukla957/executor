@@ -1235,6 +1235,17 @@ export const scenarios = {
       local: na("Exercises the hosted deployment and profile APIs."),
     },
   },
+  templateAccountsRouterForms: {
+    fixtures: "actors",
+    file: "template-accounts.spec.ts",
+    title:
+      "Account routers of hand-written and synchronous callbacks type-check and route per account",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Uses loopback upstream fixtures for the shared protocol templates."),
+      local: na("Exercises the hosted deployment and profile APIs."),
+    },
+  },
   cloudDashboardRoutes: {
     file: "cloud-dashboard-routes.spec.ts",
     title: "Cloud dashboard deep links preserve API, docs, asset and not-found routing",

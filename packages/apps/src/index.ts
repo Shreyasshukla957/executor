@@ -75,6 +75,8 @@ export {
   router,
   dynamicRouter,
   withApprovals,
+  type OperationChild,
+  type OperationDeclaration,
   type RouterDeclaration,
   type RouterChild,
   type RouterOptions,

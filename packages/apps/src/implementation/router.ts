@@ -18,12 +18,18 @@ import {
   approvedOperation,
   nativeOperation,
   operationDeclaration,
+  type OperationChild,
   type OperationDeclaration,
   type RouterChild,
   type RouterDeclaration,
 } from "./operations.ts";
 
-export type { RouterChild, RouterDeclaration } from "./operations.ts";
+export type {
+  OperationChild,
+  OperationDeclaration,
+  RouterChild,
+  RouterDeclaration,
+} from "./operations.ts";
 
 /** Author metadata for a router. Instructions become a skill named after the router's path. */
 export interface RouterOptions {
@@ -111,17 +117,19 @@ const withOverrides = (overrides: RouterMeta | undefined) =>
 /**
  * Declare a router whose tools are discovered when read. `list` returns tools with names relative
  * to this router; mark queries with `readOnly: true`. `resolve` receives one of those names.
+ * The router carries the handler contexts of the operations `resolve` returns, so `defineApp`
+ * checks them like a static router's.
  */
-export const dynamicRouter = (source: {
+export const dynamicRouter = <Query = unknown, Mutation = unknown>(source: {
   readonly meta?: () => RouterOptions | Promise<RouterOptions>;
   readonly list: () => readonly HostedTool[] | Promise<readonly HostedTool[]>;
   readonly resolve: (
     name: string,
   ) =>
-    | OperationDeclaration<"query" | "mutation", unknown>
+    | OperationChild<Query, Mutation>
     | undefined
-    | Promise<OperationDeclaration<"query" | "mutation", unknown> | undefined>;
-}): RouterDeclaration => {
+    | Promise<OperationChild<Query, Mutation> | undefined>;
+}): RouterDeclaration<Query, Mutation> => {
   const meta = source.meta;
   return routerDeclaration({
     kind: "dynamic",

@@ -53,8 +53,8 @@ before MCP tools whose server sets `destructiveHint: true`:
 import { toolAnnotations, withApprovals } from "apps";
 import { always } from "apps/operations/approval";
 
-// OpenAPI and GraphQL
-withApprovals(await liveOpenapiRouter(options), (tool) =>
+// OpenAPI and GraphQL. liveOpenapiRouter returns the router; the other helpers return a Promise.
+withApprovals(liveOpenapiRouter(options), (tool) =>
   tool.kind === "mutation" ? always() : undefined,
 );
 // MCP, HTTP or stdio
@@ -99,7 +99,9 @@ Authenticated apps declare `service: provider.many()` and combine discovery
 with `tools: await accountRouter(accounts.service, account => mcpRouter({ ... }), { signal })`
 from `apps`. Each tool takes `{ accountId, input }`: the chosen account ID and the
 original upstream input. Same-name tools keep one name with an input schema for
-each account. Empty selections expose no tools.
+each account. Empty selections expose no tools. The callback may return the
+router or a Promise of it, and may return a `router` of your own queries and
+mutations; `defineApp` checks their handler contexts as for any router.
 
 Pass that callback's `account` with headers derived from it. Headers are only
 accepted together with the account they belong to.
@@ -338,7 +340,7 @@ tools: router({
   weeklySummary,
   api: await accountRouter(
     accounts.service,
-    async (account) => liveOpenapiRouter({ ...options, cache, fetch, signal, account }),
+    (account) => liveOpenapiRouter({ ...options, cache, fetch, signal, account }),
     { signal },
   ),
 }),

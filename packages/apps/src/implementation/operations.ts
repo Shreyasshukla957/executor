@@ -40,6 +40,12 @@ export interface RouterChild<Query, Mutation> {
   readonly [QueryHandlerContext]?: (context: Query) => void;
   readonly [MutationHandlerContext]?: (context: Mutation) => void;
 }
+/**
+ * A query or mutation whose handler context is checked by its kind, as a dynamic router resolves
+ * one. `query()` and `mutation()` results fit with their inferred contexts.
+ */
+export type OperationChild<Query, Mutation> = RouterChild<Query, Mutation> &
+  Pick<OperationDeclaration<"query" | "mutation">, "kind" | typeof NativeOperation>;
 /** Private key for a router's native definition. */
 export const NativeRouterKey = Symbol("apps.Router");
 
