@@ -106,8 +106,12 @@ do not use that package to typecheck.
 
 `.github/workflows/ci.yml` runs on pull requests, pushes to `main` and manual
 dispatch. Its local checks use no secrets and include the emulated Cloud target.
-An earlier PR run on the same ref is cancelled; `main` runs finish so every merge
-has a baseline. The jobs live in `.github/workflows/checks.yml`,
+An earlier PR run on the same ref is cancelled. Each push to `main` has its own
+concurrency group, so every push finishes a run and gives each merge a baseline,
+even when merges come in a burst. A stack that lands in one push gets one run, at
+its top commit. Overlapping `main` runs share no deployed stage, database or
+secret. They do read the npm registry and create hosted emulators.dev instances,
+each named with a random UUID, so they do not interfere. The jobs live in `.github/workflows/checks.yml`,
 a `workflow_call` workflow, so another repository can call the same jobs.
 
 ### Choosing a PR's E2E scenarios
@@ -184,7 +188,11 @@ A flake is a bug in the product or the scenario, not noise. Never add retries,
 longer deadlines or skips to make a run pass.
 
 `.github/workflows/cloud-tests.yml` runs deployed tests only after pushes to `main`.
-It finishes the active run and coalesces pending pushes. Manual deployed jobs share
+It finishes the active run and coalesces pending pushes, so one run can test several
+merges. Its `coverage` job lists them in the run summary and adds a notice when a
+run tests more than one commit. It counts from the nearest earlier ancestor whose run
+uploaded `deployed-neon-results`, which exists only when the scenarios ran, so a
+setup failure or a rerun of an older commit cannot hide a gap. Manual deployed jobs share
 the same non-cancelling concurrency group. Each job owns a disposable Neon staging environment.
 Scenarios retain 60-second deadlines. The job owns its teardown and evidence artifacts. These post-merge
 checks are not required PR checks. Agents can run targeted deployments through
