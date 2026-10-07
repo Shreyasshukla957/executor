@@ -144,11 +144,24 @@ function renderableSchema(input: Tool.JsonSchema): Tool.JsonSchema {
       ? {}
       : {
           $defs: Object.fromEntries(
-            Object.entries(input.$defs).map(([name, schema]) => [name, renderableSchema(schema)]),
+            Object.entries(input.$defs).map(([name, schema]) => [name, renderedDefinition(schema)]),
           ),
         }),
   });
 }
+/**
+ * Rendered `$defs` entries by definition. A kept listing's tools share one object per distinct
+ * definition, so each renders once, and listings are never mutated. A boolean schema is no key.
+ */
+const renderedDefinitions = new WeakMap<Tool.JsonSchema, Tool.JsonSchema>();
+const renderedDefinition = (schema: Tool.JsonSchema) => {
+  if (typeof schema !== "object" || schema === null) return renderableSchema(schema);
+  const known = renderedDefinitions.get(schema);
+  if (known !== undefined) return known;
+  const rendered = renderableSchema(schema);
+  renderedDefinitions.set(schema, rendered);
+  return rendered;
+};
 
 // Codemode treats dots as namespace separators. Leave ordinary names readable;
 // only escape characters needed to distinguish inaccessible/reserved segments.

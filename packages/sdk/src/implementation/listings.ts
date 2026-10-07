@@ -1,5 +1,5 @@
 /** Evaluated tool listings, reused across requests through the declaration store. */
-import { Cause, Clock, Effect, Exit, Fiber, Option, Schema } from "effect";
+import { Cause, Clock, Effect, Exit, Fiber, Option } from "effect";
 import {
   defaultToolListingPolicy,
   durableHeadStartMillis,
@@ -10,17 +10,17 @@ import {
 } from "../contracts/declarations.ts";
 import type { ResourceLifecycle } from "../contracts/executor.ts";
 import {
-  Tool,
+  type Tool,
   ToolListingTimedOut,
   type AppEvaluationFailed,
   type AppProviderFailed,
   type ToolListOptions,
-  ToolRouter,
+  type ToolRouter,
 } from "../contracts/tools.ts";
-import { ProfileRevision } from "../contracts/profiles.ts";
-import { DeploymentId, ProfileId } from "../contracts/shared.ts";
+import type { DeploymentId, ProfileId } from "../contracts/shared.ts";
 import type { Declarations } from "./declarations.ts";
 import { makeHandoff } from "./handoff.ts";
+import { decodeListing, shareListing } from "./listing-json.ts";
 import type { makeOAuth } from "./oauth.ts";
 import { resolve, type InvocationSnapshot } from "./tools.ts";
 
@@ -35,28 +35,33 @@ export interface ToolListing {
   /** Every router in the catalog, on every page. */
   readonly routers: ReadonlyArray<ToolRouter>;
 }
-/** A listing's JSON text, as another process or isolate kept it. */
-const ListingJson = Schema.fromJsonString(
-  Schema.Struct({
-    catalog: Schema.Struct({
-      deployment: DeploymentId,
-      profile: Schema.optionalKey(ProfileId),
-      profileRevision: Schema.optionalKey(ProfileRevision),
-    }),
-    items: Schema.Array(Tool),
-    routers: Schema.Array(ToolRouter),
-  }),
-);
 
 /** Failures of the evaluation itself. Credential and storage failures are never remembered. */
 export type ListingFailure = AppEvaluationFailed | AppProviderFailed | ToolListingTimedOut;
 type ResolveError = Effect.Error<ReturnType<typeof resolve>>;
 
-/** What a finished evaluation left for its readers; only the first two are kept. */
+/** A kept listing. */
 class Listed {
   readonly listing: ToolListing;
   constructor(listing: ToolListing) {
     this.listing = listing;
+  }
+}
+/**
+ * What a finished evaluation left for its readers. Its listing is kept as `Listed`, like a
+ * `Failed` one; of the others, nothing is. The listing's tools share their definitions, and its
+ * text is encoded only to keep it beyond this process.
+ */
+class Evaluated {
+  readonly listed: Listed;
+  readonly bytes: number;
+  readonly sizes: ReturnType<typeof shareListing>["sizes"];
+  readonly json: ReturnType<typeof shareListing>["json"];
+  constructor(shared: ReturnType<typeof shareListing>) {
+    this.listed = new Listed(shared.listing);
+    this.bytes = shared.bytes;
+    this.sizes = shared.sizes;
+    this.json = shared.json;
   }
 }
 class Failed {
@@ -81,7 +86,7 @@ class Stopped {
     this.elapsedMs = elapsedMs;
   }
 }
-type Outcome = Listed | Failed | Unkept | Stopped;
+type Outcome = Evaluated | Failed | Unkept | Stopped;
 
 /**
  * Keep each evaluated listing in the shared declaration store under the declaration key, so a
@@ -143,17 +148,15 @@ export const makeListings = (options: {
         /** Keep a listing, or a slow failure unless a listing that may still be served exists. */
         const keep = (outcome: Outcome, load: PendingLoad) =>
           Effect.gen(function* () {
-            if (outcome instanceof Listed) {
-              const chars = JSON.stringify(outcome.listing.items).length;
-              // The size the evaluation decoded and keeps: what its CPU, which spans cannot
-              // time on a Workers I/O clock, grows with.
-              yield* Effect.annotateCurrentSpan("executor.listing.json_chars", chars);
+            if (outcome instanceof Evaluated) {
+              // What the evaluation's CPU, which a Workers I/O clock cannot time, grows with.
+              yield* Effect.annotateCurrentSpan(outcome.sizes);
               yield* cache.set(id, {
                 kind: "value",
                 app: state.app.id,
                 at: load.started,
-                value: outcome,
-                bytes: chars * 2,
+                value: outcome.listed,
+                bytes: outcome.bytes,
               });
               return;
             }
@@ -184,11 +187,11 @@ export const makeListings = (options: {
          * outcome, and encodes with the write, so they never wait for it.
          */
         const store = (outcome: Outcome, load: PendingLoad) =>
-          outcome instanceof Listed
+          outcome instanceof Evaluated
             ? options.declarations.persist(
                 state.app.id,
                 id,
-                Schema.encodeEffect(ListingJson)(outcome.listing).pipe(
+                outcome.json.pipe(
                   Effect.map((json) => ({
                     at: load.started,
                     json,
@@ -217,7 +220,8 @@ export const makeListings = (options: {
          */
         const run = (load: PendingLoad, owner: "host" | "reader") =>
           evaluated.pipe(
-            Effect.map((listing): Outcome => new Listed(listing)),
+            // Before readers have it, so they share its definitions too.
+            Effect.map((listing): Outcome => new Evaluated(shareListing(listing))),
             Effect.catch((error) =>
               Clock.currentTimeMillis.pipe(
                 Effect.map((at): Outcome =>
@@ -267,7 +271,7 @@ export const makeListings = (options: {
         );
         const outcome = (value: unknown) =>
           Effect.gen(function* () {
-            if (value instanceof Listed) return value.listing;
+            if (value instanceof Evaluated) return value.listed.listing;
             if (value instanceof Failed || value instanceof Unkept)
               return yield* Effect.fail(value.error);
             const elapsed = value instanceof Stopped ? value.elapsedMs : 0;
@@ -356,14 +360,7 @@ export const makeListings = (options: {
                   cache.outdated(state.app.id, recalled.at)
                 )
                   return undefined;
-                // Decoding costs CPU in proportion to the text, which the I/O clock cannot show.
-                yield* Effect.annotateCurrentSpan(
-                  "executor.listing.json_chars",
-                  recalled.json.length,
-                );
-                const decoded = yield* Schema.decodeEffect(ListingJson)(recalled.json).pipe(
-                  Effect.option,
-                );
+                const decoded = yield* decodeListing(recalled.json).pipe(Effect.option);
                 if (Option.isNone(decoded)) return undefined;
                 const listed = new Listed(decoded.value);
                 yield* cache.set(id, {

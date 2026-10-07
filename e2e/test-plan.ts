@@ -3436,6 +3436,39 @@ export const scenarios = {
       local: na("Local keeps evaluated results in its single server process."),
     },
   },
+  durableEvaluatedSharedDefinitions: {
+    fixtures: "actors",
+    file: "durable-evaluated-results.spec.ts",
+    title:
+      "Cloud keeps each JSON Schema definition a tool listing repeats once, in the isolate and in the app's supervisor",
+    targets: {
+      cloud: managedCloud,
+      "self-host": na("Self-host keeps evaluated results in its single server process."),
+      local: na("Local keeps evaluated results in its single server process."),
+    },
+  },
+  durableEvaluatedDistinctDefinitions: {
+    fixtures: "actors",
+    file: "durable-evaluated-results.spec.ts",
+    title:
+      "A tool listing whose definitions share a name and length but not their JSON evaluates as fast as one whose definitions have their own names",
+    targets: {
+      cloud: managedCloud,
+      "self-host": scheduled,
+      local: na("Hosted app deploy fixture; self-host runs the same listing code in process."),
+    },
+  },
+  durableEvaluatedLongDefinitionNames: {
+    fixtures: "actors",
+    file: "durable-evaluated-results.spec.ts",
+    title:
+      "A tool listing whose definition names are long and of one length evaluates as fast as one whose names differ in length",
+    targets: {
+      cloud: managedCloud,
+      "self-host": scheduled,
+      local: na("Hosted app deploy fixture; self-host runs the same listing code in process."),
+    },
+  },
   appWorkerModules: {
     fixtures: "actors",
     file: "app-worker-modules.spec.ts",
