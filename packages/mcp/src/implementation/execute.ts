@@ -844,6 +844,10 @@ function catalog(backend: McpBackend<Error>, progress: ExecutionProgress) {
       });
     const timedOut = (app: AppId, at: number) =>
       new AppDiscoveryTimedOut({ app, elapsedMs: at - (started.get(app) ?? at) });
+    // The agent reads a failed listing in the response; it reports as the same REST read would.
+    // Discovery giving up on an app is its own wait bound, not a failure: the listing keeps running.
+    const unloaded = (error: Error) =>
+      Schema.is(AppDiscoveryTimedOut)(error) ? Effect.void : recordFailure(progress, error);
     // A listing holds a permit while it runs and stops with the rest of its app. Once an app is
     // given up on, its queued listings fail without running.
     const discover = <A, E, R>(name: string, app: AppId, work: Effect.Effect<A, E, R>) =>
@@ -914,6 +918,7 @@ function catalog(backend: McpBackend<Error>, progress: ExecutionProgress) {
                       // timed out. Give up on the app now, as discovery would after waiting,
                       // rather than wait for its other listings again.
                       if (Schema.is(ToolListingTimedOut)(error)) yield* stop(app.id);
+                      yield* unloaded(error);
                       return { target, catalog: undefined, error: diagnostic(error) };
                     }),
                   ),
@@ -922,7 +927,9 @@ function catalog(backend: McpBackend<Error>, progress: ExecutionProgress) {
             ),
           ),
           Effect.map((targets) => ({ targets, error: undefined })),
-          Effect.catch((error) => Effect.succeed({ targets: [], error: diagnostic(error) })),
+          Effect.catch((error) =>
+            unloaded(error).pipe(Effect.as({ targets: [], error: diagnostic(error) })),
+          ),
         );
       });
 
@@ -1140,13 +1147,23 @@ export type ExecutionProgress = {
   /** `program` once discovery has finished and program code may run. */
   phase: "discovery" | "program";
   unavailableApps: ReadonlyArray<typeof UnavailableApp.Type>;
+  /**
+   * Failures to report. The program outlives the request that started it, so the request driving
+   * it when they happen reports them, with its own reporter and trace.
+   */
+  readonly failures: Array<Error>;
 };
 export const executionProgress = (): ExecutionProgress => ({
   calls: [],
   callFibers: new Map(),
   phase: "discovery",
   unavailableApps: [],
+  failures: [],
 });
+const recordFailure = (progress: ExecutionProgress, error: Error) =>
+  Effect.sync(() => {
+    progress.failures.push(error);
+  });
 
 /**
  * A call into an app that failed to load is not an unknown tool: report why the app is unavailable.
@@ -1350,7 +1367,11 @@ export function executeProgram(
       yield* Effect.annotateCurrentSpan("executor.outcome", execution.ok ? "completed" : "failed");
       return { execution, unavailableApps: prepared.unavailableApps() };
     }).pipe(
-      Effect.catch((error) => Effect.succeed(failure("ExecutionFailure", diagnostic(error)))),
+      Effect.catch((error) =>
+        recordFailure(progress, error).pipe(
+          Effect.as(failure("ExecutionFailure", diagnostic(error))),
+        ),
+      ),
     );
   });
 }

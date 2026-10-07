@@ -3560,7 +3560,7 @@ export const scenarios = {
     targets: {
       "self-host": scheduled,
       cloud: managedCloud,
-      local: na("The hosted Sentry reporter and REST app routes own this behavior."),
+      local: na("The hosted Sentry reporter owns this behavior."),
     },
   },
   localRejectionRecording: {
