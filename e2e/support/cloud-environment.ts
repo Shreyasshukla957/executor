@@ -87,7 +87,6 @@ export const startCloudEnvironment = (input: {
       VITE_POSTHOG_PATH: "/api/0123456789abcdef",
       VITE_POSTHOG_HOST: `http://127.0.0.1:${analyticsPort}`,
       VITE_EXECUTOR_ENVIRONMENT: "test-local",
-      VITE_EXECUTOR_RELEASE: input.commit,
       // Serve the same built assets and routing as a deployed stage. Vite's
       // on-demand source transforms must not compete with timed scenarios.
       CLOUD_DEV_DASHBOARD: "built",

@@ -5,6 +5,7 @@ import {
   firstPartyFailure,
   scriptDirectory,
 } from "@executor-js/telemetry/browser-errors";
+import { documentBuild } from "@executor-js/dashboard-start/document-build";
 import { Schema, Option } from "effect";
 
 /**
@@ -57,7 +58,7 @@ export const startErrorReporting = () => {
     tunnel,
     dsn,
     environment: import.meta.env.VITE_EXECUTOR_ENVIRONMENT,
-    release: import.meta.env.VITE_EXECUTOR_RELEASE,
+    release: documentBuild(),
     sendDefaultPii: false,
     tracesSampleRate: 0,
     initialScope: {

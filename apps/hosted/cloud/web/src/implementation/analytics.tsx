@@ -1,4 +1,5 @@
 import { browserPageId, BrowserOperationFailure } from "@executor-js/telemetry/browser";
+import { documentBuild } from "@executor-js/dashboard-start/document-build";
 /** Cloud-only product analytics, sharing the marketing site's PostHog project. */
 import posthog from "posthog-js";
 import { BrowserUsage } from "@executor-js/hosted-web/contracts/product-analytics";
@@ -60,7 +61,7 @@ const deploymentProperties = () => ({
   surface: "dashboard",
   page_id: browserPageId(),
   environment: import.meta.env.VITE_EXECUTOR_ENVIRONMENT,
-  release: import.meta.env.VITE_EXECUTOR_RELEASE,
+  release: documentBuild(),
   executor_test: String(import.meta.env.VITE_EXECUTOR_ENVIRONMENT).startsWith("test-"),
 });
 

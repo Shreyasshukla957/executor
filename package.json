@@ -94,6 +94,7 @@
     "ci:deploy": "op run --env-file=.env.ci.op -- bun run --cwd apps/hosted/cloud alchemy deploy alchemy.github.ts",
     "e2e:billing": "vitest run --config e2e/billing.config.ts",
     "e2e:pglite": "vitest run --config e2e/pglite.config.ts",
+    "e2e:dashboard-file-names": "vitest run --config e2e/dashboard-file-names.config.ts",
     "e2e:apps-published": "vitest run --config e2e/apps-published.config.ts",
     "e2e:ci-selection": "vitest run --config e2e/ci-selection.config.ts",
     "e2e:typecheck-runner": "vitest run --config e2e/typecheck-runner.config.ts",

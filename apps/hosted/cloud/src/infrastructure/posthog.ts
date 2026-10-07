@@ -76,7 +76,6 @@ export const postHogBindings = Effect.gen(function* () {
       VITE_POSTHOG_PATH: output.pipe(Output.map((value) => value.proxyPath)),
       VITE_POSTHOG_HOST: output.pipe(Output.map((value) => value.uiHost)),
       VITE_EXECUTOR_ENVIRONMENT: environment,
-      VITE_EXECUTOR_RELEASE: release,
     },
   };
 });

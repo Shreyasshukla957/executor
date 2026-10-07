@@ -15,7 +15,8 @@
     "./complete-document": "./src/implementation/complete-document.tsx",
     "./batch": "./src/contracts/batch.ts",
     "./batch-host": "./src/implementation/batch-host.ts",
-    "./batch-browser": "./src/implementation/batch-browser.ts"
+    "./batch-browser": "./src/implementation/batch-browser.ts",
+    "./document-build": "./src/implementation/document-build.ts"
   },
   "dependencies": {
     "@effect/atom-react": "4.0.1",

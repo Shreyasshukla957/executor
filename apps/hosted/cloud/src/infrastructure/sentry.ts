@@ -63,7 +63,6 @@ export const sentryBindings = Effect.gen(function* () {
       VITE_SENTRY_TUNNEL: output.pipe(Output.map((value) => value.browserTunnel)),
       VITE_SENTRY_DSN: output.pipe(Output.map((value) => value.browserDsn)),
       VITE_EXECUTOR_ENVIRONMENT: environment,
-      VITE_EXECUTOR_RELEASE: release,
       SENTRY_ORG: output.pipe(Output.map((value) => value.organization)),
       SENTRY_PROJECT: output.pipe(Output.map((value) => value.browserProject)),
       SENTRY_URL: url,
