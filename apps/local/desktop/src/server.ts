@@ -100,7 +100,11 @@ const server = Effect.gen(function* () {
       }
       return yield* page;
     });
-  const local = yield* startLocalServer(settings, bootstrap, { web: development, oauthCallback });
+  const local = yield* startLocalServer(settings, bootstrap, {
+    product: "desktop",
+    web: development,
+    oauthCallback,
+  });
   yield* Console.log(JSON.stringify({ version: 1, url: local.url }));
   return yield* Effect.never;
 });

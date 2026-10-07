@@ -41,7 +41,9 @@ export const launch = (mode: LaunchMode, platform: string, installation?: string
       return yield* Console.log(Redacted.value(link.url));
     }
     const bootstrap = mode === "desktop" ? yield* readDesktopBootstrap : undefined;
-    const server = yield* startLocalServer(settings, bootstrap);
+    const server = yield* startLocalServer(settings, bootstrap, {
+      product: mode === "desktop" ? "desktop" : "cli",
+    });
     if (mode === "desktop") {
       // A desktop parent parses this readiness line before opening its renderer.
       // Its bootstrap credential came through fd3 and is never echoed here.

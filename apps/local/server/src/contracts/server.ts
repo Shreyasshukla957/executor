@@ -37,10 +37,10 @@ export interface LocalWeb {
   readonly fallback: LocalHttpHandler;
 }
 
-/** Optional adapters owned by the local browser or desktop composition. */
+/** The product and optional adapters owned by the CLI or desktop composition. */
 export interface LocalServerOptions {
-  /** The product reported by analytics; the desktop backend is `desktop`. */
-  readonly product?: "local" | "desktop" | undefined;
+  /** The product reported by analytics: the CLI or the desktop backend. */
+  readonly product: "cli" | "desktop";
   /** The Node edge supplies its platform names for analytics. */
   readonly platform?: { readonly os: string; readonly arch: string } | undefined;
   readonly oauthCallback?: LocalOAuthCallback | undefined;

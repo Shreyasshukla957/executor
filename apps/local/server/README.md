@@ -19,7 +19,7 @@ Read these files in order:
 8. `src/contracts/dashboard.ts` defines the typed dashboard API;
    `src/implementation/dashboard.ts` projects SDK data and `web.ts` serves the UI.
 
-The exported `localApi(config, crypto)` is an Effect layer containing the SDK, MCP and dashboard routes.
+The exported `localApi(config, crypto, auth, options)` is an Effect layer containing the SDK, MCP and dashboard routes.
 The caller supplies Web Crypto and the HTTP platform and owns its scope. Closing the scope
 closes the database. The executable entry point binds only to `127.0.0.1`.
 Effect's Node runtime handles signals and shuts down the listener and database.

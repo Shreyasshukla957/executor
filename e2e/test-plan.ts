@@ -1408,7 +1408,7 @@ export const scenarios = {
   },
   localAnalytics: {
     file: "instance-analytics.spec.ts",
-    title: "local analytics use the install ID, accept feedback and send no names or inputs",
+    title: "CLI analytics use the install ID, accept feedback and send no names or inputs",
     targets: {
       local: scheduled,
       "self-host": na("The self-host analytics scenario covers hosted identity."),
@@ -1417,7 +1417,7 @@ export const scenarios = {
   },
   localAnalyticsOptOut: {
     file: "instance-analytics.spec.ts",
-    title: "local with EXECUTOR_DISABLE_ANALYTICS sends nothing and reports feedback as disabled",
+    title: "CLI with EXECUTOR_DISABLE_ANALYTICS sends nothing and reports feedback as disabled",
     serverEnvironment: { EXECUTOR_DISABLE_ANALYTICS: "1" },
     targets: {
       local: scheduled,

@@ -85,8 +85,8 @@ import { localAnalytics, observeLocalExecutor, scheduleAnalytics } from "./produ
 export const localApi = (
   config: ServerConfig,
   crypto: Crypto,
-  existingAuth?: LocalAuth,
-  options: LocalServerOptions = {},
+  existingAuth: LocalAuth | undefined,
+  options: LocalServerOptions,
 ) =>
   Layer.unwrap(
     Effect.gen(function* () {
@@ -151,7 +151,7 @@ export const localApi = (
       yield* Deferred.succeed(ready, executor);
       const analytics = yield* localAnalytics({
         directory,
-        product: options.product ?? "local",
+        product: options.product,
         platform: options.platform ?? { os: "unknown", arch: "unknown" },
         sql,
       });

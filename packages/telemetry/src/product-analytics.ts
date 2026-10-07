@@ -1,5 +1,5 @@
 /**
- * Anonymous product analytics for local, desktop and self-host. Hosts record explicit events; each
+ * Anonymous product analytics for the CLI, desktop and self-host. Hosts record explicit events; each
  * event's schema is its allowlist, so a property it does not declare is never sent. Delivery is a
  * bounded in-memory batch to PostHog's `/batch/` endpoint and never affects product operations.
  */
@@ -41,7 +41,7 @@ export const feedbackDisabled = () =>
   new FeedbackDisabled({ message: "Feedback is disabled on this instance." });
 
 /** The product that sent an event. Cloud has its own request-owned exporter. */
-export const AnalyticsProduct = Schema.Literals(["local", "desktop", "self-host"]);
+export const AnalyticsProduct = Schema.Literals(["cli", "desktop", "self-host"]);
 export type AnalyticsProduct = typeof AnalyticsProduct.Type;
 
 const Token = Schema.String.check(Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$/u));
