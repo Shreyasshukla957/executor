@@ -18,6 +18,14 @@ import {
   dispatchOrganizationRemovals,
   startOrganizationRemoval,
 } from "./infrastructure/organization-removal-workflow.ts";
+import {
+  cloudOrganizationRemovalRecovery,
+  OrganizationRemovalRecoveryLive,
+} from "./infrastructure/organization-removal-recovery.ts";
+import {
+  localRemovalStalls,
+  removalStallBindings,
+} from "./infrastructure/organization-removal-stalls.ts";
 import { HostedExecutor, lazyHostedApiDocument } from "@executor-js/hosted-server";
 import { BillingMeter } from "./contracts/billing-meter.ts";
 import { billingBindings } from "./infrastructure/billing.ts";
@@ -132,6 +140,8 @@ export default Api.make(
         [selfBinding]: Cloudflare.Workers.Self,
         ...sentry.env,
         ...(yield* billingBindings),
+        // Local tests stall chosen removal starts; deployed Workers never install the hook.
+        ...(yield* removalStallBindings),
         // A deployed stage identifies Executor to authorization servers by its own document.
         ...(origin === undefined ? {} : yield* clientMetadataBinding(origin)),
       },
@@ -183,7 +193,13 @@ export default Api.make(
     const removal = yield* OrganizationRemoval.pipe(
       Effect.provide(Layer.mergeAll(executor, auth.identity, billing)),
     );
-    const removals = Layer.succeed(OrganizationRemovalStart, startOrganizationRemoval(removal));
+    const removals = Layer.merge(
+      Layer.succeed(
+        OrganizationRemovalStart,
+        startOrganizationRemoval(yield* localRemovalStalls(removal, executor)),
+      ),
+      yield* cloudOrganizationRemovalRecovery,
+    );
     const schedules = yield* cloudSchedules;
     // A new team's default app is installed right after its workflow starts, in this isolate,
     // rather than after the workflow is scheduled. The workflow finishes an install cut short
@@ -209,10 +225,10 @@ export default Api.make(
       );
     // Cron only recovers lost dispatches; their workflows install any team.
     const dispatch = dispatchWith(() => Effect.void);
+    // Fails while a start remains pending, so the recovery alarm that requested it tries again.
     const organizationRemovals = dispatchOrganizationRemovals.pipe(
       Effect.provide(Layer.merge(executor, removals)),
       Effect.scoped,
-      Effect.catch(() => Effect.logWarning("Organization removal journal unavailable")),
     );
     // Jobs are queued by triggers on users, teams and members. Only auth and dashboard API
     // writes change those rows, so only their requests start the jobs at once. MCP, telemetry
@@ -483,6 +499,7 @@ export default Api.make(
       Layer.mergeAll(
         // The coordinator calls the retired one once, at handover.
         PlacedScheduleCoordinatorLive.pipe(Layer.provideMerge(ScheduleCoordinatorLive)),
+        OrganizationRemovalRecoveryLive,
         cloudAuthDatabase,
         cloudTelemetry,
         Cloudflare.Workers.CronEventSourceLive,

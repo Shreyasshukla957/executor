@@ -5165,6 +5165,17 @@ export const scenarios = {
       local: na("Local has no hosted organizations."),
     },
   },
+  organizationRemovalRecovery: {
+    fixtures: "actors",
+    file: "organization-removal-recovery.spec.ts",
+    title:
+      "Cloud starts organization removals whose Workflow start stalled from the recovery alarm without cron, past a full page of older tombstones, keeps the alarm for a removal that arms during a run, and stops it once none is pending",
+    targets: {
+      cloud: managedCloud,
+      "self-host": na("Self-host has a single instance organization and no organization removal."),
+      local: na("Local has no hosted organizations."),
+    },
+  },
   hosted: {
     fixtures: "actors",
     file: "hosted-shared.spec.ts",

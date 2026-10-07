@@ -12,6 +12,7 @@ import {
   dispatchAcceptedRemoval,
   OrganizationRemovalStart,
 } from "../infrastructure/organization-removal-workflow.ts";
+import { OrganizationRemovalRecovery } from "../infrastructure/organization-removal-recovery.ts";
 import { ExecutorCloudApi } from "../contracts/api.ts";
 
 /** Native membership rows outlive acceptance; never put a removed team back in the switcher. */
@@ -42,6 +43,7 @@ export const organizationRemovalHandlers = HttpApiBuilder.group(
   (handlers) =>
     Effect.gen(function* () {
       const start = yield* OrganizationRemovalStart;
+      const recover = yield* OrganizationRemovalRecovery;
       return handlers
         .handle("preview", () => previewOrganizationRemoval)
         .handle("remove", () =>
@@ -51,8 +53,9 @@ export const organizationRemovalHandlers = HttpApiBuilder.group(
             // durable erasure that follows races with nothing.
             const { started, instance } = yield* beginOrganizationRemoval;
             // The tombstone is also a durable start record, so the workflow
-            // starts after the response and the minute job recovers the rest.
-            yield* dispatchAcceptedRemoval(start, started.organization, instance);
+            // starts after the response; the recovery alarm and the minute job
+            // start any it could not.
+            yield* dispatchAcceptedRemoval(start, recover, started.organization, instance);
             return started;
           }),
         );

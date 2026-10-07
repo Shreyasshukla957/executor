@@ -73,7 +73,7 @@ const jobs = {
   cloud: {
     target: "cloud",
     pattern:
-      "Cloud onboarding|Cloud OAuth callbacks|Cloud product events|Cloud feedback|Cloud tracks an unusable OAuth|app query traces|observability retains|browser decode and startup|Browser connection failures explain|optimistic replay failures|private app crash reports|Platform admin impersonation|Cloud reports the framework pin|Cloud deploys fail promptly when the compiler does not answer|refuses every stored state Better Auth refuses|Billing reconciles only while visible|A dashboard read refreshed while in flight|Cloud finishes a slow app's tool listing|Cloud remembers a stalled tool listing|Cloud MCP session objects (?:hold|make)|database failure while verifying an API key|Cloud cron wakes the schedule coordinator|Cloud runs a due schedule and requested profile setup while|app evaluation failures explain the likely cause|client request rejections are recorded on their request span|failure text reaches its caller|an app request Executor's network failed to send|MCP tool calls deliver their tool name and outcome|Executor time|Cloud serves a tool listing its isolate cannot keep|Cloud writes the background refresh of a stale tool listing",
+      "Cloud onboarding|Cloud OAuth callbacks|Cloud product events|Cloud feedback|Cloud tracks an unusable OAuth|app query traces|observability retains|browser decode and startup|Browser connection failures explain|optimistic replay failures|private app crash reports|Platform admin impersonation|Cloud reports the framework pin|Cloud deploys fail promptly when the compiler does not answer|refuses every stored state Better Auth refuses|Billing reconciles only while visible|A dashboard read refreshed while in flight|Cloud finishes a slow app's tool listing|Cloud remembers a stalled tool listing|Cloud MCP session objects (?:hold|make)|database failure while verifying an API key|Cloud cron wakes the schedule coordinator|Cloud runs a due schedule and requested profile setup while|app evaluation failures explain the likely cause|client request rejections are recorded on their request span|failure text reaches its caller|an app request Executor's network failed to send|MCP tool calls deliver their tool name and outcome|Executor time|Cloud serves a tool listing its isolate cannot keep|Cloud writes the background refresh of a stale tool listing|Owners delete an organization with every app",
   },
   "cloud-workers": {
     target: "cloud",
@@ -81,7 +81,11 @@ const jobs = {
       "app Workers stay loaded across credential rotation|workflow runs reuse the app Worker|warm app calls load no build|Cold app Workers reuse a build",
   },
   // These hold row locks in the shared Cloud database, which would stall other scenarios' SQL.
-  "cloud-locks": { target: "cloud", pattern: "A Better Auth query" },
+  // Removal recovery also needs the alarm and the removal job to itself while it holds one.
+  "cloud-locks": {
+    target: "cloud",
+    pattern: "A Better Auth query|Cloud starts organization removals whose Workflow start stalled",
+  },
   // This counts every request in local Cloud's single session object isolate, so another
   // scenario's MCP request in flight would change its count.
   "cloud-isolate": { target: "cloud", pattern: "Cloud MCP session objects report" },

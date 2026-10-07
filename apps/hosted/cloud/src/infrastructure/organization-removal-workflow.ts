@@ -24,6 +24,7 @@ import {
 import { Billing } from "../contracts/billing.ts";
 import { cloudSentry } from "../implementation/error-reporting.ts";
 import { EventCleanup, sqlCancellation } from "./event-cleanup.ts";
+import type { OrganizationRemovalRecovery } from "./organization-removal-recovery.ts";
 
 /** One failed attempt. The engine retries only typed failures it can serialize. */
 class RemovalAttemptFailed extends Schema.TaggedError<RemovalAttemptFailed>()(
@@ -128,7 +129,7 @@ const callDeadline = "3 seconds";
  * Workflows does not know is still pending.
  */
 export const startOrganizationRemoval =
-  (workflow: Effect.Success<typeof OrganizationRemoval>) =>
+  (workflow: Pick<Effect.Success<typeof OrganizationRemoval>, "create" | "get">) =>
   (organization: OrganizationId, instance: string) =>
     workflow.create({ id: instance, params: { organization } }).pipe(
       Effect.timeout(callDeadline),
@@ -151,70 +152,103 @@ export const startOrganizationRemoval =
               ),
             ),
       ),
-      Effect.withSpan("organization.removal.start"),
+      Effect.withSpan("organization.removal.start", {
+        attributes: { "executor.organization.id": organization },
+      }),
     );
 
 /**
  * Start a removal the request has just accepted, once its response is sent. The tombstone is
  * already the durable start record, so the owner never waits on the provider. Within the event's
- * cleanup window the start is dispatched again until the instance exists; the minute job takes
- * whatever is still pending after that. Cron alone is not enough: a deployment's Cron Triggers
- * take minutes to begin, and until then nothing else would start the removal.
+ * cleanup window the start is dispatched again until the instance exists; a start still pending
+ * after that is left to the recovery object's alarm and the minute job. Cron alone is not enough:
+ * a deployment's Cron Triggers take minutes to hours to begin, and until then nothing else would
+ * start the removal.
  */
 export const dispatchAcceptedRemoval = (
   start: OrganizationRemovalStart["Service"],
+  recover: OrganizationRemovalRecovery["Service"],
   organization: OrganizationId,
   instance: string,
 ) =>
   Effect.flatMap(EventCleanup, (cleanup) =>
     Effect.addFinalizer(() =>
-      cleanup.deadline.pipe(
-        Effect.flatMap((deadline) =>
-          deadline.within(
-            start(organization, instance).pipe(
-              Effect.tapError(() => Effect.sleep("500 millis")),
-              Effect.eventually,
-            ),
-            // The write's jobs and Better Auth's cleanup run after this in the same window.
-            { max: "10 seconds", reserve: sqlCancellation },
+      Effect.gen(function* () {
+        const deadline = yield* cleanup.deadline;
+        const started = yield* deadline.within(
+          start(organization, instance).pipe(
+            Effect.tapError(() => Effect.sleep("500 millis")),
+            Effect.eventually,
           ),
-        ),
-        Effect.flatMap((started) =>
-          Option.isSome(started)
-            ? Effect.void
-            : Effect.logWarning("Organization removal start pending", { organization }),
-        ),
-      ),
+          // The write's jobs and Better Auth's cleanup run after this in the same window.
+          { max: "10 seconds", reserve: sqlCancellation },
+        );
+        if (Option.isSome(started)) return;
+        yield* Effect.logWarning("Organization removal start pending", { organization });
+        const armed = yield* deadline
+          .within(recover(organization), { max: "3 seconds" })
+          .pipe(Effect.catchCause(() => Effect.succeedNone));
+        if (Option.isNone(armed))
+          yield* Effect.logError("Organization removal recovery unavailable", { organization });
+      }),
     ),
   );
 
-/** Tombstones are the durable start journal; recover a provider refusal or process loss. */
+/** Tombstones read per query; a run pages through every start not yet recorded. */
+const startPage = 50;
+
+const PendingStarts = Schema.Array(
+  Schema.Struct({ organization_id: OrganizationId, instance_id: Schema.NonEmptyString }),
+);
+
+/**
+ * Tombstones are the durable start journal; recover a provider refusal or process loss. A start
+ * that succeeds is recorded, so each run reads only the starts never recorded, in pages by
+ * organization, until none is left. Fails while any of them remains pending, so the recovery
+ * object's alarm tries again.
+ */
 export const dispatchOrganizationRemovals = Effect.gen(function* () {
   const start = yield* OrganizationRemovalStart;
   const sql = yield* Effect.flatten(GroupDatabase);
-  const pending = yield* sql`select organization_id, instance_id from hosted_organization_removal
-    where status = 'running' order by started_at limit 50`.pipe(
-    Effect.flatMap(
-      Schema.decodeUnknownEffect(
-        Schema.Array(
-          Schema.Struct({
-            organization_id: OrganizationId,
-            instance_id: Schema.NonEmptyString,
-          }),
+  let after = "";
+  let pending = 0;
+  let checked = 0;
+  while (true) {
+    const page = yield* sql`select r.organization_id, r.instance_id
+      from hosted_organization_removal r
+      where r.status = 'running' and r.organization_id > ${after}
+        and not exists (select 1 from cloud_organization_removal_start s
+          where s.organization_id = r.organization_id and s.instance_id = r.instance_id)
+      order by r.organization_id limit ${startPage}`.pipe(
+      Effect.flatMap(Schema.decodeUnknownEffect(PendingStarts)),
+    );
+    const started = yield* Effect.forEach(
+      page,
+      (record) =>
+        start(record.organization_id, record.instance_id).pipe(
+          Effect.andThen(
+            sql`insert into cloud_organization_removal_start (organization_id, instance_id)
+              values (${record.organization_id}, ${record.instance_id})
+              on conflict (organization_id) do nothing`,
+          ),
+          Effect.as(true),
+          Effect.catch(() =>
+            Effect.logWarning("Organization removal start remains pending", {
+              organization: record.organization_id,
+            }).pipe(Effect.as(false)),
+          ),
         ),
-      ),
-    ),
-  );
-  yield* Effect.forEach(
-    pending,
-    (record) =>
-      start(record.organization_id, record.instance_id).pipe(
-        Effect.catch(() =>
-          Effect.logWarning("Organization removal start remains pending", {
-            organization: record.organization_id,
-          }),
-        ),
-      ),
-    { concurrency: 2, discard: true },
-  );
+      { concurrency: 2 },
+    );
+    checked += page.length;
+    pending += started.filter((ok) => !ok).length;
+    const last = page.at(-1);
+    if (page.length < startPage || last === undefined) break;
+    after = last.organization_id;
+  }
+  yield* Effect.annotateCurrentSpan({
+    "executor.removal.starts.checked": checked,
+    "executor.removal.starts.pending": pending,
+  });
+  if (pending > 0) return yield* new OrganizationRemovalUnavailable();
 }).pipe(Effect.withSpan("job.organization-removal.dispatch"));
