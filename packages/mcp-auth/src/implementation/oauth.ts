@@ -122,6 +122,14 @@ const loopback = (value: string) => {
   }
 };
 
+/** A redirect URI as a client identity: native clients listen on a new loopback port each time. */
+const redirectIdentity = (value: string) => {
+  if (!loopback(value)) return value;
+  const url = new URL(value);
+  url.port = "";
+  return url.href;
+};
+
 /** Hosts select and authorize their own resource (an organization for hosted, an instance for local). */
 export interface GrantOAuthOptions {
   readonly origin: string;
@@ -143,6 +151,32 @@ export interface GrantOAuthOptions {
   readonly scopes: Scope[];
 }
 const accessTokenSeconds = 3600;
+/** Better Auth's default refresh token lifetime, stated because idle grant expiry follows it. */
+const refreshTokenSeconds = 30 * 24 * 3600;
+/** Why a grant was or was not expired; see `idleGrants`. */
+export const GrantExpiryOutcome = Schema.Literals([
+  /** Revoked now: no usable token and idle for the whole window. */
+  "revoked",
+  /** A report found it idle; applying would revoke it. */
+  "idle",
+  /** It holds an unexpired, unrevoked token. */
+  "live",
+  /** A consent, token issue or rotation falls inside the window. */
+  "recent",
+  /** No consent row, so its age is unknown; it may still be being written. */
+  "unconsented",
+  /** Missing or already revoked. */
+  "absent",
+]);
+export type GrantExpiryOutcome = typeof GrantExpiryOutcome.Type;
+const GrantExpiryResults = Schema.Struct({
+  grants: Schema.Array(Schema.Struct({ id: GrantId, outcome: GrantExpiryOutcome })),
+});
+const GrantPage = Schema.Struct({
+  grants: Schema.Array(Schema.Struct({ id: GrantId, userId: Schema.NonEmptyString })),
+});
+/** The most grants one expiry call lists or checks. */
+const grantBatch = 200;
 /** Missing grant records fail closed, including credentials issued before this plugin was installed. */
 export const grantOAuthPlugins = (settings: GrantOAuthOptions) => {
   const { origin } = settings;
@@ -159,6 +193,7 @@ export const grantOAuthPlugins = (settings: GrantOAuthOptions) => {
     grantTypes: ["authorization_code", "refresh_token"],
     disableJwtPlugin: true,
     accessTokenExpiresIn: accessTokenSeconds,
+    refreshTokenExpiresIn: refreshTokenSeconds,
     // MCP clients often run several instances from one stored grant, each refreshing its own
     // copy. A sibling presenting a token rotated while that rotation's access token is still
     // live receives the same response instead of revoking every token for the client and user.
@@ -452,9 +487,234 @@ export const grantOAuthPlugins = (settings: GrantOAuthOptions) => {
       );
     });
   /**
-   * The owner's live grants with their client, consent time and newest access token. Grants
-   * without a readable consent, or whose connection is gone, authorize nothing and are omitted.
-   * Active grants come first, most recently used first.
+   * Why each grant is or is not idle since `since`. A grant receives tokens only by exchanging a
+   * code issued with its own consent, which lasts ten minutes, or by refreshing one of its own
+   * unexpired, unrevoked refresh tokens: each authorization creates a new grant. A grant with no
+   * such token, whose consent and every token issue and rotation precede `since`, can never be
+   * used again. Any unexpired, unrevoked token keeps a grant live, whatever its session, so
+   * nothing Better Auth might still accept is expired. A rotation revokes the old refresh token
+   * before it stores the new one; the rotation's own time keeps that grant recent meanwhile.
+   */
+  const idleGrants = (ctx: GenericEndpointContext, ids: readonly GrantId[], since: Date) =>
+    Effect.gen(function* () {
+      const outcome = new Map<GrantId, "idle" | "live" | "recent" | "unconsented">();
+      if (ids.length === 0) return outcome;
+      const now = new Date(yield* Clock.currentTimeMillis);
+      const References = Schema.Array(Schema.Struct({ referenceId: GrantId }));
+      const live = (model: "oauthAccessToken" | "oauthRefreshToken") =>
+        authCall(() =>
+          ctx.context.adapter.findMany({
+            model,
+            where: [
+              { field: "referenceId", operator: "in", value: [...ids] },
+              { field: "expiresAt", operator: "gt", value: now },
+              { field: "revoked", operator: "eq", value: null },
+            ],
+          }),
+        ).pipe(Effect.flatMap((rows) => parse(References, rows)));
+      const held = new Set(
+        [...(yield* live("oauthAccessToken")), ...(yield* live("oauthRefreshToken"))].map(
+          (token) => token.referenceId,
+        ),
+      );
+      const consents = yield* authCall(() =>
+        ctx.context.adapter.findMany({
+          model: "oauthConsent",
+          where: [{ field: "referenceId", operator: "in", value: [...ids] }],
+        }),
+      ).pipe(
+        Effect.flatMap((rows) =>
+          parse(
+            Schema.Array(
+              Schema.Struct({
+                referenceId: GrantId,
+                createdAt: Schema.Date,
+                updatedAt: Schema.Date,
+              }),
+            ),
+            rows,
+          ),
+        ),
+      );
+      const consentOf = new Map(consents.map((consent) => [consent.referenceId, consent]));
+      // One row in the window is enough, so each check reads at most one.
+      const touched = (id: GrantId) =>
+        Effect.gen(function* () {
+          for (const [model, field] of [
+            ["oauthAccessToken", "createdAt"],
+            ["oauthRefreshToken", "createdAt"],
+            ["oauthRefreshToken", "revoked"],
+          ] as const) {
+            const rows = yield* authCall(() =>
+              ctx.context.adapter.findMany({
+                model,
+                where: [
+                  { field: "referenceId", value: id },
+                  { field, operator: "gte", value: since },
+                ],
+                limit: 1,
+              }),
+            );
+            if (rows.length > 0) return true;
+          }
+          return false;
+        });
+      yield* Effect.forEach(
+        ids,
+        (id) =>
+          Effect.gen(function* () {
+            const consent = consentOf.get(id);
+            if (held.has(id)) return outcome.set(id, "live");
+            // The consent is written after its grant, so a grant without one may be mid-consent.
+            if (consent === undefined) return outcome.set(id, "unconsented");
+            if (consent.createdAt >= since || consent.updatedAt >= since || (yield* touched(id)))
+              return outcome.set(id, "recent");
+            return outcome.set(id, "idle");
+          }),
+        { concurrency: 4, discard: true },
+      );
+      return outcome;
+    });
+  /** Check the given unrevoked grants and, when applying, revoke those idle for 30 days. */
+  const expireIdle = (ctx: GenericEndpointContext, ids: readonly GrantId[], apply: boolean) =>
+    Effect.gen(function* () {
+      if (ids.length === 0) return [];
+      const rows = yield* authCall(() =>
+        ctx.context.adapter.findMany({
+          model: "mcpGrant",
+          where: [
+            { field: "id", operator: "in", value: [...ids] },
+            { field: "revoked", value: false },
+          ],
+        }),
+      ).pipe(Effect.flatMap((rows) => parse(Schema.Array(Record), rows)));
+      const now = yield* Clock.currentTimeMillis;
+      const checked = yield* idleGrants(
+        ctx,
+        rows.map((row) => row.id),
+        new Date(now - refreshTokenSeconds * 1000),
+      );
+      return yield* Effect.forEach(ids, (id) =>
+        Effect.gen(function* () {
+          const found = checked.get(id);
+          if (found === undefined) return { id, outcome: "absent" as const };
+          if (found !== "idle") return { id, outcome: found };
+          if (!apply) return { id, outcome: "idle" as const };
+          yield* revoke(ctx, id);
+          return { id, outcome: "revoked" as const };
+        }),
+      );
+    });
+  /**
+   * When a user authorizes a client, revoke their idle grants for the same organization and URL
+   * from the same client: the same registration or a re-registration of it. MCP clients that lose
+   * their credentials register again under a new client ID, so two registrations match when both
+   * declare the same name, software ID and redirect URIs, ignoring loopback ports, which native
+   * clients choose afresh. Names are self-declared, but only grants that can never be used again
+   * are revoked, and only once idle for an hour: past the code lifetime and the refresh reuse
+   * window, so a sibling authorization or refresh in flight is never cut off.
+   */
+  const retireReplaced = (
+    ctx: GenericEndpointContext,
+    created: typeof Record.Type,
+    resources: readonly string[],
+  ) =>
+    Effect.gen(function* () {
+      const siblings = (yield* authCall(() =>
+        ctx.context.adapter.findMany({
+          model: "mcpGrant",
+          where: [
+            { field: "userId", value: created.userId },
+            { field: "resource", value: created.resource },
+            { field: "revoked", value: false },
+          ],
+        }),
+      ).pipe(Effect.flatMap((rows) => parse(Schema.Array(Record), rows)))).filter(
+        (grant) => grant.id !== created.id,
+      );
+      if (siblings.length === 0) return;
+      const clients = yield* authCall(() =>
+        ctx.context.adapter.findMany({
+          model: "oauthClient",
+          where: [
+            {
+              field: "clientId",
+              operator: "in",
+              value: [...new Set([created.clientId, ...siblings.map((grant) => grant.clientId)])],
+            },
+          ],
+        }),
+      ).pipe(
+        Effect.flatMap((rows) =>
+          parse(
+            Schema.Array(
+              Schema.Struct({
+                clientId: Schema.String,
+                name: Schema.optionalKey(Schema.NullOr(Schema.String)),
+                softwareId: Schema.optionalKey(Schema.NullOr(Schema.String)),
+                redirectUris: Schema.Array(Schema.String),
+              }),
+            ),
+            rows,
+          ),
+        ),
+      );
+      const identity = new Map(
+        clients.flatMap((client) => {
+          const name = client.name?.trim();
+          if (!name) return [];
+          const redirects = [...new Set(client.redirectUris.map(redirectIdentity))].sort();
+          return [[client.clientId, JSON.stringify([name, client.softwareId ?? null, redirects])]];
+        }),
+      );
+      const own = identity.get(created.clientId);
+      const consents = yield* authCall(() =>
+        ctx.context.adapter.findMany({
+          model: "oauthConsent",
+          where: [
+            { field: "userId", value: created.userId },
+            { field: "referenceId", operator: "in", value: siblings.map((grant) => grant.id) },
+          ],
+        }),
+      ).pipe(
+        Effect.flatMap((rows) =>
+          parse(
+            Schema.Array(
+              Schema.Struct({
+                referenceId: GrantId,
+                resources: Schema.optionalKey(Schema.NullOr(Schema.Array(Schema.String))),
+              }),
+            ),
+            rows,
+          ),
+        ),
+      );
+      const url = [...new Set(resources)].sort().join(" ");
+      const sameUrl = new Set(
+        consents.flatMap((consent) =>
+          [...new Set(consent.resources ?? [])].sort().join(" ") === url
+            ? [consent.referenceId]
+            : [],
+        ),
+      );
+      const replaced = siblings.filter(
+        (grant) =>
+          sameUrl.has(grant.id) &&
+          (grant.clientId === created.clientId ||
+            (own !== undefined && identity.get(grant.clientId) === own)),
+      );
+      const now = yield* Clock.currentTimeMillis;
+      const checked = yield* idleGrants(
+        ctx,
+        replaced.map((grant) => grant.id),
+        new Date(now - accessTokenSeconds * 1000),
+      );
+      for (const [id, outcome] of checked) if (outcome === "idle") yield* revoke(ctx, id);
+    });
+  /**
+   * The owner's grants that hold a usable token, with their client, consent time and newest
+   * access token, most recently used first. Grants without a usable token, a readable consent or
+   * their connection authorize nothing and are omitted; idle ones are revoked by `expireIdle`.
    */
   const listAgents = (
     ctx: GenericEndpointContext,
@@ -551,6 +811,7 @@ export const grantOAuthPlugins = (settings: GrantOAuthOptions) => {
         grants,
         (grant) =>
           Effect.gen(function* () {
+            if (!usable.has(grant.id) || disabled.has(grant.clientId)) return [];
             const consent = consentOf.get(grant.id);
             const target =
               consent === undefined ? undefined : grantTarget(origin, consent.resources ?? []);
@@ -598,7 +859,6 @@ export const grantOAuthPlugins = (settings: GrantOAuthOptions) => {
                 name: nameOf.get(grant.clientId) ?? null,
                 connectedAt: consent.createdAt.toISOString(),
                 lastActiveAt: latest[0]?.createdAt.toISOString() ?? null,
-                active: usable.has(grant.id) && !disabled.has(grant.clientId),
                 access,
                 ...(target.kind === "mcp" ? { mode: target.mode } : {}),
               }),
@@ -610,7 +870,6 @@ export const grantOAuthPlugins = (settings: GrantOAuthOptions) => {
         .flat()
         .sort(
           (a, b) =>
-            Number(b.active) - Number(a.active) ||
             (b.lastActiveAt ?? "").localeCompare(a.lastActiveAt ?? "") ||
             b.connectedAt.localeCompare(a.connectedAt),
         );
@@ -853,6 +1112,57 @@ export const grantOAuthPlugins = (settings: GrantOAuthOptions) => {
             }),
           ),
       ),
+      listMcpGrantIds: createAuthEndpoint(
+        "/mcp/grants/ids",
+        {
+          ...serverOnly,
+          body: Schema.toStandardSchemaV1(
+            Schema.Struct({
+              after: Schema.NullOr(GrantId),
+              limit: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: grantBatch })),
+            }),
+          ),
+        },
+        (ctx) =>
+          runAuth(
+            authCall(() =>
+              ctx.context.adapter.findMany({
+                model: "mcpGrant",
+                where: [
+                  { field: "revoked", value: false },
+                  ...(ctx.body.after === null
+                    ? []
+                    : [{ field: "id", operator: "gt" as const, value: ctx.body.after }]),
+                ],
+                sortBy: { field: "id", direction: "asc" },
+                limit: ctx.body.limit,
+              }),
+            ).pipe(
+              Effect.flatMap((rows) => parse(Schema.Array(Record), rows)),
+              Effect.map((rows) => ({
+                grants: rows.map((row) => ({ id: row.id, userId: row.userId })),
+              })),
+            ),
+          ),
+      ),
+      expireIdleMcpGrants: createAuthEndpoint(
+        "/mcp/grants/expire-idle",
+        {
+          ...serverOnly,
+          body: Schema.toStandardSchemaV1(
+            Schema.Struct({
+              ids: Schema.Array(GrantId).check(Schema.isMaxLength(grantBatch)),
+              apply: Schema.Boolean,
+            }),
+          ),
+        },
+        (ctx) =>
+          runAuth(
+            expireIdle(ctx, ctx.body.ids, ctx.body.apply).pipe(
+              Effect.map((grants) => ({ grants })),
+            ),
+          ),
+      ),
       listMcpGrants: createAuthEndpoint(
         "/mcp/grants",
         { method: "GET", requireHeaders: true },
@@ -1085,6 +1395,16 @@ export const grantOAuthPlugins = (settings: GrantOAuthOptions) => {
                 );
                 const grant = yield* parse(Record, row);
                 yield* authCall(() => selected.set({ userId, id: grant.id }));
+                // Cleanup must not block the authorization; daily expiry retries what fails here.
+                yield* retireReplaced(
+                  ctx,
+                  grant,
+                  new URLSearchParams(body.oauth_query).getAll("resource"),
+                ).pipe(
+                  Effect.catchCause((cause) =>
+                    Effect.logWarning("Replaced agent grants were not revoked", cause),
+                  ),
+                );
               }),
             ),
           ),
@@ -1128,3 +1448,42 @@ export const grantOAuthPlugins = (settings: GrantOAuthOptions) => {
     lookupBrowser,
   };
 };
+
+/** Grant storage could not be read or written; the next run tries again. */
+export class GrantExpiryUnavailable extends Schema.TaggedError<GrantExpiryUnavailable>()(
+  "GrantExpiryUnavailable",
+  {},
+) {}
+
+/** The server-only endpoints that expire idle grants, as a host's own auth instance exposes them. */
+export interface GrantExpiryApi {
+  readonly listMcpGrantIds: (input: {
+    body: { after: string | null; limit: number };
+  }) => Promise<unknown>;
+  readonly expireIdleMcpGrants: (input: {
+    body: { ids: readonly string[]; apply: boolean };
+  }) => Promise<unknown>;
+}
+
+/**
+ * Grant expiry through a host's auth instance: list unrevoked grants in ID order, and check a
+ * batch, revoking those idle for 30 days when applying. Results are parsed again at the boundary.
+ */
+export const grantExpiry = (
+  call: <A>(run: (api: GrantExpiryApi) => Promise<A>) => Effect.Effect<A, unknown>,
+) => ({
+  batch: grantBatch,
+  page: (after: string | null) =>
+    call((api) => api.listMcpGrantIds({ body: { after, limit: grantBatch } })).pipe(
+      Effect.flatMap(Schema.decodeUnknownEffect(GrantPage)),
+      Effect.map((page) => page.grants),
+      Effect.mapError(() => new GrantExpiryUnavailable()),
+    ),
+  expire: (ids: readonly string[], apply: boolean) =>
+    call((api) => api.expireIdleMcpGrants({ body: { ids, apply } })).pipe(
+      Effect.flatMap(Schema.decodeUnknownEffect(GrantExpiryResults)),
+      Effect.map((result) => result.grants),
+      Effect.mapError(() => new GrantExpiryUnavailable()),
+    ),
+});
+export type GrantExpiry = ReturnType<typeof grantExpiry>;

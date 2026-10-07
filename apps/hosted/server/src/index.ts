@@ -62,6 +62,7 @@ export {
   mcpConnectionStore,
   provisionHostedOAuthResources,
 } from "./implementation/mcp-oauth.ts";
+export { grantExpiry, type GrantExpiry } from "@executor-js/mcp-auth/oauth";
 export { apiBearerAccess, mcpBearerAccess } from "./implementation/bearer-access.ts";
 export {
   makeHostedMcp,

@@ -18,8 +18,9 @@ import {
   lookupOrganizationSlug,
   resolveOrganizationReference,
   deleteOrganizationRecords,
+  grantExpiry,
 } from "@executor-js/hosted-server";
-import { Effect, Layer, Option, Redacted } from "effect";
+import { Context, Effect, Layer, Option, Redacted } from "effect";
 import { SqlClient } from "effect/sql";
 import { AuthDatabase } from "./contracts/database.ts";
 import { HttpServerRequest, HttpServerResponse } from "effect/http";
@@ -130,7 +131,16 @@ export const selfHostAuth = Effect.gen(function* () {
     mcpIdentity,
     apiIdentity,
     appSessions,
+    agentGrants: grantExpiry((run) =>
+      Effect.tryPromise({ try: () => run(auth.api), catch: (cause) => cause }),
+    ),
     origin: settings.url,
     handler,
   };
 });
+
+/** The one auth instance, built before startup data steps and shared with the routes. */
+export class SelfHostAuth extends Context.Service<
+  SelfHostAuth,
+  Effect.Success<typeof selfHostAuth>
+>()("self-host/Auth") {}

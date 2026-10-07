@@ -1,6 +1,7 @@
 /**
- * Connected agents: the OAuth clients a user authorized, one per live grant. Revoking one ends
- * its grant and deletes its tokens; the client must authorize again to reconnect.
+ * Connected agents: the OAuth clients a user authorized, one per grant that still holds a usable
+ * token. Revoking one ends its grant and deletes its tokens; the client must authorize again to
+ * reconnect.
  */
 import { ApiError } from "@executor-js/utils/api-error";
 import { Schema } from "effect";
@@ -31,14 +32,9 @@ export const ConnectedAgent = Schema.Struct({
   connectedAt: Schema.String,
   /**
    * When the client last received an access token, by sign-in or refresh; tokens last an hour,
-   * so this is coarse. Null once its tokens are gone, for example after a refresh token replay.
+   * so this is coarse. Null when it holds only a refresh token whose access tokens are gone.
    */
   lastActiveAt: Schema.NullOr(Schema.String),
-  /**
-   * Whether the agent still holds a token Executor accepts, or a refresh token that can mint
-   * one. An inactive agent cannot call Executor until it signs in again.
-   */
-  active: Schema.Boolean,
   access: ConnectedAgentAccess,
   /** How tool approvals reach the user; absent for API grants. */
   mode: Schema.optionalKey(ApprovalMode),

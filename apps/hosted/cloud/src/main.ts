@@ -12,6 +12,9 @@ import { cloudAppDomains } from "./infrastructure/app-domains.ts";
 import { AppRepositoryRecovery, WorkflowHost } from "@executor-js/sdk/core";
 import { AppWorkflows } from "./infrastructure/workflows.ts";
 import { cloudDataSteps } from "./infrastructure/data-steps.ts";
+import { expireIdleAgentGrants } from "@executor-js/app-management/data-steps";
+import { GroupDatabase } from "@executor-js/hosted-server/groups";
+import { SqlClient } from "effect/sql";
 import {
   OrganizationRemoval,
   OrganizationRemovalStart,
@@ -262,7 +265,7 @@ export default Api.make(
           Effect.tap((response) => Ref.set(streamed, response.body._tag === "Stream")),
         );
       });
-    const dataSteps = (yield* cloudDataSteps).pipe(
+    const dataSteps = (yield* cloudDataSteps(auth.agentGrants)).pipe(
       Effect.provide(executor),
       reportErrors,
       Effect.scoped,
@@ -308,6 +311,19 @@ export default Api.make(
       Effect.withSpan("job.billing.reconcile"),
       Effect.catch(() => Effect.logError("Billing seat reconciliation failed")),
     );
+    // Repeats the reviewed idle grant data step for grants that became idle since; it does
+    // nothing until that step has applied here.
+    const agentGrantExpiry = Effect.gen(function* () {
+      const sql = yield* Effect.flatten(GroupDatabase);
+      yield* expireIdleAgentGrants(auth.agentGrants, "private_hosted").pipe(
+        Effect.provideService(SqlClient.SqlClient, sql),
+      );
+    }).pipe(
+      Effect.provide(executor),
+      reportErrors,
+      Effect.scoped,
+      Effect.catch(() => Effect.logWarning("Idle agent grant expiry failed")),
+    );
     const jobs = yield* cloudBackgroundJobs;
     yield* jobs.schedule(
       "* * * * *",
@@ -324,7 +340,7 @@ export default Api.make(
       "workflow-reconcile",
       "app-domain-heartbeat",
     );
-    yield* jobs.schedule("17 4 * * *", "billing-reconcile");
+    yield* jobs.schedule("17 4 * * *", "billing-reconcile", "agent-grant-expiry");
     const backgroundJobs = {
       "organization-removal": organizationRemovals,
       provisioning: dispatch,
@@ -336,6 +352,7 @@ export default Api.make(
       "welcome-emails": welcomeEmails.deliver,
       "workflow-reconcile": workflowReconcile,
       "billing-reconcile": billingReconcile,
+      "agent-grant-expiry": agentGrantExpiry,
     } satisfies Record<BackgroundJob, unknown>;
 
     const onboarding = yield* cloudOnboarding.pipe(Effect.orDie);

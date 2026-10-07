@@ -46,7 +46,7 @@ import { HttpRouter, HttpServer, HttpServerRequest, HttpServerResponse } from "e
 import { withHostPipeline } from "@executor-js/dashboard-start/in-process";
 import { selfHostApi } from "./api.ts";
 import { selfHostMcp } from "../mcp.ts";
-import { selfHostAuth } from "../auth.ts";
+import { SelfHostAuth } from "../auth.ts";
 import { selfHostAnalytics } from "./product-analytics.ts";
 
 import type { SourceFile } from "@executor-js/sdk/core";
@@ -62,7 +62,7 @@ export const selfHostRouteMap = <DashboardE, DashboardR>(options: {
 }) =>
   Effect.gen(function* () {
     const { skills, egress, executorServices, dashboard } = options;
-    const auth = yield* selfHostAuth;
+    const auth = yield* SelfHostAuth.pipe(Effect.provide(executorServices));
     const analytics = yield* selfHostAnalytics;
     /** Requests and background schedules record through this instance's sink unless it opted out. */
     const observed = <A, E, R>(effect: Effect.Effect<A, E, R>) =>

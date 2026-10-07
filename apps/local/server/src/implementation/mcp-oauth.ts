@@ -3,7 +3,7 @@ import { betterAuth } from "better-auth";
 import { APIError, isAPIError } from "better-auth/api";
 import { makeSignature } from "better-auth/crypto";
 import { getMigrations } from "better-auth/db/migration";
-import { grantOAuthPlugins } from "@executor-js/mcp-auth/oauth";
+import { grantExpiry, grantOAuthPlugins } from "@executor-js/mcp-auth/oauth";
 import {
   GrantId,
   mcpOAuthResources,
@@ -301,6 +301,9 @@ export const makeLocalMcpOAuth = (config: ServerConfig, pairing: LocalAuth, cryp
       challenge,
       invalidAddress,
       connections,
+      agentGrants: grantExpiry((run) =>
+        Effect.tryPromise({ try: () => run(auth.api), catch: (cause) => cause }),
+      ),
     };
   });
 /** Provider capabilities captured by the local server, never by app code. */

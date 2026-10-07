@@ -18,7 +18,7 @@ import { makeLocalMcpOAuth, type LocalMcpOAuth } from "./mcp-oauth.ts";
 import { localEventAuthority } from "./events.ts";
 import { localMcpConnectionHandlers } from "./mcp-connections.ts";
 import { localAppManagement } from "./app-management.ts";
-import { runStartupDataSteps } from "@executor-js/app-management/data-steps";
+import { expireIdleAgentGrants, runStartupDataSteps } from "@executor-js/app-management/data-steps";
 import { SqlClient } from "effect/sql";
 
 /** Local host composition. The SDK owns operations; this package owns local resources and access. */
@@ -168,10 +168,20 @@ export const localApi = (
       /** Each product surface records its own use; host-owned work uses the plain executor. */
       const observed = (source: "mcp" | "api" | "dashboard" | "app_ui") =>
         observeLocalExecutor(executor, analytics, source);
+      // Data steps revoke idle OAuth grants, so the provider exists before they run.
+      const oauth = yield* makeLocalMcpOAuth(config, auth, crypto);
       // Before background work, the Executor app's regeneration and serving; the data lock is held.
-      yield* runStartupDataSteps({ executor, blobs }, "private_local").pipe(
-        Effect.provideService(SqlClient.SqlClient, sql),
-        startupPhase("data-steps"),
+      yield* runStartupDataSteps(
+        { executor, blobs, agentGrants: oauth.agentGrants },
+        "private_local",
+      ).pipe(Effect.provideService(SqlClient.SqlClient, sql), startupPhase("data-steps"));
+      // Once the idle grant step has applied, revoke grants that became idle since, daily.
+      yield* Effect.forkScoped(
+        expireIdleAgentGrants(oauth.agentGrants, "private_local").pipe(
+          Effect.provideService(SqlClient.SqlClient, sql),
+          Effect.catch(() => Effect.logWarning("Idle agent grant expiry failed")),
+          Effect.repeat(Schedule.spaced("1 day")),
+        ),
       );
       yield* Effect.forkScoped(
         executor[RepositoryHost].recover.pipe(
@@ -231,7 +241,6 @@ export const localApi = (
           return yield* httpEffect;
         }),
       );
-      const oauth = yield* makeLocalMcpOAuth(config, auth, crypto);
       yield* Deferred.succeed(grants, oauth);
       yield* Effect.forkScoped(deliverEvents(executor));
       const mcp = yield* localMcp(observed("mcp"), config.mcp, config, oauth);

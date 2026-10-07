@@ -24,6 +24,7 @@ import {
   resolveOrganizationReference,
   ApiAuthentication,
   apiBearerAccess,
+  grantExpiry,
 } from "@executor-js/hosted-server";
 import { betterAuth } from "better-auth";
 import { BetterAuthApiError, isAPIErrorLike } from "@alchemy.run/better-auth";
@@ -270,6 +271,8 @@ export const cloudAuth = (send: SendAuthEmail) =>
       mcpIdentity,
       apiIdentity,
       appSessions,
+      // Background jobs only: grant expiry runs from the data step and the daily cron.
+      agentGrants: grantExpiry((run) => nativeCall((instance) => run(instance.api))),
       handler,
       origin: settings.url,
       cookiePrefix: cloudSessionCookiePrefix(settings.url),

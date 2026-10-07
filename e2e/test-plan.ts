@@ -5242,8 +5242,29 @@ export const scenarios = {
   connectedAgentsActivity: {
     fixtures: "actors",
     file: "connected-agents.spec.ts",
+    title: "Connected agents list only usable agents, by last use, and each can be revoked",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Advances the wall clock of a runner-owned product process."),
+      local: na("Local has no organization members or hosted OAuth consent."),
+    },
+  },
+  connectedAgentsReauthorize: {
+    fixtures: "actors",
+    file: "connected-agents.spec.ts",
     title:
-      "Connected agents list usable agents by last use and collapse expired ones, and either can be revoked",
+      "Authorizing a client again revokes its idle grants, but not its live ones or another client's",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Advances the wall clock of a runner-owned product process."),
+      local: na("Local has no organization members or hosted OAuth consent."),
+    },
+  },
+  connectedAgentsIdleExpiry: {
+    fixtures: "actors",
+    file: "connected-agents.spec.ts",
+    title:
+      "Grants idle for 30 days without a usable token are revoked; one with a valid refresh token is kept",
     targets: {
       "self-host": scheduled,
       cloud: na("Advances the wall clock of a runner-owned product process."),

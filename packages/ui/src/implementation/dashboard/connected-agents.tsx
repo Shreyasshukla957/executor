@@ -1,6 +1,4 @@
-import { useId, useState, type ComponentType } from "react";
-import { HugeiconsIcon } from "@hugeicons/react";
-import { ArrowRight01Icon } from "@hugeicons/core-free-icons";
+import { useState, type ComponentType } from "react";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { Exit } from "effect";
 import { AsyncResult, type Atom } from "effect/reactivity";
@@ -37,8 +35,8 @@ const accessLabel = (access: ConnectedAgentAccess) => {
 
 /**
  * Agents the current user authorized over OAuth. Each row is one grant; revoking it ends the
- * agent's access at once and it must sign in again to reconnect. Agents without a usable token
- * are listed apart, collapsed, so abandoned registrations do not hide the ones in use.
+ * agent's access at once and it must sign in again to reconnect. Only agents that can still reach
+ * Executor are listed, most recently used first.
  */
 export function ConnectedAgents<E, EL extends E, ER extends E>({
   query,
@@ -66,10 +64,14 @@ export function ConnectedAgents<E, EL extends E, ER extends E>({
         {(agents) =>
           agents.length === 0 ? (
             <p className="text-[13px] text-muted-foreground">
-              No agents have signed in yet. Agents you connect with the MCP URL appear here.
+              No agent is connected. Agents that sign in with the MCP URL appear here.
             </p>
           ) : (
-            <AgentLists agents={agents} onRevoke={setRevoking} />
+            <ul className="divide-y border-y">
+              {agents.map((agent) => (
+                <AgentRow key={agent.id} agent={agent} onRevoke={setRevoking} />
+              ))}
+            </ul>
           )
         }
       </QueryView>
@@ -111,67 +113,6 @@ export function ConnectedAgents<E, EL extends E, ER extends E>({
         </DialogContent>
       </Dialog>
     </section>
-  );
-}
-
-/** Active agents, most recently used first, then the inactive ones behind a disclosure. */
-function AgentLists({
-  agents,
-  onRevoke,
-}: {
-  readonly agents: readonly ConnectedAgent[];
-  readonly onRevoke: (agent: ConnectedAgent) => void;
-}) {
-  const [showInactive, setShowInactive] = useState(false);
-  const inactiveId = useId();
-  const active = agents.filter((agent) => agent.active);
-  const inactive = agents.filter((agent) => !agent.active);
-  return (
-    <>
-      {active.length === 0 ? (
-        <p className="text-[13px] text-muted-foreground">
-          No agent is signed in right now. Agents that sign in with the MCP URL appear here.
-        </p>
-      ) : (
-        <ul aria-label="Active agents" className="divide-y border-y">
-          {active.map((agent) => (
-            <AgentRow key={agent.id} agent={agent} onRevoke={onRevoke} />
-          ))}
-        </ul>
-      )}
-      {inactive.length > 0 && (
-        <div className="mt-4">
-          <button
-            type="button"
-            aria-expanded={showInactive}
-            aria-controls={inactiveId}
-            onClick={() => setShowInactive(!showInactive)}
-            className="flex h-6 items-center gap-1.5 rounded-md text-xs font-medium text-muted-foreground hover:text-foreground focus-visible:outline-ring"
-          >
-            <HugeiconsIcon
-              icon={ArrowRight01Icon}
-              size={12}
-              className={showInactive ? "rotate-90 transition-transform" : "transition-transform"}
-              aria-hidden
-            />
-            Inactive ({inactive.length})
-          </button>
-          {showInactive && (
-            <div id={inactiveId} className="mt-2">
-              <p className="mb-2 text-xs text-muted-foreground">
-                These agents have no usable sign-in left and cannot reach Executor until they sign
-                in again. Revoking one removes it from this list.
-              </p>
-              <ul aria-label="Inactive agents" className="divide-y border-y">
-                {inactive.map((agent) => (
-                  <AgentRow key={agent.id} agent={agent} onRevoke={onRevoke} />
-                ))}
-              </ul>
-            </div>
-          )}
-        </div>
-      )}
-    </>
   );
 }
 

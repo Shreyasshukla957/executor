@@ -9,6 +9,12 @@ export { buildFrameworkOnceStep } from "./implementation/build-framework-once.ts
 export type { BuildFrameworkHost } from "./implementation/build-framework-once.ts";
 export type { DataStepHost } from "./implementation/host-data-steps.ts";
 export {
+  expireIdleAgentGrants,
+  idleAgentGrantsStep,
+  idleAgentGrantsStepName,
+} from "./implementation/idle-agent-grants.ts";
+export type { AgentGrantExpiry, AgentGrantHost } from "./implementation/idle-agent-grants.ts";
+export {
   hostDataSteps,
   runStartupDataSteps,
   startupDataStepMode,
