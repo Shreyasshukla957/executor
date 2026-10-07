@@ -5152,6 +5152,17 @@ export const scenarios = {
       local: na("Local has no organization members or hosted OAuth consent."),
     },
   },
+  connectedAgentsActivity: {
+    fixtures: "actors",
+    file: "connected-agents.spec.ts",
+    title:
+      "Connected agents list usable agents by last use and collapse expired ones, and either can be revoked",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Advances the wall clock of a runner-owned product process."),
+      local: na("Local has no organization members or hosted OAuth consent."),
+    },
+  },
   mcpStaleRefresh: {
     fixtures: "actors",
     file: "mcp-oauth-refresh.spec.ts",
@@ -5317,12 +5328,15 @@ export const scenarios = {
   },
 } as const satisfies Record<string, typeof TestPlan.Type>;
 
+const allScenarios: ReadonlyArray<typeof TestPlan.Type> = Object.values(scenarios);
+
 /** Hosted parity includes every scenario scheduled on both hosted products. */
 export const scenariosForSuite = (
   suite: "all" | "hosted",
   cloudMode: "managed" | "attached" = "managed",
 ) =>
-  Object.values(scenarios)
+  // Widened to the plan type: a union over every scenario literal is too large to check.
+  allScenarios
     .filter(
       (scenario) =>
         suite === "all" ||

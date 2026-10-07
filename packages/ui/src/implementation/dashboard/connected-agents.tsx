@@ -1,4 +1,6 @@
-import { useState, type ComponentType } from "react";
+import { useId, useState, type ComponentType } from "react";
+import { HugeiconsIcon } from "@hugeicons/react";
+import { ArrowRight01Icon } from "@hugeicons/core-free-icons";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { Exit } from "effect";
 import { AsyncResult, type Atom } from "effect/reactivity";
@@ -14,7 +16,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../components/dialog.tsx";
-import { LocalTime, shortMoment } from "../components/local-time.tsx";
+import { LocalTime, RelativeTime, shortMoment } from "../components/local-time.tsx";
 import { Skeleton } from "../components/skeleton.tsx";
 import { QueryView } from "./context.tsx";
 
@@ -35,7 +37,8 @@ const accessLabel = (access: ConnectedAgentAccess) => {
 
 /**
  * Agents the current user authorized over OAuth. Each row is one grant; revoking it ends the
- * agent's access at once and it must sign in again to reconnect.
+ * agent's access at once and it must sign in again to reconnect. Agents without a usable token
+ * are listed apart, collapsed, so abandoned registrations do not hide the ones in use.
  */
 export function ConnectedAgents<E, EL extends E, ER extends E>({
   query,
@@ -66,28 +69,7 @@ export function ConnectedAgents<E, EL extends E, ER extends E>({
               No agents have signed in yet. Agents you connect with the MCP URL appear here.
             </p>
           ) : (
-            <ul className="divide-y border-y">
-              {agents.map((agent) => (
-                <li key={agent.id} className="flex items-center gap-4 px-1 py-3">
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-[13px] font-medium">{agentName(agent)}</p>
-                    <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                      {accessLabel(agent.access)} · Connected{" "}
-                      <LocalTime value={agent.connectedAt} options={shortMoment} />
-                      {agent.lastActiveAt !== null && (
-                        <>
-                          {" · Last active "}
-                          <LocalTime value={agent.lastActiveAt} options={shortMoment} />
-                        </>
-                      )}
-                    </p>
-                  </div>
-                  <Button variant="outline" size="sm" onClick={() => setRevoking(agent)}>
-                    Revoke<span className="sr-only"> {agentName(agent)}</span>
-                  </Button>
-                </li>
-              ))}
-            </ul>
+            <AgentLists agents={agents} onRevoke={setRevoking} />
           )
         }
       </QueryView>
@@ -129,6 +111,97 @@ export function ConnectedAgents<E, EL extends E, ER extends E>({
         </DialogContent>
       </Dialog>
     </section>
+  );
+}
+
+/** Active agents, most recently used first, then the inactive ones behind a disclosure. */
+function AgentLists({
+  agents,
+  onRevoke,
+}: {
+  readonly agents: readonly ConnectedAgent[];
+  readonly onRevoke: (agent: ConnectedAgent) => void;
+}) {
+  const [showInactive, setShowInactive] = useState(false);
+  const inactiveId = useId();
+  const active = agents.filter((agent) => agent.active);
+  const inactive = agents.filter((agent) => !agent.active);
+  return (
+    <>
+      {active.length === 0 ? (
+        <p className="text-[13px] text-muted-foreground">
+          No agent is signed in right now. Agents that sign in with the MCP URL appear here.
+        </p>
+      ) : (
+        <ul aria-label="Active agents" className="divide-y border-y">
+          {active.map((agent) => (
+            <AgentRow key={agent.id} agent={agent} onRevoke={onRevoke} />
+          ))}
+        </ul>
+      )}
+      {inactive.length > 0 && (
+        <div className="mt-4">
+          <button
+            type="button"
+            aria-expanded={showInactive}
+            aria-controls={inactiveId}
+            onClick={() => setShowInactive(!showInactive)}
+            className="flex h-6 items-center gap-1.5 rounded-md text-xs font-medium text-muted-foreground hover:text-foreground focus-visible:outline-ring"
+          >
+            <HugeiconsIcon
+              icon={ArrowRight01Icon}
+              size={12}
+              className={showInactive ? "rotate-90 transition-transform" : "transition-transform"}
+              aria-hidden
+            />
+            Inactive ({inactive.length})
+          </button>
+          {showInactive && (
+            <div id={inactiveId} className="mt-2">
+              <p className="mb-2 text-xs text-muted-foreground">
+                These agents have no usable sign-in left and cannot reach Executor until they sign
+                in again. Revoking one removes it from this list.
+              </p>
+              <ul aria-label="Inactive agents" className="divide-y border-y">
+                {inactive.map((agent) => (
+                  <AgentRow key={agent.id} agent={agent} onRevoke={onRevoke} />
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
+function AgentRow({
+  agent,
+  onRevoke,
+}: {
+  readonly agent: ConnectedAgent;
+  readonly onRevoke: (agent: ConnectedAgent) => void;
+}) {
+  return (
+    <li className="flex items-center gap-4 px-1 py-3">
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-[13px] font-medium">{agentName(agent)}</p>
+        <p className="mt-0.5 truncate text-xs text-muted-foreground">
+          {accessLabel(agent.access)}
+          {agent.lastActiveAt !== null && (
+            <>
+              {" · Last used "}
+              <RelativeTime value={agent.lastActiveAt} />
+            </>
+          )}
+          {" · Connected "}
+          <LocalTime value={agent.connectedAt} options={shortMoment} />
+        </p>
+      </div>
+      <Button variant="outline" size="sm" onClick={() => onRevoke(agent)}>
+        Revoke<span className="sr-only"> {agentName(agent)}</span>
+      </Button>
+    </li>
   );
 }
 

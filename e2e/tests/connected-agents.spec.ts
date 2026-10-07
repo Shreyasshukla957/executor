@@ -1,4 +1,7 @@
-/** Members see the agents they authorized over OAuth and can revoke one at once. */
+/**
+ * Members see the agents they authorized over OAuth and can revoke one at once. Agents that
+ * still hold a usable token are listed by last use; the rest are collapsed as inactive.
+ */
 import { expect, layer } from "@effect/vitest";
 import { Effect, Layer, Redacted, Schema } from "effect";
 import type { Page } from "playwright";
@@ -10,12 +13,14 @@ import { HostedLive, withHostedCase } from "../support/case.ts";
 import { Evidence } from "../support/evidence.ts";
 import { McpOAuth } from "../support/mcp-oauth.ts";
 import { McpClient } from "../support/mcp-client.ts";
+import { serverControl } from "../support/server-control.ts";
 
 const Agent = Schema.Struct({
   id: Schema.String,
   name: Schema.NullOr(Schema.String),
   connectedAt: Schema.String,
   lastActiveAt: Schema.NullOr(Schema.String),
+  active: Schema.Boolean,
   access: Schema.Struct({ kind: Schema.String }),
 });
 
@@ -43,7 +48,11 @@ layer(HostedLive, { excludeTestServices: true })("Connected agents", (it) => {
 
         const listed = yield* agents(actors.owner);
         const agent = listed.find((item) => item.id === grant.grantId);
-        expect(agent).toMatchObject({ name: "Executor E2E client", access: { kind: "all" } });
+        expect(agent).toMatchObject({
+          name: "Executor E2E client",
+          access: { kind: "all" },
+          active: true,
+        });
         expect(agent?.lastActiveAt).not.toBeNull();
         // Each member sees only the agents they authorized.
         expect((yield* agents(actors.member)).some((item) => item.id === grant.grantId)).toBe(
@@ -93,6 +102,146 @@ layer(HostedLive, { excludeTestServices: true })("Connected agents", (it) => {
         const again = yield* api.request(actors.owner, "POST", `${path}/${grant.grantId}/revoke`);
         expect(again.status).toBe(404);
       }).pipe(Effect.provide(Layer.mergeAll(McpOAuth.layer, McpClient.layer))),
+    ),
+  );
+  it.effect(scenarios.connectedAgentsActivity.title, (context) =>
+    withHostedCase(
+      context,
+      Effect.gen(function* () {
+        const api = yield* Api,
+          actors = yield* Actors,
+          browser = yield* Browser,
+          evidence = yield* Evidence,
+          oauth = yield* McpOAuth;
+        const path = `/api/organizations/${actors.organization.id}/mcp-agents`;
+        const agents = api
+          .request(actors.owner, "GET", path)
+          .pipe(Effect.flatMap((response) => body(Schema.Array(Agent), response)));
+        yield* browser.login(actors.owner);
+        // Connected in this order, so connection time alone would list the newest first.
+        const older = yield* evidence.step(
+          "Authorize an agent that will refresh",
+          oauth.authorizeNamed("Older agent"),
+        );
+        const newer = yield* evidence.step(
+          "Authorize an agent that will only hold its refresh token",
+          oauth.authorizeNamed("Newer agent"),
+        );
+        const expiring = yield* evidence.step(
+          "Authorize an agent that asks for no refresh token",
+          oauth.authorizeWithoutRefresh("Expiring agent"),
+        );
+        const fresh = yield* agents;
+        for (const grant of [older, newer, expiring])
+          expect(fresh.find((item) => item.id === grant.grantId)?.active).toBe(true);
+
+        // Access tokens last an hour. Past it, only an agent with a refresh token can continue.
+        yield* serverControl("stop");
+        yield* serverControl("clock/advance", 200, { milliseconds: 61 * 60_000 });
+        yield* serverControl("start");
+        yield* evidence.step(
+          "The agent without a refresh token is refused",
+          Effect.gen(function* () {
+            const denied = yield* api.request(yield* api.session(), "GET", "/mcp", undefined, {
+              authorization: `Bearer ${Redacted.value(expiring.tokens).access_token}`,
+            });
+            expect(denied.status).toBe(401);
+          }),
+        );
+        yield* evidence.step("The older agent refreshes", oauth.refresh(older));
+
+        const listed = yield* agents;
+        const ours = listed.filter((item) =>
+          [older, newer, expiring].some((grant) => grant.grantId === item.id),
+        );
+        // The refreshed agent was used last; the newer one is active through its refresh token.
+        expect(ours.map((item) => [item.name, item.active])).toEqual([
+          ["Older agent", true],
+          ["Newer agent", true],
+          ["Expiring agent", false],
+        ]);
+        expect(ours.every((item) => item.lastActiveAt !== null)).toBe(true);
+        const [olderUse, newerUse] = ours.map((item) => Date.parse(item.lastActiveAt ?? ""));
+        expect(olderUse).toBeGreaterThan(newerUse ?? Number.POSITIVE_INFINITY);
+
+        yield* browser.use("Open Connections", (page) =>
+          page.goto(`/org/${actors.organization.slug}/connect`),
+        );
+        const section = (page: Page) => page.getByRole("region", { name: "Connected agents" });
+        const activeRows = (page: Page) =>
+          section(page).getByRole("list", { name: "Active agents" }).getByRole("listitem");
+        const inactiveRows = (page: Page) =>
+          section(page).getByRole("list", { name: "Inactive agents" }).getByRole("listitem");
+        const toggle = (page: Page) =>
+          section(page).getByRole("button", { name: "Inactive (1)", exact: true });
+        yield* browser.use("Active agents show when they were last used", (page) =>
+          activeRows(page)
+            .filter({ hasText: "Older agent" })
+            .filter({ hasText: "Last used" })
+            .waitFor(),
+        );
+        const order = yield* browser.use("Read the active agents in order", (page) =>
+          activeRows(page).locator("p.font-medium").allInnerTexts(),
+        );
+        expect(order).toEqual(["Older agent", "Newer agent"]);
+        // Inactive agents start collapsed.
+        expect(
+          yield* browser.use("The inactive agents are collapsed", (page) =>
+            toggle(page).getAttribute("aria-expanded"),
+          ),
+        ).toBe("false");
+        expect(
+          yield* browser.use("The expired agent is hidden", (page) =>
+            section(page).getByText("Expiring agent", { exact: true }).count(),
+          ),
+        ).toBe(0);
+        yield* browser.checkpoint("Active agents by last use with inactive ones collapsed");
+        yield* browser.use("Show inactive agents", (page) => toggle(page).click());
+        yield* browser.use("The expired agent is listed as inactive", (page) =>
+          inactiveRows(page)
+            .filter({ hasText: "Expiring agent" })
+            .filter({ hasText: "Last used" })
+            .waitFor(),
+        );
+        yield* browser.checkpoint("Inactive agents expanded");
+
+        const revokeFrom = (rows: (page: Page) => ReturnType<typeof activeRows>, name: string) =>
+          Effect.gen(function* () {
+            yield* browser.use(`Revoke ${name}`, (page) =>
+              rows(page)
+                .filter({ hasText: name })
+                .getByRole("button", { name: `Revoke ${name}`, exact: true })
+                .click(),
+            );
+            yield* browser.use("Confirm", (page) =>
+              page.getByRole("button", { name: "Revoke agent", exact: true }).click(),
+            );
+            yield* browser.use("The confirmation closes", (page) =>
+              page.getByRole("dialog").waitFor({ state: "detached" }),
+            );
+            yield* browser.use(`${name} leaves the list`, (page) =>
+              section(page).getByText(name, { exact: true }).waitFor({ state: "detached" }),
+            );
+          });
+        yield* revokeFrom(inactiveRows, "Expiring agent");
+        yield* browser.use("No inactive agents remain", (page) =>
+          section(page)
+            .getByRole("button", { name: /^Inactive/ })
+            .waitFor({ state: "detached" }),
+        );
+        yield* revokeFrom(activeRows, "Newer agent");
+
+        const remaining = (yield* agents).filter((item) =>
+          [older, newer, expiring].some((grant) => grant.grantId === item.id),
+        );
+        expect(remaining.map((item) => item.name)).toEqual(["Older agent"]);
+        yield* evidence.step(
+          "The revoked active agent can no longer refresh",
+          Effect.gen(function* () {
+            expect(yield* oauth.refreshStatus(newer)).toBe(400);
+          }),
+        );
+      }).pipe(Effect.provide(McpOAuth.layer)),
     ),
   );
 });

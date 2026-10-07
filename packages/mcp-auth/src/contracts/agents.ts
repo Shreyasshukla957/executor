@@ -29,8 +29,16 @@ export const ConnectedAgent = Schema.Struct({
   id: GrantId,
   name: Schema.NullOr(Schema.String),
   connectedAt: Schema.String,
-  /** When the client last received an access token; tokens last an hour, so this is coarse. */
+  /**
+   * When the client last received an access token, by sign-in or refresh; tokens last an hour,
+   * so this is coarse. Null once its tokens are gone, for example after a refresh token replay.
+   */
   lastActiveAt: Schema.NullOr(Schema.String),
+  /**
+   * Whether the agent still holds a token Executor accepts, or a refresh token that can mint
+   * one. An inactive agent cannot call Executor until it signs in again.
+   */
+  active: Schema.Boolean,
   access: ConnectedAgentAccess,
   /** How tool approvals reach the user; absent for API grants. */
   mode: Schema.optionalKey(ApprovalMode),

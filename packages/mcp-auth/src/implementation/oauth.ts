@@ -17,7 +17,7 @@ import {
   getSessionFromCtx,
   isAPIError,
 } from "better-auth/api";
-import { Cause, Effect, Exit, Option, Schema } from "effect";
+import { Cause, Clock, Effect, Exit, Option, Schema } from "effect";
 import {
   ConnectionId,
   Grant,
@@ -397,8 +397,64 @@ export const grantOAuthPlugins = (settings: GrantOAuthOptions) => {
     });
   const serverOnly = { method: "POST", metadata: { SERVER_ONLY: true } } as const;
   /**
+   * Grants that still hold a token Better Auth would accept: an unexpired, unrevoked access
+   * token, or an unexpired, unrevoked refresh token that can mint one. Rotated refresh tokens are
+   * revoked and only replay their successor, so they never count. Tokens name the approving
+   * browser session while it exists and are refused once it expires. Signing out deletes it:
+   * Better Auth revokes its access tokens and detaches its `offline_access` refresh tokens,
+   * which then keep working.
+   */
+  const usableGrants = (ctx: GenericEndpointContext, ids: readonly GrantId[]) =>
+    Effect.gen(function* () {
+      const now = new Date(yield* Clock.currentTimeMillis);
+      const Live = Schema.Array(
+        Schema.Struct({
+          referenceId: GrantId,
+          sessionId: Schema.optionalKey(Schema.NullOr(Schema.String)),
+        }),
+      );
+      const live = (model: "oauthAccessToken" | "oauthRefreshToken") =>
+        authCall(() =>
+          ctx.context.adapter.findMany({
+            model,
+            where: [
+              { field: "referenceId", operator: "in", value: [...ids] },
+              { field: "expiresAt", operator: "gt", value: now },
+              { field: "revoked", operator: "eq", value: null },
+            ],
+          }),
+        ).pipe(Effect.flatMap((rows) => parse(Live, rows)));
+      const tokens = [...(yield* live("oauthAccessToken")), ...(yield* live("oauthRefreshToken"))];
+      const sessionIds = [
+        ...new Set(tokens.flatMap((token) => (token.sessionId == null ? [] : [token.sessionId]))),
+      ];
+      const sessions =
+        sessionIds.length === 0
+          ? []
+          : yield* authCall(() =>
+              ctx.context.adapter.findMany({
+                model: "session",
+                where: [
+                  { field: "id", operator: "in", value: sessionIds },
+                  { field: "expiresAt", operator: "gt", value: now },
+                ],
+              }),
+            ).pipe(
+              Effect.flatMap((rows) =>
+                parse(Schema.Array(Schema.Struct({ id: Schema.String })), rows),
+              ),
+            );
+      const liveSessions = new Set(sessions.map((session) => session.id));
+      return new Set(
+        tokens.flatMap((token) =>
+          token.sessionId == null || liveSessions.has(token.sessionId) ? [token.referenceId] : [],
+        ),
+      );
+    });
+  /**
    * The owner's live grants with their client, consent time and newest access token. Grants
    * without a readable consent, or whose connection is gone, authorize nothing and are omitted.
+   * Active grants come first, most recently used first.
    */
   const listAgents = (
     ctx: GenericEndpointContext,
@@ -458,6 +514,7 @@ export const grantOAuthPlugins = (settings: GrantOAuthOptions) => {
               Schema.Struct({
                 clientId: Schema.String,
                 name: Schema.optionalKey(Schema.NullOr(Schema.String)),
+                disabled: Schema.optionalKey(Schema.NullOr(Schema.Boolean)),
               }),
             ),
             rows,
@@ -480,8 +537,15 @@ export const grantOAuthPlugins = (settings: GrantOAuthOptions) => {
               Effect.flatMap((rows) => parse(Schema.Array(ConnectionRecord), rows)),
               Effect.mapError(unavailable),
             );
+      const usable = yield* usableGrants(
+        ctx,
+        grants.map((grant) => grant.id),
+      ).pipe(Effect.mapError(unavailable));
       const consentOf = new Map(consents.map((consent) => [consent.referenceId, consent]));
       const nameOf = new Map(clients.map((client) => [client.clientId, client.name ?? null]));
+      const disabled = new Set(
+        clients.flatMap((client) => (client.disabled === true ? [client.clientId] : [])),
+      );
       const connectionOf = new Map(connections.map((row) => [row.id, row]));
       const agents = yield* Effect.forEach(
         grants,
@@ -534,6 +598,7 @@ export const grantOAuthPlugins = (settings: GrantOAuthOptions) => {
                 name: nameOf.get(grant.clientId) ?? null,
                 connectedAt: consent.createdAt.toISOString(),
                 lastActiveAt: latest[0]?.createdAt.toISOString() ?? null,
+                active: usable.has(grant.id) && !disabled.has(grant.clientId),
                 access,
                 ...(target.kind === "mcp" ? { mode: target.mode } : {}),
               }),
@@ -541,7 +606,14 @@ export const grantOAuthPlugins = (settings: GrantOAuthOptions) => {
           }),
         { concurrency: 4 },
       );
-      return agents.flat().sort((a, b) => b.connectedAt.localeCompare(a.connectedAt));
+      return agents
+        .flat()
+        .sort(
+          (a, b) =>
+            Number(b.active) - Number(a.active) ||
+            (b.lastActiveAt ?? "").localeCompare(a.lastActiveAt ?? "") ||
+            b.connectedAt.localeCompare(a.connectedAt),
+        );
     });
   const lookupBrowser = (ctx: GenericEndpointContext) =>
     Effect.gen(function* () {
