@@ -783,6 +783,17 @@ export const scenarios = {
       ),
     },
   },
+  browserNavigationTelemetry: {
+    fixtures: "actors",
+    file: "browser-navigation-telemetry.spec.ts",
+    title:
+      "Navigation spans cover route changes only and mark ones that started or ran while the page was hidden",
+    targets: {
+      cloud: scheduled,
+      "self-host": scheduled,
+      local: na("The hosted dashboard entry is covered on hosted targets"),
+    },
+  },
   browserConnectionFailures: {
     fixtures: "actors",
     file: "browser-connection-failures.spec.ts",
