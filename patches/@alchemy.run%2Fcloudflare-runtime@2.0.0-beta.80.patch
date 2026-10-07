@@ -415,30 +415,90 @@ index be7399a5ebd75ef17ddab22920045ee202a04bbb..801efa96aad38da0f91fa8a422090fe5
    }
  
    getFirst(callbackFn: (a: WakerPriorityEntry) => boolean): WakerPriorityEntry | undefined {
-diff --git a/src/rolldown/test/fixtures/cloudflare-imports/node_modules/@fixtures/cloudflare-builtins/index.js b/Users/rhyssullivan/.bun/install/cache/@alchemy.run/cloudflare-runtime@2.0.0-e655b9c1c68a092a@@@1/src/rolldown/test/fixtures/cloudflare-imports/node_modules/@fixtures/cloudflare-builtins/index.js
+diff --git a/src/rolldown/test/fixtures/cloudflare-imports/node_modules/@fixtures/cloudflare-builtins/index.js b/src/rolldown/test/fixtures/cloudflare-imports/node_modules/@fixtures/cloudflare-builtins/index.js
 deleted file mode 100644
 index 8c1c42dbf49e86f243763f02619d10ef74046828..0000000000000000000000000000000000000000
-diff --git a/src/rolldown/test/fixtures/cloudflare-imports/node_modules/@fixtures/cloudflare-builtins/package.json b/Users/rhyssullivan/.bun/install/cache/@alchemy.run/cloudflare-runtime@2.0.0-e655b9c1c68a092a@@@1/src/rolldown/test/fixtures/cloudflare-imports/node_modules/@fixtures/cloudflare-builtins/package.json
+--- a/src/rolldown/test/fixtures/cloudflare-imports/node_modules/@fixtures/cloudflare-builtins/index.js
++++ /dev/null
+@@ -1,3 +0,0 @@
+-import { DurableObject } from "cloudflare:workers";
+-
+-export const durableObjectName = DurableObject.name;
+diff --git a/src/rolldown/test/fixtures/cloudflare-imports/node_modules/@fixtures/cloudflare-builtins/package.json b/src/rolldown/test/fixtures/cloudflare-imports/node_modules/@fixtures/cloudflare-builtins/package.json
 deleted file mode 100644
 index b09ab7b17cb25c406b1e07f131478cda14d041aa..0000000000000000000000000000000000000000
-diff --git a/src/rolldown/test/fixtures/module-resolution/node_modules/@fixtures/legacy-main-fields-package/browser.js b/Users/rhyssullivan/.bun/install/cache/@alchemy.run/cloudflare-runtime@2.0.0-e655b9c1c68a092a@@@1/src/rolldown/test/fixtures/module-resolution/node_modules/@fixtures/legacy-main-fields-package/browser.js
+--- a/src/rolldown/test/fixtures/cloudflare-imports/node_modules/@fixtures/cloudflare-builtins/package.json
++++ /dev/null
+@@ -1,8 +0,0 @@
+-{
+-  "name": "@fixtures/cloudflare-builtins",
+-  "private": true,
+-  "type": "module",
+-  "exports": {
+-    ".": "./index.js"
+-  }
+-}
+diff --git a/src/rolldown/test/fixtures/module-resolution/node_modules/@fixtures/legacy-main-fields-package/browser.js b/src/rolldown/test/fixtures/module-resolution/node_modules/@fixtures/legacy-main-fields-package/browser.js
 deleted file mode 100644
 index a4192d883f579ecff4329eb41ecf08851b033664..0000000000000000000000000000000000000000
-diff --git a/src/rolldown/test/fixtures/module-resolution/node_modules/@fixtures/legacy-main-fields-package/main.js b/Users/rhyssullivan/.bun/install/cache/@alchemy.run/cloudflare-runtime@2.0.0-e655b9c1c68a092a@@@1/src/rolldown/test/fixtures/module-resolution/node_modules/@fixtures/legacy-main-fields-package/main.js
+--- a/src/rolldown/test/fixtures/module-resolution/node_modules/@fixtures/legacy-main-fields-package/browser.js
++++ /dev/null
+@@ -1 +0,0 @@
+-export const legacyMessage = "browser field";
+diff --git a/src/rolldown/test/fixtures/module-resolution/node_modules/@fixtures/legacy-main-fields-package/main.js b/src/rolldown/test/fixtures/module-resolution/node_modules/@fixtures/legacy-main-fields-package/main.js
 deleted file mode 100644
 index fd1d6ab4594238626c1516cb268b1116fe404bf7..0000000000000000000000000000000000000000
-diff --git a/src/rolldown/test/fixtures/module-resolution/node_modules/@fixtures/legacy-main-fields-package/module.js b/Users/rhyssullivan/.bun/install/cache/@alchemy.run/cloudflare-runtime@2.0.0-e655b9c1c68a092a@@@1/src/rolldown/test/fixtures/module-resolution/node_modules/@fixtures/legacy-main-fields-package/module.js
+--- a/src/rolldown/test/fixtures/module-resolution/node_modules/@fixtures/legacy-main-fields-package/main.js
++++ /dev/null
+@@ -1 +0,0 @@
+-export const legacyMessage = "main field";
+diff --git a/src/rolldown/test/fixtures/module-resolution/node_modules/@fixtures/legacy-main-fields-package/module.js b/src/rolldown/test/fixtures/module-resolution/node_modules/@fixtures/legacy-main-fields-package/module.js
 deleted file mode 100644
 index a70092ac282200d979146058e20c6b93535e9137..0000000000000000000000000000000000000000
-diff --git a/src/rolldown/test/fixtures/module-resolution/node_modules/@fixtures/legacy-main-fields-package/package.json b/Users/rhyssullivan/.bun/install/cache/@alchemy.run/cloudflare-runtime@2.0.0-e655b9c1c68a092a@@@1/src/rolldown/test/fixtures/module-resolution/node_modules/@fixtures/legacy-main-fields-package/package.json
+--- a/src/rolldown/test/fixtures/module-resolution/node_modules/@fixtures/legacy-main-fields-package/module.js
++++ /dev/null
+@@ -1 +0,0 @@
+-export const legacyMessage = "module field";
+diff --git a/src/rolldown/test/fixtures/module-resolution/node_modules/@fixtures/legacy-main-fields-package/package.json b/src/rolldown/test/fixtures/module-resolution/node_modules/@fixtures/legacy-main-fields-package/package.json
 deleted file mode 100644
 index 53f35d3359396d9c5c4eab39832f82c23361df2e..0000000000000000000000000000000000000000
-diff --git a/src/rolldown/test/fixtures/module-resolution/node_modules/@fixtures/module-resolution-package/feature.js b/Users/rhyssullivan/.bun/install/cache/@alchemy.run/cloudflare-runtime@2.0.0-e655b9c1c68a092a@@@1/src/rolldown/test/fixtures/module-resolution/node_modules/@fixtures/module-resolution-package/feature.js
+--- a/src/rolldown/test/fixtures/module-resolution/node_modules/@fixtures/legacy-main-fields-package/package.json
++++ /dev/null
+@@ -1,8 +0,0 @@
+-{
+-  "name": "@fixtures/legacy-main-fields-package",
+-  "private": true,
+-  "type": "module",
+-  "module": "./module.js",
+-  "main": "./main.js",
+-  "browser": "./browser.js"
+-}
+diff --git a/src/rolldown/test/fixtures/module-resolution/node_modules/@fixtures/module-resolution-package/feature.js b/src/rolldown/test/fixtures/module-resolution/node_modules/@fixtures/module-resolution-package/feature.js
 deleted file mode 100644
 index 47cbcfbb389715cf59e82f1eee14adf10b5ceb1c..0000000000000000000000000000000000000000
-diff --git a/src/rolldown/test/fixtures/module-resolution/node_modules/@fixtures/module-resolution-package/index.js b/Users/rhyssullivan/.bun/install/cache/@alchemy.run/cloudflare-runtime@2.0.0-e655b9c1c68a092a@@@1/src/rolldown/test/fixtures/module-resolution/node_modules/@fixtures/module-resolution-package/index.js
+--- a/src/rolldown/test/fixtures/module-resolution/node_modules/@fixtures/module-resolution-package/feature.js
++++ /dev/null
+@@ -1 +0,0 @@
+-export const featureMessage = "package subpath";
+diff --git a/src/rolldown/test/fixtures/module-resolution/node_modules/@fixtures/module-resolution-package/index.js b/src/rolldown/test/fixtures/module-resolution/node_modules/@fixtures/module-resolution-package/index.js
 deleted file mode 100644
 index a61e4f1bfc6d6a29354283e3d201b3bab76debbe..0000000000000000000000000000000000000000
-diff --git a/src/rolldown/test/fixtures/module-resolution/node_modules/@fixtures/module-resolution-package/package.json b/Users/rhyssullivan/.bun/install/cache/@alchemy.run/cloudflare-runtime@2.0.0-e655b9c1c68a092a@@@1/src/rolldown/test/fixtures/module-resolution/node_modules/@fixtures/module-resolution-package/package.json
+--- a/src/rolldown/test/fixtures/module-resolution/node_modules/@fixtures/module-resolution-package/index.js
++++ /dev/null
+@@ -1 +0,0 @@
+-export const packageMessage = "package export";
+diff --git a/src/rolldown/test/fixtures/module-resolution/node_modules/@fixtures/module-resolution-package/package.json b/src/rolldown/test/fixtures/module-resolution/node_modules/@fixtures/module-resolution-package/package.json
 deleted file mode 100644
 index 443d81e9f77631148d909916ad165d275c2909d2..0000000000000000000000000000000000000000
+--- a/src/rolldown/test/fixtures/module-resolution/node_modules/@fixtures/module-resolution-package/package.json
++++ /dev/null
+@@ -1,9 +0,0 @@
+-{
+-  "name": "@fixtures/module-resolution-package",
+-  "private": true,
+-  "type": "module",
+-  "exports": {
+-    ".": "./index.js",
+-    "./feature": "./feature.js"
+-  }
+-}

@@ -144,12 +144,16 @@ export const makeListings = (options: {
         const keep = (outcome: Outcome, load: PendingLoad) =>
           Effect.gen(function* () {
             if (outcome instanceof Listed) {
+              const chars = JSON.stringify(outcome.listing.items).length;
+              // The size the evaluation decoded and keeps: what its CPU, which spans cannot
+              // time on a Workers I/O clock, grows with.
+              yield* Effect.annotateCurrentSpan("executor.listing.json_chars", chars);
               yield* cache.set(id, {
                 kind: "value",
                 app: state.app.id,
                 at: load.started,
                 value: outcome,
-                bytes: JSON.stringify(outcome.listing.items).length * 2,
+                bytes: chars * 2,
               });
               return;
             }
@@ -352,6 +356,11 @@ export const makeListings = (options: {
                   cache.outdated(state.app.id, recalled.at)
                 )
                   return undefined;
+                // Decoding costs CPU in proportion to the text, which the I/O clock cannot show.
+                yield* Effect.annotateCurrentSpan(
+                  "executor.listing.json_chars",
+                  recalled.json.length,
+                );
                 const decoded = yield* Schema.decodeEffect(ListingJson)(recalled.json).pipe(
                   Effect.option,
                 );

@@ -46,6 +46,9 @@ export default defineApp({ accounts: {} }, async (ctx) => {
   };
 });`;
 
+/** The isolate store's entry bound (`declarationLimits.entryBytes`) in UTF-16 characters. */
+const isolateEntryChars = (2 * 1024 * 1024) / 2;
+
 const Listing = Schema.Struct({ items: Schema.Array(Schema.Struct({ name: Schema.String })) });
 
 /** Deploy the large-listing app and read its tool listing with the spans of each request. */
@@ -85,6 +88,7 @@ const listingApp = Effect.gen(function* () {
       );
       yield* evidence.json(`${label}.json`, spans);
       const listing = spans.find((span) => span.operationName === "sdk.tools.listing");
+      const evaluation = spans.find((span) => span.operationName === "sdk.tools.listing.evaluate");
       return {
         names,
         spans: spans.map((span) => span.operationName),
@@ -92,6 +96,9 @@ const listingApp = Effect.gen(function* () {
         cache: listing?.tags["executor.declarations.cache"],
         source: listing?.tags["executor.declarations.source"],
         age: Number(listing?.tags["executor.declarations.age_ms"]),
+        /** JSON text this request decoded from the supervisor, and an evaluation kept. */
+        decoded: listing?.tags["executor.listing.json_chars"],
+        evaluated: evaluation?.tags["executor.listing.json_chars"],
       };
     });
   return { api, actors, path, read };
@@ -112,6 +119,10 @@ layer(HostedLive, { excludeTestServices: true })("Durable evaluated results", (i
         // The first read evaluates and keeps the listing in the supervisor after responding.
         const first = yield* read("first-listing", written);
         expect(first.cache).toBe("miss");
+        // Both record the listing's size, which their CPU grows with; it is over the isolate
+        // store's entry bound of 2 MB in UTF-16, 1,048,576 characters.
+        expect(Number(first.evaluated)).toBeGreaterThan(isolateEntryChars);
+        expect(first.decoded).toBeUndefined();
         // Pages are sorted by name, so the first holds bump and the revision tool.
         expect(first.names).toContain("bump");
         expect(first.revision).toBeDefined();
@@ -121,6 +132,7 @@ layer(HostedLive, { excludeTestServices: true })("Durable evaluated results", (i
         expect(second.source).toBe("durable");
         expect(second.cache).toBe("hit");
         expect(second.names).toEqual(first.names);
+        expect(Number(second.decoded)).toBeGreaterThan(isolateEntryChars);
 
         // An app cache invalidation forgets it in the supervisor, for every isolate at once.
         const bumped = yield* api.request(actors.owner, "POST", `${path}/tools/call`, {

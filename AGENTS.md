@@ -85,6 +85,15 @@ Run `bun run format` before committing. `bun run check` runs the format check,
 `oxlint`, and the typecheck; CI-style verification should use it. Lint rules
 live in `.oxlintrc.jsonc`, formatter settings in `.oxfmtrc.json`.
 
+`bun run check` first runs `patches:check` (`scripts/check-patches.ts`): every
+`patchedDependencies` selector must name an installed version, and every
+installed copy must hold the whole patch: `git apply --reverse --check` at the
+exact lines, and no forward apply. Bun skips a stale selector and still exits 0,
+so move a patch with its dependency's version, or remove both. Git is stricter
+than Bun: after `bun patch --commit`, drop `.bun-tag-*` sections and sections
+whose `b/` path is outside the package, and keep `\ No newline at end of file`
+markers. Its fixtures are in `scripts/check-patches-fixtures.ts`.
+
 The typecheck uses TypeScript 7 (`tsc` is the native Go compiler). `bun install`
 patches it with `@effect/tsgo` in `prepare`, so it also reports the Effect
 language service diagnostics configured in `tsconfig.json`. Effect errors fail
@@ -213,8 +222,8 @@ scenarios on Linux instead of moving them to a Mac.
   the catalog and listing latency bounds and the inventory case's 120-second limit without
   competing with the functional job's product servers.
 - `e2e-cloud` runs Cloud onboarding, delivered observability, MCP tool-call privacy, client rejection and app evaluation
-  incident reporting, bearer refusal, billing polling, MCP session object database connection and
-  API-key storage outage scenarios; the refusal scenario writes stored rows into the runner-owned
+  incident reporting, bearer refusal, billing polling, MCP session object database connection,
+  API-key storage outage and supervisor-kept tool listing scenarios; the refusal scenario writes stored rows into the runner-owned
   Postgres. It starts the local Cloud Worker, a throwaway Postgres container and the service
   emulators, so it needs Docker but no credentials. Scenarios that hold row locks to pause the
   server's own statements get a second local Cloud, so their locks cannot stall other scenarios.

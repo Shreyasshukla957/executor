@@ -390,8 +390,11 @@ index 9852684451c12099b69d55c6d86a76e566d6f1dd..c43196ba69953a2a65486a1cb75e8f76
 @@ -2,3 +2,4 @@ import * as Effect from "effect/Effect";
  declare const cloudflare_workers: Effect.Effect<typeof import("cloudflare:workers")>;
  export default cloudflare_workers;
- //# sourceMappingURL=cloudflare_workers.d.ts.map
+-//# sourceMappingURL=cloudflare_workers.d.ts.map
+\ No newline at end of file
++//# sourceMappingURL=cloudflare_workers.d.ts.map
 +export declare const platformSpan: <A>(name: string, run: () => Promise<A>) => Promise<A>;
+\ No newline at end of file
 diff --git a/lib/Cloudflare/Workers/cloudflare_workers.js b/lib/Cloudflare/Workers/cloudflare_workers.js
 index a9ec2cb5cf000f5af377af80e3833146101ba9da..08d72a08c1a70b604d8bcaf41b4abdf0c5d517c0 100644
 --- a/lib/Cloudflare/Workers/cloudflare_workers.js
@@ -409,7 +412,9 @@ index a9ec2cb5cf000f5af377af80e3833146101ba9da..08d72a08c1a70b604d8bcaf41b4abdf0
 @@ -20,3 +21,18 @@ const modulePromise = moduleImport.catch(() => ({
  const cloudflare_workers = Effect.promise(() => modulePromise);
  export default cloudflare_workers;
- //# sourceMappingURL=cloudflare_workers.js.map
+-//# sourceMappingURL=cloudflare_workers.js.map
+\ No newline at end of file
++//# sourceMappingURL=cloudflare_workers.js.map
 +export const platformSpan = (name, run) => {
 +  // Tail delivery gives each invocation a timing record even when native traces are sampled.
 +  // Cloudflare clocks advance on I/O: CPU cost remains the platform's separate cpuTime field.
@@ -425,6 +430,7 @@ index a9ec2cb5cf000f5af377af80e3833146101ba9da..08d72a08c1a70b604d8bcaf41b4abdf0
 +  };
 +  return tracing?.enterSpan === undefined ? measured() : tracing.enterSpan(name, measured);
 +};
+\ No newline at end of file
 diff --git a/node_modules/alchemy/lib/CloudflareRuntimeServices.d.ts b/lib/CloudflareRuntimeServices.d.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..76f3a22b4035aef540256cf80df988cfa742a950

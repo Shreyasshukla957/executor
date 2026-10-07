@@ -1120,11 +1120,17 @@ function catalog(backend: McpBackend<Error>, progress: ExecutionProgress) {
           names === "all"
             ? discovered
             : discovered.filter(({ app }) => names.some((name) => within(name, app.slug)));
-        yield* load(selected).pipe(Effect.withSpan("mcp.search.discovery"));
-        return selected
+        yield* load(selected);
+        const entries = selected
           .flatMap(({ app }) => (unique(app) ? (listed.get(app.slug) ?? []) : []))
           .sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0));
-      });
+        // Like the program's catalog, the size this search's CPU grows with.
+        yield* Effect.annotateCurrentSpan({
+          "executor.discovery.apps": selected.length,
+          "executor.discovery.tools": entries.length,
+        });
+        return entries;
+      }).pipe(Effect.withSpan("mcp.search.discovery"));
     const reachable = (reach: ReadonlySet<string> | "all") =>
       reach === "all" ? discovered : discovered.filter(({ app }) => reach.has(app.slug));
     return { tools, namespaces, load, reachable, searchable, unavailableApps };
@@ -1364,6 +1370,11 @@ export function executeProgram(
         toolCalls: reportedCalls(progress),
       });
       if (timedOut) yield* Effect.annotateCurrentSpan("executor.timeout.phase", "program");
+      // Signatures cost CPU per reachable tool; a program renders them only by searching.
+      yield* Effect.annotateCurrentSpan(
+        "executor.codemode.signatures_rendered",
+        runtime.signaturesRendered(),
+      );
       yield* Effect.annotateCurrentSpan("executor.outcome", execution.ok ? "completed" : "failed");
       return { execution, unavailableApps: prepared.unavailableApps() };
     }).pipe(

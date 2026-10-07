@@ -186,6 +186,17 @@ export const scenarios = {
       local: na("Hosted deployment API scenario"),
     },
   },
+  mcpExecuteSignatures: {
+    fixtures: "actors",
+    file: "mcp-catalog.spec.ts",
+    title:
+      "MCP execute renders tool signatures only for a program that searches with CodeMode's search()",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Loopback MCP fixture; the shared execute path is covered on self-host"),
+      local: na("Hosted deployment API scenario"),
+    },
+  },
   mcpSlowListing: {
     fixtures: "actors",
     file: "mcp-catalog-scale.spec.ts",
