@@ -50,6 +50,8 @@ type McpGrantApi = Pick<
   | "createMcpConnection"
   | "updateMcpConnection"
   | "revokeMcpConnection"
+  | "listMcpAgents"
+  | "revokeMcpAgent"
 >;
 
 /**

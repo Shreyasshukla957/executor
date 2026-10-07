@@ -6,22 +6,14 @@ import { Effect } from "effect";
 import { HttpServerRequest, HttpServerResponse } from "effect/http";
 import type { DashboardRenderer } from "../contracts/dashboard.ts";
 import type { CloudEntryPage } from "../contracts/entry.ts";
-import {
-  betaNoticeDismissed,
-  type CloudDocumentContext,
-} from "@executor-js/hosted-cloud-web/document";
+import type { CloudDocumentContext } from "@executor-js/hosted-cloud-web/document";
 import dashboardRoutes from "@executor-js/hosted-cloud-web/routes" with { type: "json" };
 
 /** Cloud pages also receive the sign-in or setup data resolved for this request, if any. */
 export const cloudDocumentContext = (entry: CloudEntryPage | null) => (api: DocumentApi) =>
   Effect.gen(function* () {
-    const request = yield* HttpServerRequest.HttpServerRequest;
     const document = yield* hostedDocumentContext(api);
-    return {
-      ...document,
-      entry,
-      betaNoticeDismissed: betaNoticeDismissed(request.headers.cookie ?? ""),
-    };
+    return { ...document, entry };
   });
 
 /**

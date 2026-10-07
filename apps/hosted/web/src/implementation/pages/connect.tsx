@@ -4,13 +4,16 @@ import { Button } from "@executor-js/ui/components/button";
 import { Code } from "@executor-js/ui/dashboard/code";
 import { McpInstallInstructions } from "@executor-js/ui/dashboard/connect";
 import { ScopedConnectionsPage } from "@executor-js/ui/dashboard/scoped-connections";
+import { ConnectedAgents } from "@executor-js/ui/dashboard/connected-agents";
 import { ConnectionToolPicker } from "@executor-js/ui/dashboard/connection-tool-picker";
 import { useOrganizationRoute } from "../components/organization.tsx";
 import { HostedFailure } from "../components/dashboard-bindings.tsx";
 import { resourceInventoryAtom } from "../../contracts/resource-access.ts";
 import { connectionToolListAtom } from "../../contracts/apps.ts";
 import {
+  mcpAgentsAtom,
   mcpConnectionsAtom,
+  revokeMcpAgentAtom,
   revokeMcpConnectionAtom,
   saveMcpConnectionAtom,
 } from "../../contracts/mcp-connections.ts";
@@ -56,7 +59,7 @@ function PersonalTokenSetup({ origin }: { readonly origin: string }) {
   );
 }
 
-/** The member's full-access URL and scoped connections for this organization. */
+/** The member's full-access URL, scoped connections and connected agents for this organization. */
 export function ConnectPage() {
   const page = usePageUrl();
   const { organization } = useOrganizationRoute();
@@ -70,6 +73,13 @@ export function ConnectPage() {
       revoke={revokeMcpConnectionAtom(organization)}
       Failure={HostedFailure}
       docs={docs}
+      agents={
+        <ConnectedAgents
+          query={mcpAgentsAtom(organization)}
+          revoke={revokeMcpAgentAtom(organization)}
+          Failure={HostedFailure}
+        />
+      }
       installation={
         <McpInstallInstructions
           endpoint={`${page.origin}/mcp`}

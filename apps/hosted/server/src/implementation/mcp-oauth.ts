@@ -26,6 +26,7 @@ import {
   ConnectionNotFound,
   type ConnectionPolicy,
 } from "@executor-js/mcp-auth/connections";
+import { ConnectedAgent, ConnectedAgentNotFound } from "@executor-js/mcp-auth/agents";
 import { OrganizationId, OrganizationRole, organizationOwner } from "../contracts/organization.ts";
 const Member = Schema.Struct({ role: OrganizationRole });
 const membership = (
@@ -199,6 +200,12 @@ export interface McpConnectionApi {
   readonly revokeMcpConnection: (input: {
     body: { userId: string; resource: string; id: string };
   }) => Promise<unknown>;
+  readonly listMcpAgents: (input: {
+    body: { userId: string; resource: string };
+  }) => Promise<unknown>;
+  readonly revokeMcpAgent: (input: {
+    body: { userId: string; resource: string; id: string };
+  }) => Promise<unknown>;
 }
 const storeFailure = (cause: unknown) =>
   isAPIError(cause) ? cause.statusCode : ("unavailable" as const);
@@ -252,6 +259,22 @@ export const mcpConnectionStore = (
         Effect.mapError((status) =>
           status === 404
             ? new ConnectionNotFound({ connection: id })
+            : new AuthenticationUnavailable(),
+        ),
+      ),
+    agents: (owner) =>
+      request((api) => api.listMcpAgents({ body: owner }), Schema.Array(ConnectedAgent)).pipe(
+        Effect.mapError(unavailable),
+      ),
+    revokeAgent: (owner, id) =>
+      request(
+        (api) => api.revokeMcpAgent({ body: { ...owner, id } }),
+        Schema.Struct({ revoked: Schema.Literal(true) }),
+      ).pipe(
+        Effect.asVoid,
+        Effect.mapError((status) =>
+          status === 404
+            ? new ConnectedAgentNotFound({ agent: id })
             : new AuthenticationUnavailable(),
         ),
       ),

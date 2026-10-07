@@ -1,4 +1,4 @@
-/** Members manage their own connections; apps, profiles and accounts use the same access checks as calls. */
+/** Members manage their own connections and connected agents; apps, profiles and accounts use the same access checks as calls. */
 import {
   bareAccountProfileKey,
   bareAccountSelection,
@@ -163,6 +163,12 @@ export const hostedMcpConnectionHandlers = HttpApiBuilder.group(
         )
         .handle("revoke", ({ params }) =>
           Effect.flatMap(owner, (current) => auth.connections.revoke(current, params.connection)),
+        )
+        .handle("agents", () =>
+          Effect.flatMap(owner, (current) => auth.connections.agents(current)),
+        )
+        .handle("revokeAgent", ({ params }) =>
+          Effect.flatMap(owner, (current) => auth.connections.revokeAgent(current, params.agent)),
         );
     }),
 );

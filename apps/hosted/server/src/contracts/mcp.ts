@@ -6,6 +6,7 @@ import type {
   ConnectionNotFound,
   ConnectionPolicy,
 } from "@executor-js/mcp-auth/connections";
+import type { ConnectedAgent, ConnectedAgentNotFound } from "@executor-js/mcp-auth/agents";
 import { UserFacingError, type ErrorPresentation } from "@executor-js/utils/user-facing-error";
 import { Context, Schema } from "effect";
 import type { Effect } from "effect";
@@ -102,6 +103,15 @@ export interface McpConnectionStore {
     owner: ConnectionOwner,
     id: ConnectionId,
   ) => Effect.Effect<void, ConnectionNotFound | AuthenticationUnavailable>;
+  /** The owner's authorized MCP and API clients, one per live grant. */
+  readonly agents: (
+    owner: ConnectionOwner,
+  ) => Effect.Effect<readonly ConnectedAgent[], AuthenticationUnavailable>;
+  /** Revoke one of the owner's grants and delete its access and refresh tokens. */
+  readonly revokeAgent: (
+    owner: ConnectionOwner,
+    id: GrantId,
+  ) => Effect.Effect<void, ConnectedAgentNotFound | AuthenticationUnavailable>;
 }
 
 /** Better Auth owns grant validation; each host supplies its native request lifetime. */

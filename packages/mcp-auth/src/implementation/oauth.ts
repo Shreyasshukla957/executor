@@ -38,6 +38,7 @@ import {
   connectionGrantPlaceholder,
   connectionGrantPolicy,
 } from "../contracts/connection.ts";
+import { ConnectedAgent, type ConnectedAgentAccess } from "../contracts/agents.ts";
 
 export type { OAuthResourceSeedContext } from "@better-auth/oauth-provider";
 
@@ -395,6 +396,153 @@ export const grantOAuthPlugins = (settings: GrantOAuthOptions) => {
       yield* Effect.forEach(grants, (grant) => revoke(ctx, grant.id), { discard: true });
     });
   const serverOnly = { method: "POST", metadata: { SERVER_ONLY: true } } as const;
+  /**
+   * The owner's live grants with their client, consent time and newest access token. Grants
+   * without a readable consent, or whose connection is gone, authorize nothing and are omitted.
+   */
+  const listAgents = (
+    ctx: GenericEndpointContext,
+    owner: { readonly userId: string; readonly resource: string },
+  ) =>
+    Effect.gen(function* () {
+      const unavailable = () => new APIError("SERVICE_UNAVAILABLE");
+      const grants = yield* authCall(() =>
+        ctx.context.adapter.findMany({
+          model: "mcpGrant",
+          where: [
+            { field: "userId", value: owner.userId },
+            { field: "resource", value: owner.resource },
+            { field: "revoked", value: false },
+          ],
+        }),
+      ).pipe(Effect.flatMap((rows) => parse(Schema.Array(Record), rows)));
+      if (grants.length === 0) return [];
+      const consents = yield* authCall(() =>
+        ctx.context.adapter.findMany({
+          model: "oauthConsent",
+          where: [
+            { field: "userId", value: owner.userId },
+            { field: "referenceId", operator: "in", value: grants.map((grant) => grant.id) },
+          ],
+        }),
+      ).pipe(
+        Effect.flatMap((rows) =>
+          parse(
+            Schema.Array(
+              Schema.Struct({
+                referenceId: GrantId,
+                resources: Schema.optionalKey(Schema.NullOr(Schema.Array(Schema.String))),
+                createdAt: Schema.Date,
+              }),
+            ),
+            rows,
+          ),
+        ),
+        Effect.mapError(unavailable),
+      );
+      const clients = yield* authCall(() =>
+        ctx.context.adapter.findMany({
+          model: "oauthClient",
+          where: [
+            {
+              field: "clientId",
+              operator: "in",
+              value: [...new Set(grants.map((grant) => grant.clientId))],
+            },
+          ],
+        }),
+      ).pipe(
+        Effect.flatMap((rows) =>
+          parse(
+            Schema.Array(
+              Schema.Struct({
+                clientId: Schema.String,
+                name: Schema.optionalKey(Schema.NullOr(Schema.String)),
+              }),
+            ),
+            rows,
+          ),
+        ),
+        Effect.mapError(unavailable),
+      );
+      const connectionIds = [
+        ...new Set(grants.flatMap((grant) => (grant.connection == null ? [] : [grant.connection]))),
+      ];
+      const connections =
+        connectionIds.length === 0
+          ? []
+          : yield* authCall(() =>
+              ctx.context.adapter.findMany({
+                model: "mcpConnection",
+                where: [{ field: "id", operator: "in", value: connectionIds }],
+              }),
+            ).pipe(
+              Effect.flatMap((rows) => parse(Schema.Array(ConnectionRecord), rows)),
+              Effect.mapError(unavailable),
+            );
+      const consentOf = new Map(consents.map((consent) => [consent.referenceId, consent]));
+      const nameOf = new Map(clients.map((client) => [client.clientId, client.name ?? null]));
+      const connectionOf = new Map(connections.map((row) => [row.id, row]));
+      const agents = yield* Effect.forEach(
+        grants,
+        (grant) =>
+          Effect.gen(function* () {
+            const consent = consentOf.get(grant.id);
+            const target =
+              consent === undefined ? undefined : grantTarget(origin, consent.resources ?? []);
+            if (consent === undefined || target === undefined) return [];
+            const connection =
+              grant.connection == null ? undefined : connectionOf.get(grant.connection);
+            if (
+              grant.connection != null &&
+              (connection === undefined ||
+                connection.revoked ||
+                connection.userId !== grant.userId ||
+                connection.resource !== grant.resource)
+            )
+              return [];
+            const policy =
+              connection === undefined
+                ? yield* parse(Schema.fromJsonString(GrantPolicy), grant.policy).pipe(
+                    Effect.mapError(unavailable),
+                  )
+                : undefined;
+            const access: ConnectedAgentAccess =
+              target.kind === "api"
+                ? { kind: "api" }
+                : connection !== undefined
+                  ? { kind: "connection", connection: connection.id, name: connection.name }
+                  : policy?.kind === "tools"
+                    ? { kind: "tools", apps: policy.apps.length }
+                    : { kind: "all" };
+            const latest = yield* authCall(() =>
+              ctx.context.adapter.findMany({
+                model: "oauthAccessToken",
+                where: [{ field: "referenceId", value: grant.id }],
+                sortBy: { field: "createdAt", direction: "desc" },
+                limit: 1,
+              }),
+            ).pipe(
+              Effect.flatMap((rows) =>
+                parse(Schema.Array(Schema.Struct({ createdAt: Schema.Date })), rows),
+              ),
+              Effect.mapError(unavailable),
+            );
+            return [
+              ConnectedAgent.make({
+                id: grant.id,
+                name: nameOf.get(grant.clientId) ?? null,
+                connectedAt: consent.createdAt.toISOString(),
+                lastActiveAt: latest[0]?.createdAt.toISOString() ?? null,
+                access,
+                ...(target.kind === "mcp" ? { mode: target.mode } : {}),
+              }),
+            ];
+          }),
+        { concurrency: 4 },
+      );
+      return agents.flat().sort((a, b) => b.connectedAt.localeCompare(a.connectedAt));
+    });
   const lookupBrowser = (ctx: GenericEndpointContext) =>
     Effect.gen(function* () {
       const userId = yield* browser(ctx);
@@ -583,6 +731,32 @@ export const grantOAuthPlugins = (settings: GrantOAuthOptions) => {
             Effect.gen(function* () {
               const row = yield* ownedConnection(ctx, ctx.body, ctx.body.id);
               yield* revokeConnection(ctx, row);
+              return { revoked: true };
+            }),
+          ),
+      ),
+      listMcpAgents: createAuthEndpoint(
+        "/mcp/agents/list",
+        { ...serverOnly, body: Schema.toStandardSchemaV1(Schema.Struct(ConnectionOwner)) },
+        (ctx) => runAuth(listAgents(ctx, ctx.body)),
+      ),
+      revokeMcpAgent: createAuthEndpoint(
+        "/mcp/agents/revoke",
+        {
+          ...serverOnly,
+          body: Schema.toStandardSchemaV1(Schema.Struct({ ...ConnectionOwner, id: GrantId })),
+        },
+        (ctx) =>
+          runAuth(
+            Effect.gen(function* () {
+              const row = yield* get(ctx, ctx.body.id).pipe(
+                Effect.mapError((error) =>
+                  error.statusCode === 503 ? error : new APIError("NOT_FOUND"),
+                ),
+              );
+              if (row.userId !== ctx.body.userId || row.resource !== ctx.body.resource)
+                return yield* Effect.fail(new APIError("NOT_FOUND"));
+              yield* revoke(ctx, row.id);
               return { revoked: true };
             }),
           ),

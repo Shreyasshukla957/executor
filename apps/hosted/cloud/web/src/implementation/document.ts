@@ -6,7 +6,6 @@ import { Atom } from "effect/reactivity";
 import { OnboardingReady } from "../../../src/contracts/onboarding.ts";
 import type { CloudDocumentContext } from "../contracts/document.ts";
 import { entryTeamAtom } from "../contracts/onboarding.ts";
-import { betaNoticeDismissedAtom } from "../contracts/beta-notice.ts";
 
 /** Server only: the context the Worker passed with this document request. */
 export const serverDocument = (): CloudDocumentContext => {
@@ -19,10 +18,7 @@ export const serverDocument = (): CloudDocumentContext => {
 /** Sign-in and setup pages start from the membership and team data the Worker resolved. */
 export const cloudServerValues = (document: CloudDocumentContext) => {
   const entry = document.entry;
-  const shared = [
-    ...hostedServerValues(document),
-    Atom.initialValue(betaNoticeDismissedAtom, document.betaNoticeDismissed),
-  ];
+  const shared = hostedServerValues(document);
   if (entry === null || entry.session === null || entry.onboarding === null) return shared;
   return [
     ...shared,

@@ -132,6 +132,7 @@ export function ScopedConnectionsPage<E, EL extends E, ES extends E, ER extends 
   revoke,
   Failure,
   installation,
+  agents,
   docs = publicDocsBaseUrl,
   renderTools,
 }: ScopedConnectionBindings<EL, ES, ER> & {
@@ -139,6 +140,8 @@ export function ScopedConnectionsPage<E, EL extends E, ES extends E, ER extends 
   /** Renders every failure: inventory, connection reads, saves and revocation. */
   readonly Failure: ComponentType<FailureProps<E>>;
   readonly installation: ReactNode;
+  /** The agents connected through these URLs, when the host lists them. */
+  readonly agents?: ReactNode;
   /** Documentation the setup prompt points agents to. */
   readonly docs?: string;
   readonly renderTools: (props: ConnectionToolPickerProps) => ReactNode;
@@ -223,6 +226,7 @@ export function ScopedConnectionsPage<E, EL extends E, ES extends E, ER extends 
                 )
               }
             </QueryView>
+            {agents}
           </div>
         )}
         {view.kind === "editor" && (
