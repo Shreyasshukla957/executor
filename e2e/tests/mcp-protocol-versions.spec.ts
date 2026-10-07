@@ -3,7 +3,8 @@
  * that offers an older protocol gets the newest one the server supports, and a session keeps its
  * negotiated version when a request omits the header. Requests the MCP transport rejects explain
  * themselves, including an unknown session, wrong media types and a batch. A call the client
- * cancels ends its event stream without a result (hosted).
+ * cancels ends its event stream without a result (self-host and managed Cloud: its app tool
+ * signals a loopback listener, and the Sentry check reads the managed collector).
  */
 import { expect, layer } from "@effect/vitest";
 import { Deferred, Effect, Fiber, Redacted, Schema, Stream } from "effect";
@@ -476,29 +477,43 @@ const checkCancelledCalls = (
     }
   });
 
+/** An API key for the actors' organization, deleted when the case ends. */
+const keyCredentials = (name: string) =>
+  Effect.gen(function* () {
+    const api = yield* Api,
+      actors = yield* Actors;
+    const key = yield* body(
+      Schema.Struct({ id: Schema.String, key: Schema.RedactedFromValue(Schema.String) }),
+      yield* api.request(actors.owner, "POST", "/api/auth/api-key/create", { name }),
+    );
+    yield* Effect.addFinalizer(() =>
+      api
+        .request(actors.owner, "POST", "/api/auth/api-key/delete", { keyId: key.id })
+        .pipe(Effect.orDie),
+    );
+    return {
+      authorization: `Bearer ${Redacted.value(key.key)}`,
+      "x-executor-organization": actors.organization.id,
+    };
+  });
+
 layer(HostedLive, { excludeTestServices: true })("Hosted MCP protocol versions", (it) => {
   it.effect(scenarios.mcpProtocolVersions.title, (context) =>
     withHostedCase(
       context,
       Effect.gen(function* () {
+        yield* checkProtocolVersions(yield* keyCredentials("MCP protocol versions"));
+      }),
+    ),
+  );
+
+  it.effect(scenarios.mcpCancelledCalls.title, (context) =>
+    withHostedCase(
+      context,
+      Effect.gen(function* () {
         const api = yield* Api,
           actors = yield* Actors;
-        const key = yield* body(
-          Schema.Struct({ id: Schema.String, key: Schema.RedactedFromValue(Schema.String) }),
-          yield* api.request(actors.owner, "POST", "/api/auth/api-key/create", {
-            name: "MCP protocol versions",
-          }),
-        );
-        yield* Effect.addFinalizer(() =>
-          api
-            .request(actors.owner, "POST", "/api/auth/api-key/delete", { keyId: key.id })
-            .pipe(Effect.orDie),
-        );
-        const credentials = {
-          authorization: `Bearer ${Redacted.value(key.key)}`,
-          "x-executor-organization": actors.organization.id,
-        };
-        yield* checkProtocolVersions(credentials);
+        const credentials = yield* keyCredentials("MCP cancelled calls");
         const signals = yield* startSignals;
         const root = `/api/organizations/${actors.organization.id}`;
         const deployed = yield* api.request(actors.owner, "POST", `${root}/apps/deploy`, {

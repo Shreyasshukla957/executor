@@ -4274,12 +4274,23 @@ export const scenarios = {
   mcpProtocolVersions: {
     fixtures: "actors",
     file: "mcp-protocol-versions.spec.ts",
-    title:
-      "Hosted MCP negotiates older protocol versions, explains rejected requests and ends a cancelled call without a result",
+    title: "Hosted MCP negotiates older protocol versions and explains rejected requests",
     targets: {
       "self-host": scheduled,
       cloud: scheduled,
       local: na("Local runs the same protocol checks in localMcpProtocolVersions."),
+    },
+  },
+  // The app tool signals a loopback listener when it starts, and the Sentry check reads the managed
+  // Cloud collector; a deployed Worker can reach neither.
+  mcpCancelledCalls: {
+    fixtures: "actors",
+    file: "mcp-protocol-versions.spec.ts",
+    title: "Hosted MCP ends a cancelled call without a result and keeps serving the session",
+    targets: {
+      "self-host": scheduled,
+      cloud: managedCloud,
+      local: na("Cancellation is a hosted MCP session behavior."),
     },
   },
   localMcpProtocolVersions: {

@@ -16,9 +16,6 @@ layer(HostedLive, { excludeTestServices: true })("Deployment links", (it) => {
         const { metadata } = yield* Target;
         const origin = metadata.origin;
         yield* browser.use("Open the public homepage", (page) => page.goto("/home"));
-        yield* browser.use("Dismiss the first-visit preview notice", (page) =>
-          page.getByRole("dialog").getByRole("button", { name: "Got it", exact: true }).click(),
-        );
         const prompt = yield* browser.use("Read the copied setup prompt", (page) =>
           page.locator("button[data-copy]").first().getAttribute("data-copy"),
         );
