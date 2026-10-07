@@ -16,6 +16,7 @@ import {
 import { Array as Arr, Effect, Option, Schema } from "effect";
 import type { SqlClient } from "effect/sql";
 import type { DataStep, DataStepMode } from "../contracts/data-steps.ts";
+import { pinnedBeforeDeploy } from "./framework-pin.ts";
 import {
   executorAppRedeployFixedRelease,
   executorAppRedeployMessage,
@@ -139,13 +140,16 @@ const redeployApp = (host: ExecutorAppRedeployHost, listed: App, mode: DataStepM
     if (order === undefined || order >= 0) return "current" as const;
     const next = repinned(running.files, pin, appsVersion);
 
-    // Main must hold the running source, the redeployed source, or exactly an earlier deployment's
-    // source, which direct file deploys leave behind. Anything else is someone's work.
+    // Main must hold the running source, the redeployed source, the running source under only the
+    // framework pin committed before a template upgrade deployed it, or exactly an earlier
+    // deployment's source, which direct file deploys leave behind. Anything else is someone's work.
     const workspace = yield* host.executor.apps.workspace(target);
     const settled =
       sourceFilesEqual(workspace.files, running.files) || sourceFilesEqual(workspace.files, next);
+    const pinned = !settled && pinnedBeforeDeploy(workspace.files, running.files);
     const behind =
       !settled &&
+      !pinned &&
       (yield* Effect.gen(function* () {
         const replaced = (yield* host.executor.apps.deployments(target)).filter(
           (deployment) => deployment.createdAt.getTime() < running.createdAt.getTime(),
@@ -156,8 +160,13 @@ const redeployApp = (host: ExecutorAppRedeployHost, listed: App, mode: DataStepM
         }
         return false;
       }));
-    if (!settled && !behind) return "edited" as const;
-    if (mode === "report") return behind ? ("redeploy-behind" as const) : ("redeploy" as const);
+    if (!settled && !pinned && !behind) return "edited" as const;
+    if (mode === "report")
+      return behind
+        ? ("redeploy-behind" as const)
+        : pinned
+          ? ("redeploy-pinned" as const)
+          : ("redeploy" as const);
 
     // Deploy first: source that no longer builds changes nothing, main included.
     const deployed = yield* host.executor.apps.deploy({ ...target, files: next }).pipe(
@@ -187,7 +196,11 @@ const redeployApp = (host: ExecutorAppRedeployHost, listed: App, mode: DataStepM
               : Effect.fail(error),
           ),
         );
-    return behind ? ("redeployed-behind" as const) : ("redeployed" as const);
+    return behind
+      ? ("redeployed-behind" as const)
+      : pinned
+        ? ("redeployed-pinned" as const)
+        : ("redeployed" as const);
   }).pipe(
     Effect.catchTag("AppNotFound", () => Effect.succeed("removed" as const)),
     Effect.tap((outcome) => Effect.annotateCurrentSpan("apps.executor_redeploy.outcome", outcome)),

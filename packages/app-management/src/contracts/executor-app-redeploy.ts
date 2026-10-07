@@ -24,6 +24,11 @@ export const executorAppRedeployFixedRelease = "0.0.1-beta.10";
  * - `redeploy-behind` / `redeployed-behind`: the same, but `main` holds exactly the source of an
  *   earlier deployment that the running one replaced, as a direct file deploy leaves it. `main`
  *   gets the running source with the new pin; its previous files stay in its history.
+ * - `redeploy-pinned` / `redeployed-pinned`: the same, but `main` holds the running source under a
+ *   framework pin that `1_app_framework_pin` or `2_app_framework_pin_catch_up` committed before
+ *   member setup deployed the host's template over it without writing Git. Only `package.json`
+ *   differs: `dependencies.apps` is the release those steps write, and `name` may be missing from
+ *   `main`. `main` gets the running source with the new pin.
  * - `current`: the running source pins beta.10 or later.
  * - `other-pin`: the running source declares no exact `apps` release, or its manifest is not JSON.
  * - `edited`: `main` holds other work. Left alone.
@@ -37,8 +42,10 @@ export const executorAppRedeployFixedRelease = "0.0.1-beta.10";
 export const ExecutorAppRedeployOutcome = Schema.Literals([
   "redeploy",
   "redeploy-behind",
+  "redeploy-pinned",
   "redeployed",
   "redeployed-behind",
+  "redeployed-pinned",
   "current",
   "other-pin",
   "edited",

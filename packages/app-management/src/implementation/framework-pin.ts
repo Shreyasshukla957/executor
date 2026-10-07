@@ -121,6 +121,61 @@ export const pinnedOnly = (workspace: SourceFiles, running: SourceFiles): boolea
   );
 };
 
+/** A JSON value with object keys sorted, so equal documents compare equal whatever their key order. */
+const canonical = (value: unknown): unknown =>
+  Array.isArray(value)
+    ? value.map(canonical)
+    : typeof value === "object" && value !== null
+      ? Object.fromEntries(
+          Object.entries(value)
+            .toSorted(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+            .map(([key, entry]) => [key, canonical(entry)]),
+        )
+      : value;
+
+/**
+ * Whether `workspace` is a framework pin commit on a source that a later deploy replaced with
+ * `running`, and nothing else. Member setup upgrades an untouched Executor app by deploying the
+ * host's template, which never writes Git, so `main` keeps the pin these steps committed on the
+ * replaced source. Every file but `package.json` must match `running` byte for byte. The manifests
+ * must be equal JSON once `dependencies.apps` is removed from both, where `main` declares exactly a
+ * release these steps write, and once `name` is removed from `running` where `main` has none, as
+ * the template only named its package later. Any other difference is someone's work.
+ */
+export const pinnedBeforeDeploy = (workspace: SourceFiles, running: SourceFiles): boolean => {
+  const rest = (files: SourceFiles) => files.filter((file) => file.path !== "package.json");
+  const deployed = new Map(rest(running).map((file) => [file.path, file.content]));
+  if (
+    rest(workspace).length !== deployed.size ||
+    !rest(workspace).every((file) => deployed.get(file.path) === file.content)
+  )
+    return false;
+  const decode = (files: SourceFiles) =>
+    Schema.decodeUnknownOption(Schema.fromJsonString(JsonObject))(manifestOf(files));
+  const saved = decode(workspace);
+  const current = decode(running);
+  if (Option.isNone(saved) || Option.isNone(current)) return false;
+  const savedDependencies = Schema.decodeUnknownOption(Dependencies)(saved.value.dependencies);
+  const currentDependencies = Schema.decodeUnknownOption(Dependencies)(current.value.dependencies);
+  if (Option.isNone(savedDependencies) || Option.isNone(currentDependencies)) return false;
+  const pin = savedDependencies.value.apps;
+  if (pin !== frameworkPinRelease && pin !== frameworkPinCatchUpRelease) return false;
+  const unpinned = (
+    manifest: typeof saved.value,
+    dependencies: Readonly<Record<string, string>>,
+    dropName: boolean,
+  ) => {
+    const { apps: _apps, ...others } = dependencies;
+    const { name: _name, ...fields } = manifest;
+    return canonical({ ...(dropName ? fields : manifest), dependencies: others });
+  };
+  const named = Object.hasOwn(saved.value, "name");
+  return (
+    JSON.stringify(unpinned(saved.value, savedDependencies.value, false)) ===
+    JSON.stringify(unpinned(current.value, currentDependencies.value, !named))
+  );
+};
+
 /**
  * Classify one app and, when applying, commit its pin on top of the revision that was read.
  * A working branch behind the running deployment receives the running source with the pin, so

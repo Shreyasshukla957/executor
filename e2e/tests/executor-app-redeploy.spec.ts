@@ -5,11 +5,13 @@
  * release, with only their pin moved to this host's release. Self-host runs it at startup; this
  * scenario starts the product with data steps held in report mode and deploys Executor-shaped
  * apps (one account slot, a provider named `Executor`) on the published beta.9: one untouched,
- * one whose `main` holds an earlier deployment's source, one with an edit on `main`, and one on
- * beta.10, beside an app with another provider on beta.9. The untouched app is recorded as the
+ * one whose `main` holds an earlier deployment's source, one whose `main` holds the running source
+ * under only the framework pin an earlier data step committed before member setup deployed the
+ * template over it, one with that pin and another dependency, one with an edit on `main`, and one
+ * on beta.10, beside an app with another provider on beta.9. The untouched app is recorded as the
  * organization's default Executor app. A report start writes nothing; an apply start redeploys
- * the two eligible apps with every other file byte for byte, keeps their account and records the
- * default's new deployment; and a later start changes nothing.
+ * the three eligible apps with every other file byte for byte, keeps their account and records
+ * the default's new deployment; and a later start changes nothing.
  */
 import { expect, layer } from "@effect/vitest";
 import { Effect, Schedule, Schema } from "effect";
@@ -32,6 +34,8 @@ const step = "5_redeploy_pre_beta10_executor_apps";
 const oldRelease = "0.0.1-beta.9";
 /** The release with the fix; an app on it is current. */
 const fixedRelease = "0.0.1-beta.10";
+/** The release `1_app_framework_pin` declares in `main`, never deployed by this scenario. */
+const frameworkPinRelease = "0.0.1-beta.2";
 const token = "synthetic-redeploy-token";
 
 type Files = readonly { readonly path: string; readonly content: string }[];
@@ -73,6 +77,27 @@ const repinned = (files: Files, from: string, to: string): Files =>
   files.map((file) =>
     file.path === "package.json"
       ? { ...file, content: file.content.replace(`"apps": "${from}"`, `"apps": "${to}"`) }
+      : file,
+  );
+/**
+ * `files` as `1_app_framework_pin` left them on `main` before the template named its package: the
+ * unnamed manifest with the pin added, and `extra` dependencies beside it.
+ */
+const pinnedManifest = (files: Files, extra: Readonly<Record<string, string>> = {}): Files =>
+  files.map((file) =>
+    file.path === "package.json"
+      ? {
+          ...file,
+          content: JSON.stringify(
+            {
+              private: true,
+              type: "module",
+              dependencies: { apps: frameworkPinRelease, ...extra },
+            },
+            null,
+            2,
+          ),
+        }
       : file,
   );
 const sorted = (files: Files) => files.toSorted((left, right) => (left.path < right.path ? -1 : 1));
@@ -195,6 +220,23 @@ layer(HostedLive, { excludeTestServices: true })("Executor app redeploy data ste
           yield* request("POST", `/apps/${behind.id}/deploy`, { files: behindFiles }).pipe(
             ok(Deployed),
           );
+          // Pinned: main holds the running source under only the framework pin, which a pin step
+          // committed before member setup deployed the template, named and pinned, over it.
+          const pinnedFiles = source("Executor", oldRelease, "pinned");
+          const pinned = yield* deploy("Executor pinned", pinnedFiles);
+          yield* request("POST", `/apps/${pinned.id}/commits`, {
+            expected: (yield* workspace(pinned)).revision.commit,
+            files: pinnedManifest(pinnedFiles),
+            message: `Pin the apps framework to ${frameworkPinRelease}`,
+          }).pipe(ok(Committed));
+          // Pinned and edited: the same, but main also adds a dependency, which is someone's work.
+          const pinnedEditedFiles = source("Executor", oldRelease, "pinned-edited");
+          const pinnedEdited = yield* deploy("Executor pinned edited", pinnedEditedFiles);
+          yield* request("POST", `/apps/${pinnedEdited.id}/commits`, {
+            expected: (yield* workspace(pinnedEdited)).revision.commit,
+            files: pinnedManifest(pinnedEditedFiles, { "left-pad": "1.3.0" }),
+            message: "Add a dependency",
+          }).pipe(ok(Committed));
           // Edited: main holds work that was never deployed.
           const edited = yield* deploy("Executor edited", source("Executor", oldRelease, "first"));
           yield* request("POST", `/apps/${edited.id}/commits`, {
@@ -206,7 +248,7 @@ layer(HostedLive, { excludeTestServices: true })("Executor app redeploy data ste
           const fixed = yield* deploy("Executor fixed", source("Executor", fixedRelease, "fixed"));
           const other = yield* deploy("Other provider", source("Other", oldRelease, "other"));
 
-          const apps = [untouched, behind, edited, fixed, other];
+          const apps = [untouched, behind, pinned, pinnedEdited, edited, fixed, other];
           const state = Effect.forEach(apps, (app) =>
             Effect.all({
               deployment: get(app).pipe(Effect.map((current) => current.activeDeployment)),
@@ -226,7 +268,8 @@ layer(HostedLive, { excludeTestServices: true })("Executor app redeploy data ste
           expect(report.owners[owner]).toEqual({
             redeploy: 1,
             "redeploy-behind": 1,
-            edited: 1,
+            "redeploy-pinned": 1,
+            edited: 2,
             current: 1 + executorApps,
           });
           expect(yield* state).toEqual(before);
@@ -253,7 +296,8 @@ layer(HostedLive, { excludeTestServices: true })("Executor app redeploy data ste
           expect(applied.owners[owner]).toEqual({
             redeployed: 1,
             "redeployed-behind": 1,
-            edited: 1,
+            "redeployed-pinned": 1,
+            edited: 2,
             current: 1 + executorApps,
           });
           // Read the recorded default, then restore the organization's own record so member setup
@@ -296,9 +340,15 @@ layer(HostedLive, { excludeTestServices: true })("Executor app redeploy data ste
           expect(sorted(yield* running(behind))).toEqual(behindExpected);
           expect(sorted((yield* workspace(behind)).files)).toEqual(behindExpected);
 
-          // The edited app, the app on the fixed release and the other provider's app are untouched.
+          // Main under only the framework pin gets the running source with the new pin; the pin
+          // commit's unnamed manifest is replaced by the running one.
+          const pinnedExpected = sorted(repinned(pinnedFiles, oldRelease, appsVersion));
+          expect(sorted(yield* running(pinned))).toEqual(pinnedExpected);
+          expect(sorted((yield* workspace(pinned)).files)).toEqual(pinnedExpected);
+
+          // The edited apps, the app on the fixed release and the other provider's app are untouched.
           const after = yield* state;
-          for (const app of [edited, fixed, other])
+          for (const app of [pinnedEdited, edited, fixed, other])
             expect(after[apps.indexOf(app)], app.name).toEqual(before[apps.indexOf(app)]);
           expect(declaredApps(yield* running(other))).toBe(oldRelease);
 
