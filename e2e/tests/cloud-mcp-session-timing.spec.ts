@@ -348,7 +348,7 @@ layer(HostedLive, { excludeTestServices: true })("Cloud MCP session timing", (it
           expect(malformed.text, "The object rejects a malformed request").toContain(
             '"Parse error"',
           );
-          // An MCP client cancels its call, which interrupts the request on the object.
+          // An MCP client cancels its call, which interrupts the call on the object.
           const beforeCancelled = (yield* evidence.requests).length;
           const cancelled = yield* wait(first, "A call the client cancels").pipe(
             Effect.timeout("500 millis"),
@@ -393,13 +393,18 @@ layer(HostedLive, { excludeTestServices: true })("Cloud MCP session timing", (it
           yield* echo(first, "Call after those requests", "after");
           const [after] = yield* found(since(beforeAfter), 1);
           // A span leaves its isolate with the first flush after it ends, which may be a later
-          // request's (packages/telemetry/src/isolate.ts). The interrupted call's spans are read
+          // request's (packages/telemetry/src/isolate.ts). The cancelled call's spans are read
           // once the requests above have flushed both isolates.
           const [interrupted] = yield* located(Effect.succeed(cancelledTraces), 1);
+          // MCP withholds a cancelled request's response, so the object ends its POST with an empty
+          // stream when the cancellation arrives, and records the time it observed until then.
+          const cancelledCall = interrupted === undefined ? undefined : timing(interrupted);
+          accounted(cancelledCall);
+          expect(cancelledCall?.status, "The object answers the cancelled call's POST").toBe("200");
           expect(
-            interrupted?.forward.tags["executor.mcp.session.handled_ms"],
-            "A request the object never answered records no timing",
-          ).toBeUndefined();
+            cancelledCall?.handledMs,
+            "The object answered at the cancellation, not when the tool finished",
+          ).toBeLessThan(delayMs);
           yield* evidence.json("recovered.json", {
             failed,
             after,

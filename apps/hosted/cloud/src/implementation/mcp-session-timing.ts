@@ -67,8 +67,9 @@ export const makeAnswer = () => {
  * clock observes more than really passed; when that exceeds the gateway's wait, `clocks_disagree`
  * marks it and no residual is recorded. A shorter lag cannot be told apart from the durations, and
  * comparing the two machines' timestamps is no better: they differ by milliseconds on quiet calls.
- * A response without the header (an interrupted request, or an older object version during a
- * deploy) records none of these.
+ * A response without the header (from a request the object failed or that was interrupted before
+ * its response was ready, or from an older object version during a deploy) records none of these.
+ * A cancelled MCP call is answered: the object ends its POST with an empty stream.
  */
 export const timedForward = <E, R>(
   forward: Effect.Effect<HttpServerResponse.HttpServerResponse, E, R>,
