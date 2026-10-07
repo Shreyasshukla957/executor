@@ -20,6 +20,7 @@ import {
   connectionTargetKey,
   connectionTargetLabel,
   connectionToolsLabel,
+  connectionEventsLabel,
   type ScopedConnectionBindings,
 } from "../../contracts/scoped-connections.ts";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -53,6 +54,7 @@ import {
   accountOption,
   initialSelection,
   selectionIssue,
+  declaresEvents,
   type AppChoices,
 } from "./connection-app-picker.tsx";
 import { useIncrementalList } from "./incremental-list.tsx";
@@ -104,6 +106,7 @@ const connectionDraft = (
       id: item.app,
       name: choice?.app.name ?? "Unavailable app",
       tools: item.tools,
+      ...(item.events === undefined ? {} : { events: item.events }),
       targets: item.runsAs.map((target): ConnectionTarget => {
         if (target.kind === "app") return target;
         const option = choice?.options.find(
@@ -893,6 +896,11 @@ function ConnectionAccessList({
                 ) : (
                   <span className="px-3 text-xs text-muted-foreground">
                     {connectionToolsLabel(selection.tools)}, including new ones
+                  </span>
+                )}
+                {declaresEvents(app) && (
+                  <span className="px-3 text-xs text-muted-foreground">
+                    {connectionEventsLabel(selection.events)}
                   </span>
                 )}
               </div>

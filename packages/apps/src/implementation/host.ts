@@ -66,6 +66,8 @@ import { jsonSchemaDocument } from "./schema.ts";
 import { locate } from "./router.ts";
 import { readCatalog, routerSkills } from "./router-catalog.ts";
 import { dispatchWebhook } from "./webhooks.ts";
+import { declaredEvents, makeEmitter } from "./events.ts";
+import type { AppEvent, EmittedEvent } from "../contracts/events.ts";
 import { authorSql, hasMigrations, migrate, noDatabase, type StepReplay } from "./sql.ts";
 import { isApp, toEffectApp } from "./app.ts";
 import { authorCache, unavailableCache } from "./cache.ts";
@@ -184,7 +186,11 @@ function providerDeclaration(provider: Provider<AuthMethods>) {
   );
 }
 
-function requirements(slots: AccountSlots, sql: boolean) {
+function requirements(
+  slots: AccountSlots,
+  sql: boolean,
+  events: Readonly<Record<string, AppEvent>> | undefined,
+) {
   return Effect.gen(function* () {
     const accounts = new Map<string, DeclaredRequirements["accounts"][string]>();
     for (const [slot, selection] of Object.entries(slots)) {
@@ -199,6 +205,14 @@ function requirements(slots: AccountSlots, sql: boolean) {
       accounts: Object.fromEntries(accounts),
       capabilities: { skills: true, toolIndex: true, skillSources: true, scheduledTools: true },
       ...(sql ? { sql: true } : {}),
+      ...(events === undefined || Object.keys(events).length === 0
+        ? {}
+        : {
+            events: yield* declarationSafe(
+              () => declaredEvents(events),
+              "The app's event declarations are invalid",
+            ),
+          }),
     }).pipe(
       Effect.mapError((cause) =>
         declarationInvalid("The app's account declarations are invalid", cause),
@@ -333,6 +347,8 @@ function dispatch(
   request: HostRequest,
   context: HostContext,
   signal: AbortSignal,
+  /** Events this invocation emits. The handler sends them only when it succeeds. */
+  emitted: EmittedEvent[],
 ): Effect.Effect<JsonValue, HostError> {
   return Effect.scoped(
     Effect.gen(function* () {
@@ -344,7 +360,7 @@ function dispatch(
       const secrets = accountSecrets(context.accounts);
       // The build's migrations, not a flag, decide whether the app has a database.
       const ownsSql = hasMigrations(context.files ?? []);
-      const declared = yield* requirements(native.accounts, ownsSql);
+      const declared = yield* requirements(native.accounts, ownsSql, native.events);
       if (request.operation === "requirements")
         return yield* safe(
           () => Schema.decodeUnknownEffect(JsonValue)(declared),
@@ -389,6 +405,7 @@ function dispatch(
                 Effect.sync(() =>
                   authorSql(storage, {
                     signal: invocationSignal,
+                    emitted,
                     ...(step === undefined ? {} : { step }),
                   }),
                 ),
@@ -532,6 +549,18 @@ function dispatch(
         fetch: yield* appInvocationFetch(fetching.signal),
         elicit: makeElicit(delivery, invocationSignal, telemetry.context),
       };
+      const accountIds = Object.values(bound.accounts).flatMap((selected) =>
+        (Array.isArray(selected) ? selected : [selected]).map(
+          (account: { readonly id: string }) => account.id,
+        ),
+      );
+      const emitter = (sourceAccount?: string) =>
+        makeEmitter({
+          events: native.events ?? {},
+          accounts: accountIds,
+          ...(sourceAccount === undefined ? {} : { sourceAccount }),
+          emitted,
+        });
       const definition = yield* evaluationSafe(native.evaluate(bound), secrets).pipe(
         Effect.withSpan("app.evaluate"),
       );
@@ -702,6 +731,7 @@ function dispatch(
             signal: bound.signal,
             fetch: bound.fetch,
             sql: session.writer,
+            events: emitter("sourceAccount" in request ? request.sourceAccount : undefined),
           },
           Redacted.value(context.accounts),
         );
@@ -806,6 +836,7 @@ function dispatch(
                 fetch,
                 workflows: kind === "mutate" ? workflowControls : workflowReads,
                 sql: kind === "mutate" ? session.writer : session.reader,
+                ...(kind === "mutate" ? { events: emitter() } : {}),
               },
               input,
             );
@@ -977,7 +1008,8 @@ export const createAppHandler =
         ...(command.operation === "call" ? { "executor.tool.name": command.tool } : {}),
       });
       let toolError = false;
-      const value = yield* dispatch(app, command, context, request.signal).pipe(
+      const emitted: EmittedEvent[] = [];
+      const value = yield* dispatch(app, command, context, request.signal, emitted).pipe(
         Effect.provideService(ToolResultObservation, {
           failed: () => {
             toolError = true;
@@ -1010,7 +1042,12 @@ export const createAppHandler =
           "executor.outcome": "failed",
           "error.type": "McpToolError",
         });
-      return Response.json({ ok: true, value, ...(toolError ? { toolError: true } : {}) });
+      return Response.json({
+        ok: true,
+        value,
+        ...(toolError ? { toolError: true } : {}),
+        ...(emitted.length === 0 ? {} : { events: emitted }),
+      });
     }).pipe(
       Effect.catch((error) =>
         Schema.encodeEffect(HostError)(error).pipe(

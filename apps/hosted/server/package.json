@@ -13,6 +13,7 @@
     "./resource-access": "./src/contracts/resource-access.ts",
     "./database": "./src/implementation/database.ts",
     "./resource-lifecycle": "./src/implementation/resource-lifecycle.ts",
+    "./events": "./src/implementation/events.ts",
     "./app-ui": "./src/app-ui.ts",
     "./app-ui/contracts": "./src/contracts/app-ui.ts",
     "./provisioning": "./src/implementation/provisioning.ts",

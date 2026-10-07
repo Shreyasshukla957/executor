@@ -30,6 +30,7 @@ import {
 import {
   AppCacheChanges,
   DispatchTiming,
+  AppEventSink,
   InvocationRun,
   IsolateTiming,
   RuntimeCallTimings,
@@ -268,6 +269,19 @@ export const appRuntime = (host: AppRuntimeHost) =>
             });
           }
           const value = yield* Schema.decodeUnknownEffect(output)(reply.value);
+          // Only a successful invocation's events are kept; its writes have committed.
+          if (reply.events !== undefined && reply.events.length > 0)
+            yield* (yield* AppEventSink).emitted({
+              app: input.app,
+              accounts: [
+                ...new Set(
+                  Object.values(Redacted.value(input.accounts)).flatMap((selected) =>
+                    (Array.isArray(selected) ? selected : [selected]).map((account) => account.id),
+                  ),
+                ),
+              ],
+              events: reply.events,
+            });
           const revision = Result.isSuccess(collected)
             ? collected.success.executorRevision
             : undefined;

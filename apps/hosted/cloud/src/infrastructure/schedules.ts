@@ -147,7 +147,17 @@ const makePlacedScheduleCoordinator = Effect.gen(function* () {
       provide(
         Effect.gen(function* () {
           const executor = yield* Effect.flatten(HostedExecutor);
-          const next = yield* executor.scheduler.nextWake;
+          // Event deliveries due for a retry wake this coordinator too.
+          const [schedule, delivery] = yield* Effect.all([
+            executor.scheduler.nextWake,
+            executor.events.nextWake,
+          ]);
+          const next =
+            schedule === null || delivery === null
+              ? (schedule ?? delivery)
+              : schedule < delivery
+                ? schedule
+                : delivery;
           // Requested profile setup keeps its wake: deleting it, or moving it to a later
           // schedule, would leave the change to that schedule or the minute heartbeat.
           const soonest =
@@ -200,6 +210,11 @@ const makePlacedScheduleCoordinator = Effect.gen(function* () {
                 execute: (operation) =>
                   pool.withPermitsIfAvailable(1)(operation).pipe(Effect.asVoid),
               }),
+            );
+            // Each emit attempts its deliveries at once; this retries the ones still due.
+            yield* executor.events.deliver({ maxDeliveries: 64 }).pipe(
+              Effect.withSpan("events.dispatch"),
+              Effect.catch(() => Effect.logError("Cloud event delivery failed")),
             );
             yield* arm;
           }),

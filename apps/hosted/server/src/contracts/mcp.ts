@@ -22,6 +22,14 @@ export const McpAccess = Schema.Struct({
 });
 export type McpAccess = typeof McpAccess.Type;
 
+/**
+ * The grant an MCP request authenticated with. Event subscriptions belong to it, so revoking the
+ * grant stops them. Unset outside MCP requests.
+ */
+export const CurrentMcpGrant = Context.Reference<GrantId | undefined>("hosted/CurrentMcpGrant", {
+  defaultValue: () => undefined,
+});
+
 /** Invalid/revoked bearer grants need a fresh OAuth connection. */
 export class McpUnauthorized extends Schema.TaggedError<McpUnauthorized>()("McpUnauthorized", {}) {}
 /** Why a valid credential may not make an MCP request. Each reason needs a different fix. */

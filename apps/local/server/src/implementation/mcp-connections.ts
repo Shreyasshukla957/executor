@@ -71,7 +71,12 @@ const resolveApp = (executor: Executor, connection: ConnectionId, input: Connect
     const unique = [...new Map(runsAs.map((target) => [targetKey(target), target])).values()];
     const [first, ...rest] = unique;
     if (first === undefined) return yield* invalid("target");
-    return { app: app.id, runsAs: [first, ...rest], tools: input.tools } satisfies ConnectionApp;
+    return {
+      app: app.id,
+      runsAs: [first, ...rest],
+      tools: input.tools,
+      ...(input.events === undefined ? {} : { events: input.events }),
+    } satisfies ConnectionApp;
   });
 
 /** Pairing authorizes these handlers; the OAuth store owns the records. */

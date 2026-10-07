@@ -670,6 +670,26 @@ export const grantOAuthPlugins = (settings: GrantOAuthOptions) => {
         { method: "GET", requireHeaders: true, metadata: { SERVER_ONLY: true } },
         (ctx) => runAuth(access(ctx, "api")),
       ),
+      /**
+       * A grant's current authority, without a credential: for background work saved under it,
+       * such as an event subscription. A revoked or deleted grant fails as unauthorized.
+       */
+      getMcpGrant: createAuthEndpoint(
+        "/mcp/grant",
+        {
+          method: "POST",
+          body: Schema.toStandardSchemaV1(Schema.Struct({ id: GrantId })),
+          metadata: { SERVER_ONLY: true },
+        },
+        (ctx) =>
+          runAuth(
+            Effect.gen(function* () {
+              const row = yield* get(ctx, ctx.body.id);
+              yield* settings.checkResource(ctx, row.userId, row.resource);
+              return yield* project(ctx, row, yield* targetFor(ctx, row));
+            }),
+          ),
+      ),
       getBrowserGrant: createAuthEndpoint(
         "/mcp/browser-grant",
         {

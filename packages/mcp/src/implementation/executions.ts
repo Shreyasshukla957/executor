@@ -348,6 +348,10 @@ export const makeExecutions = (
         listApps: (input) => exchange((backend) => backend.listApps(input)),
         listTargets: (input) => exchange((backend) => backend.listTargets(input)),
         listTools: (input, options) => exchange((backend) => backend.listTools(input, options)),
+        eventDefinitions: (input) => exchange((backend) => backend.eventDefinitions(input)),
+        findEventSubscription: (key) => exchange((backend) => backend.findEventSubscription(key)),
+        subscribeEvent: (input) => exchange((backend) => backend.subscribeEvent(input)),
+        unsubscribeEvent: (input) => exchange((backend) => backend.unsubscribeEvent(input)),
         callTool: (input) =>
           Effect.flatMap(Effect.fiberId, (fiber) => {
             const call = run.progress.callFibers.get(fiber);

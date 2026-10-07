@@ -23,7 +23,12 @@ import { annotateSkillRead, executorIntro } from "@executor-js/app-templates/exe
 import { Context, Effect, Option, Result, Schema } from "effect";
 import { ElicitationFailed } from "@executor-js/sdk/core";
 import { HttpServerRequest, HttpServerResponse } from "effect/http";
-import { McpAuthentication, McpUnauthorized, type McpAccess } from "../contracts/mcp.ts";
+import {
+  CurrentMcpGrant,
+  McpAuthentication,
+  McpUnauthorized,
+  type McpAccess,
+} from "../contracts/mcp.ts";
 import { CurrentOrganization, OrganizationReference } from "../contracts/organization.ts";
 import { HostedExecutor } from "../contracts/executor.ts";
 import { hostedMcpBackend } from "./mcp.ts";
@@ -55,6 +60,10 @@ const RequestBackend = Context.Reference<McpBackend<RequestError>>("hosted/McpRe
     callTool: unavailable,
     resumeInvocation: unavailable,
     authorizeElicitation: () => Effect.fail(new ElicitationFailed({ reason: "forbidden" })),
+    eventDefinitions: unavailable,
+    findEventSubscription: unavailable,
+    subscribeEvent: unavailable,
+    unsubscribeEvent: unavailable,
   }),
 });
 const RequestApprovalUrl = Context.Reference<
@@ -75,6 +84,14 @@ const requestBackend: McpBackend<RequestError> = {
     Effect.flatMap(RequestBackend, (backend) =>
       backend.resumeInvocation(request, response, options),
     ),
+  eventDefinitions: (input) =>
+    Effect.flatMap(RequestBackend, (backend) => backend.eventDefinitions(input)),
+  findEventSubscription: (key) =>
+    Effect.flatMap(RequestBackend, (backend) => backend.findEventSubscription(key)),
+  subscribeEvent: (input) =>
+    Effect.flatMap(RequestBackend, (backend) => backend.subscribeEvent(input)),
+  unsubscribeEvent: (input) =>
+    Effect.flatMap(RequestBackend, (backend) => backend.unsubscribeEvent(input)),
 };
 
 /** Build native MCP protocol state inside its host-owned scope, without a caller identity. */
@@ -128,6 +145,7 @@ export const dispatchHostedMcp = <E, R>(
           Effect.provideService(CurrentOrganization, fresh.access),
           Effect.provideService(CurrentAuthorization, grantAuthorization(fresh.grant.policy)),
           Effect.provideService(CurrentUserId, fresh.userId),
+          Effect.provideService(CurrentMcpGrant, fresh.grant.id),
         );
         return restrictMcpBackend<RequestError, never>(backend, Effect.succeed(fresh.grant));
       });
@@ -170,6 +188,8 @@ export const dispatchHostedMcp = <E, R>(
         current.pipe(Effect.flatMap((fresh) => fresh.callTool(input, options))),
       resumeInvocation: (pending, response, options) =>
         current.pipe(Effect.flatMap((fresh) => fresh.resumeInvocation(pending, response, options))),
+      subscribeEvent: (input) =>
+        current.pipe(Effect.flatMap((fresh) => fresh.subscribeEvent(input))),
     };
     return yield* handler.pipe(
       Effect.provideService(RequestBackend, authorized),

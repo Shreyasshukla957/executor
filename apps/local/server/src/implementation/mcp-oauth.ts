@@ -260,6 +260,23 @@ export const makeLocalMcpOAuth = (config: ServerConfig, pairing: LocalAuth, cryp
         try: run,
         catch: (cause) => (isAPIError(cause) ? cause.statusCode : ("unavailable" as const)),
       });
+    /** The grant's current authority, or none when it was revoked or deleted. */
+    const grant = (id: GrantId) =>
+      Effect.tryPromise({
+        try: () => auth.api.getMcpGrant({ body: { id } }),
+        // Only a definitive refusal means the grant is gone; an outage is retried.
+        catch: (cause) =>
+          isAPIError(cause) && [401, 403, 404].includes(cause.statusCode)
+            ? ("refused" as const)
+            : ("unavailable" as const),
+      }).pipe(
+        Effect.map(Option.some),
+        Effect.catch((reason) =>
+          reason === "refused"
+            ? Effect.succeed(Option.none())
+            : Effect.fail(new LocalMcpAuthUnavailable()),
+        ),
+      );
     const connections = {
       list: connectionCall(() => auth.api.listMcpConnections({ body: connectionOwner })),
       create: (input: { id: ConnectionId; name: string; policy: ConnectionPolicy }) =>
@@ -277,6 +294,7 @@ export const makeLocalMcpOAuth = (config: ServerConfig, pairing: LocalAuth, cryp
       origin,
       authenticate,
       browserGrant,
+      grant,
       handler,
       metadata,
       protectedResource,

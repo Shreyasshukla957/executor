@@ -71,6 +71,8 @@ export interface BoundContext<Slots extends AccountSlots> {
 /** The host evaluates this factory fresh with the configured app's selected accounts. */
 export interface App<Slots extends AccountSlots, Def extends AppDefinition<never>> {
   readonly accounts: Slots;
+  /** Declared beside the accounts, so a host lists them without evaluating the app. */
+  readonly events?: Readonly<Record<string, import("./events.ts").AppEvent>>;
   readonly evaluate: (context: BoundContext<Slots>) => Effect.Effect<Def, unknown>;
 }
 

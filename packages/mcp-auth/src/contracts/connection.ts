@@ -2,7 +2,7 @@
  * Scoped connections: a user's named, revocable MCP access boundary. Grants issued through a
  * connection's URL take their authority from the current connection record on every request.
  */
-import { RunTarget, ToolScope, type AppPermission } from "@executor-js/authorization";
+import { EventScope, RunTarget, ToolScope, type AppPermission } from "@executor-js/authorization";
 import { ApiError } from "@executor-js/utils/api-error";
 import {
   AccountId,
@@ -26,6 +26,8 @@ export const ConnectionApp = Schema.Struct({
   app: AppId,
   runsAs: Schema.NonEmptyArray(RunTarget),
   tools: ToolScope,
+  /** Omitted: every event the app declares, now or later. */
+  events: Schema.optionalKey(EventScope),
 });
 export type ConnectionApp = typeof ConnectionApp.Type;
 const uniqueApps = (apps: readonly { readonly app: AppId }[]) =>
@@ -61,6 +63,7 @@ export const ConnectionAppInput = Schema.Struct({
   app: AppId,
   runsAs: Schema.NonEmptyArray(ConnectionTargetInput),
   tools: ToolScope,
+  events: Schema.optionalKey(EventScope),
 });
 export type ConnectionAppInput = typeof ConnectionAppInput.Type;
 /**
@@ -117,7 +120,12 @@ export type ConnectionAccessInvalid = typeof ConnectionAccessInvalid.Type;
 
 /** The connection's apps as shared authorization permissions. Targets are always explicit. */
 export const connectionPermissions = (policy: ConnectionPolicy): readonly AppPermission[] =>
-  policy.apps.map((item) => ({ app: item.app, tools: item.tools, targets: item.runsAs }));
+  policy.apps.map((item) => ({
+    app: item.app,
+    tools: item.tools,
+    ...(item.events === undefined ? {} : { events: item.events }),
+    targets: item.runsAs,
+  }));
 /**
  * The grant policy a connection currently authorizes. Approval delivery follows the MCP URL,
  * exactly as for a full-access grant; approval rules stay in each app's code.

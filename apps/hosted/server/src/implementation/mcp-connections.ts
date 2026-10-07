@@ -101,7 +101,12 @@ const resolveApp = (
     const unique = [...new Map(runsAs.map((target) => [targetKey(target), target])).values()];
     const [first, ...rest] = unique;
     if (first === undefined) return yield* invalid("target");
-    return { app: app.id, runsAs: [first, ...rest], tools: input.tools } satisfies ConnectionApp;
+    return {
+      app: app.id,
+      runsAs: [first, ...rest],
+      tools: input.tools,
+      ...(input.events === undefined ? {} : { events: input.events }),
+    } satisfies ConnectionApp;
   });
 
 const resolvePolicy = (connection: ConnectionId, apps: readonly ConnectionAppInput[]) =>

@@ -320,6 +320,7 @@ export const makeApps = (
           ? {}
           : { database: built.requirements.database }),
         ...(built.requirements.sql === true ? { sql: true as const } : {}),
+        ...(built.requirements.events === undefined ? {} : { events: built.requirements.events }),
         accounts: Object.fromEntries(
           entries.map(({ slot, provider, cardinality, health }) => [
             slot,

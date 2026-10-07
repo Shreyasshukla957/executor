@@ -4663,6 +4663,60 @@ export const scenarios = {
       local: na("This scenario uses hosted app deploy and tool call routes."),
     },
   },
+  mcpEvents: {
+    fixtures: "actors",
+    file: "mcp-events.spec.ts",
+    title:
+      "an MCP client lists app events, subscribes with a verified webhook and receives signed, retried, filtered deliveries until it unsubscribes or loses access",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("This scenario uses hosted account, webhook and personal access token routes."),
+    },
+  },
+  mcpEventChanges: {
+    fixtures: "actors",
+    file: "mcp-events-changes.spec.ts",
+    title:
+      "a refresh after a redeploy removed a subscription's filter or event is refused with -32014 or -32011 and stops that subscription",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("This scenario uses hosted personal access token and webhook routes."),
+    },
+  },
+  mcpEventGrants: {
+    fixtures: "actors",
+    file: "mcp-events-grants.spec.ts",
+    title:
+      "an OAuth grant selects an app's events beside its tools, all by default or by name, and selecting none hides them, refuses subscribing and stops its deliveries",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("This scenario uses hosted OAuth grant narrowing and webhook routes."),
+    },
+  },
+  localMcpEvents: {
+    file: "local-mcp-events.spec.ts",
+    title:
+      "local delivers MCP events to a verified loopback receiver, retries a refused delivery and stops after unsubscribing",
+    targets: {
+      local: scheduled,
+      "self-host": na("Self-host and Cloud cover events in the MCP events scenarios."),
+      cloud: na("Self-host and Cloud cover events in the MCP events scenarios."),
+    },
+  },
+  mcpEventAccounts: {
+    fixtures: "actors",
+    file: "mcp-events-accounts.spec.ts",
+    title:
+      "an event reaches only subscribers who may use every account its invocation used, and a grant limited to some profiles only those from their accounts",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("Local has one user, who may use every account."),
+    },
+  },
   appCallbacks: {
     fixtures: "actors",
     file: "app-callbacks.spec.ts",

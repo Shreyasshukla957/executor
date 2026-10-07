@@ -10,10 +10,12 @@ import {
   startScheduleWorker,
   defaultScheduleWorkerOptions,
   ScheduleObservation,
+  deliverEvents,
 } from "@executor-js/sdk/scheduling";
 import { localScheduleHandlers } from "./schedules.ts";
 import { localMcpApproval } from "./mcp-approvals.ts";
-import { makeLocalMcpOAuth } from "./mcp-oauth.ts";
+import { makeLocalMcpOAuth, type LocalMcpOAuth } from "./mcp-oauth.ts";
+import { localEventAuthority } from "./events.ts";
 import { localMcpConnectionHandlers } from "./mcp-connections.ts";
 import { localAppManagement } from "./app-management.ts";
 import { runStartupDataSteps } from "@executor-js/app-management/data-steps";
@@ -28,6 +30,7 @@ import {
   AccountNotFound,
   AppNotFound,
   createExecutor,
+  httpEventSender,
   makeDeclarationCache,
   declarationConfig,
   toEffectRuntime,
@@ -124,6 +127,8 @@ export const localApi = (
       const repositories = nativeRepositories(path.join(directory, "repositories"));
       const server = yield* Scope.Scope;
       const evaluation = yield* declarationConfig;
+      // MCP grants are checked again before each event delivery; OAuth starts after the executor.
+      const grants = yield* Deferred.make<LocalMcpOAuth>();
       const executor = yield* createExecutor({
         database: storage,
         secret: config.encryptionKey,
@@ -139,6 +144,11 @@ export const localApi = (
         },
         // Stale declarations refresh on the server's own lifetime.
         background: (work) => Effect.forkIn(work, server).pipe(Effect.as(true)),
+        events: {
+          sender: httpEventSender(egress),
+          authorize: localEventAuthority(Deferred.await(grants)),
+          allowInsecureCallbacks: config.urlPolicy.allowLoopbackHttp,
+        },
         oauth: {
           httpClient,
           clientName: "Executor Local",
@@ -222,6 +232,8 @@ export const localApi = (
         }),
       );
       const oauth = yield* makeLocalMcpOAuth(config, auth, crypto);
+      yield* Deferred.succeed(grants, oauth);
+      yield* Effect.forkScoped(deliverEvents(executor));
       const mcp = yield* localMcp(observed("mcp"), config.mcp, config, oauth);
       const api = observed("api");
       const programmatic = Layer.mergeAll(

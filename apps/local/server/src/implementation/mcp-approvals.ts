@@ -58,7 +58,7 @@ export const localMcpApproval = (
         view.request.status === "approval-required" ? view.request.invocation : view.request.tool;
       // The same grant checks as the MCP route, including runs-as targets and read-only tools.
       const allowed = yield* restrictMcpBackend<Error, never>(
-        localMcpBackend(executor),
+        localMcpBackend(executor, grant.id),
         Effect.succeed(grant),
       )
         .authorizeElicitation(tool)

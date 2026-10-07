@@ -5,7 +5,7 @@ import { ApprovalMode, GrantId, mcpOAuthResources } from "@executor-js/mcp-auth"
 /** Hosted membership composes with the shared OAuth grant lifecycle. */
 import type { BetterAuthPlugin, GenericEndpointContext } from "@better-auth/core";
 import { APIError, createAuthEndpoint, isAPIError } from "better-auth/api";
-import { Effect, Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
 import {
   grantOAuthPlugins,
   authCall,
@@ -88,12 +88,25 @@ const hostedGrantOAuth = (origin: string) =>
       ),
   });
 
-const PatGrant = Schema.Struct({
+export const PatGrant = Schema.Struct({
   token: ApiKeyId,
   organization: OrganizationId,
   mode: ApprovalMode,
 });
 const patGrantPrefix = "pat:";
+/** The PAT a synthetic grant ID names, or none for an OAuth grant ID. */
+export const patGrantOf = (id: string) =>
+  id.startsWith(patGrantPrefix)
+    ? Schema.decodeUnknownOption(Schema.fromJsonString(PatGrant))(
+        (() => {
+          try {
+            return decodeURIComponent(id.slice(patGrantPrefix.length));
+          } catch {
+            return "";
+          }
+        })(),
+      )
+    : Option.none();
 export const patGrantId = (value: typeof PatGrant.Type) =>
   GrantId.make(patGrantPrefix + encodeURIComponent(JSON.stringify(value)));
 const parsePatGrant = (id: GrantId) =>

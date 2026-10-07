@@ -167,6 +167,8 @@ export type {
   WebhookContext,
 } from "./contracts/context.ts";
 export { type App, type AppDefinition, defineApp } from "./implementation/app.ts";
+export { event, type EventDeclaration, type EventEmitter } from "./implementation/events.ts";
+export type { EmitOptions } from "./contracts/events.ts";
 export type { Approval, ApprovalContext, ApprovalDecision } from "./approval.ts";
 
 type AuthorWebhook<Member, Config, State> = Member extends object

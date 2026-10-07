@@ -14,6 +14,7 @@ import {
   declarationConfig,
   hostedExecutorOrigin,
   remoteRegistry,
+  httpEventSender,
   type Executor,
   type RepositoryBackend,
 } from "@executor-js/sdk/core";
@@ -32,6 +33,8 @@ import {
   withExecutorAnalytics,
 } from "@executor-js/hosted-server";
 import { hostedResourceLifecycle } from "@executor-js/hosted-server/resource-lifecycle";
+import { hostedEventAuthority } from "@executor-js/hosted-server/events";
+import { deliverEvents } from "@executor-js/sdk/scheduling";
 import * as BrowserCrypto from "@effect/platform-browser/BrowserCrypto";
 import { HostedAppRuntime } from "@executor-js/hosted-server/app-ui/contracts";
 import { workerdHostHandler } from "@executor-js/sdk/workerd";
@@ -96,8 +99,14 @@ export const selfHostExecutorServices = <E, R>(
         },
         // Stale declarations refresh on the server's own lifetime.
         background: (work) => Effect.forkIn(work, server).pipe(Effect.as(true)),
+        events: {
+          sender: httpEventSender(egress),
+          authorize: hostedEventAuthority(Effect.succeed(yield* SqlClient.SqlClient)),
+          allowInsecureCallbacks: egress.policy.allowLoopbackHttp,
+        },
       }).pipe(Effect.provide(BrowserCrypto.layer));
       yield* Deferred.succeed(ready, executor);
+      yield* Effect.forkScoped(deliverEvents(executor));
       // The schema is current and nothing serves or builds yet; the caller holds the data lock.
       yield* runStartupDataSteps({ executor, blobs }, "private_hosted");
       yield* Effect.forkScoped(

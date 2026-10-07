@@ -4,10 +4,17 @@ import * as BrowserCrypto from "@effect/platform-browser/BrowserCrypto";
 import { makeRegistryStorage } from "@executor-js/app-registry";
 import { clientMetadataSetting, hostedOAuthClientName } from "@executor-js/hosted-server";
 import { hostedResourceLifecycle } from "@executor-js/hosted-server/resource-lifecycle";
-import { createExecutor, StorageError, makeExecutorStorage } from "@executor-js/sdk/core";
+import {
+  createExecutor,
+  httpEventSender,
+  StorageError,
+  makeExecutorStorage,
+} from "@executor-js/sdk/core";
+import { hostedEventAuthority } from "@executor-js/hosted-server/events";
+import { SqlClient } from "effect/sql";
 import { makeExecutionMemo } from "alchemy/Runtime/ExecutionMemo";
 import * as Cloudflare from "alchemy/Cloudflare";
-import { Effect, FiberSet, Option } from "effect";
+import { Context, Effect, FiberSet, Option } from "effect";
 import { FetchHttpClient, HttpClient } from "effect/http";
 import { cachedDeploymentSources } from "../implementation/deployment-source-cache.ts";
 import type { AppSources } from "./source.ts";
@@ -106,6 +113,15 @@ export const cloudExecutor = Effect.fn(function* (
         // A tool listing nobody waits for runs until the event's background work ends, and is
         // remembered as timed out if it has not finished by then.
         background,
+        events: {
+          sender: httpEventSender(egress),
+          // The same event's client, which hosted permission checks already share.
+          authorize: hostedEventAuthority(
+            Effect.succeed(Context.get(services, SqlClient.SqlClient)),
+          ),
+          // Deployed Workers cannot reach loopback; the local development Worker can.
+          allowInsecureCallbacks: egress.policy.allowLoopbackHttp,
+        },
       }).pipe(Effect.provide(BrowserCrypto.layer));
     }).pipe(
       Effect.mapError(() => new StorageError()),

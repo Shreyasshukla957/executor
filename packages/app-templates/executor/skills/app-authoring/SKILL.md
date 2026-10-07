@@ -31,6 +31,7 @@ build through `execute`; source then travels as data inside tool calls.
 | Connect provider accounts and check they work                | [accounts.md](accounts.md)                             |
 | Add a service: MCP, OpenAPI, GraphQL or another API          | [integrations.md](integrations.md)                     |
 | Handle webhooks                                              | [webhooks.md](webhooks.md)                             |
+| Emit events that MCP clients such as ChatGPT subscribe to    | [events.md](events.md)                                 |
 | Run workflows or scheduled mutations                         | [workflows.md](workflows.md)                           |
 | Upgrade an app to a newer `apps` version                     | [upgrades/0.0.1-beta.38.md](upgrades/0.0.1-beta.38.md) |
 

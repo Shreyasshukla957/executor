@@ -85,6 +85,8 @@ export interface ExecutorInputs {
   readonly hooks?: ResourceLifecycle;
   readonly workflows?: WorkflowRuntime;
   readonly cache?: ExecutorCache;
+  /** Outbound delivery and authorization for app events. Without it, subscribing is unavailable. */
+  readonly events?: import("./events.ts").EventOptions;
   /**
    * Revalidates stale declarations and revokes deleted accounts' OAuth grants after the response.
    * Without it, stale declarations revalidate first and revocation runs inline.
@@ -192,6 +194,8 @@ export type Executor = Omit<
   readonly [RepositoryHost]: RepositoryHost;
   readonly [StorageHost]: StorageHost;
   readonly scheduler: import("./scheduler.ts").ScheduleDispatcher;
+  /** Host-only: products authorize every event operation before calling it. */
+  readonly events: import("./events.ts").ExecutorEvents;
 };
 
 type Promisify<T> = T extends (...args: infer Args) => Effect.Effect<infer A, infer _E, never>
@@ -207,5 +211,6 @@ export type PromiseExecutor = Promisify<
     | typeof RepositoryHost
     | typeof StorageHost
     | "scheduler"
+    | "events"
   >
 >;

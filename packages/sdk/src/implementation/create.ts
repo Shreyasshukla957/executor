@@ -15,7 +15,7 @@ import { makeWorkflowRuns } from "./workflows.ts";
 /** Compose native operations once for in-process and HTTP callers. */
 import { Crypto, Effect } from "effect";
 import type { Executor, ExecutorOptions, RemoteExecutorOptions } from "../contracts/executor.ts";
-import { CredentialsError, NotImplemented, StorageError, type AppId } from "../contracts/shared.ts";
+import { AppId, CredentialsError, NotImplemented, StorageError } from "../contracts/shared.ts";
 import { makeWebhooks } from "./webhooks.ts";
 import { makeAppData } from "./app-storage.ts";
 import { makeAccountConnections } from "./account-connections.ts";
@@ -32,6 +32,8 @@ import { database } from "./database.ts";
 import { makeOAuth } from "./oauth.ts";
 import { makeDeclarationCache, makeDeclarations } from "./declarations.ts";
 import { makeListings } from "./listings.ts";
+import { makeEvents } from "./events.ts";
+import { AppEventSink, RuntimeProtocolFailed, type Runtime } from "../contracts/runtime.ts";
 
 /** Capture host cryptography; caller owns database and platform resource lifetimes. */
 export const createExecutor = (
@@ -53,7 +55,29 @@ export const createExecutor = (
     );
     const toolListings = { ...defaultToolListingPolicy, ...options.cache?.toolListings };
     const cache = options.cache?.memory ?? makeDeclarationCache();
-    const runtime = toEffectRuntime(options.runtime, options.blobs, cache);
+    const events = makeEvents({
+      db,
+      credentials,
+      options: options.events,
+      background: options.background,
+    });
+    // Every invocation reports the events it emitted here, whichever operation started it.
+    const sink: typeof AppEventSink.Service = {
+      emitted: (input) =>
+        events
+          .record({ app: AppId.make(input.app), accounts: input.accounts, events: input.events })
+          .pipe(
+            Effect.tapError(() => Effect.logError("Emitted app events could not be saved")),
+            Effect.mapError(() => new RuntimeProtocolFailed({ reason: "data" })),
+          ),
+    };
+    const base = toEffectRuntime(options.runtime, options.blobs, cache);
+    const runtime: Runtime = {
+      ...base,
+      call: (input) => base.call(input).pipe(Effect.provideService(AppEventSink, sink)),
+      mutate: (input) => base.mutate(input).pipe(Effect.provideService(AppEventSink, sink)),
+      webhook: (input) => base.webhook(input).pipe(Effect.provideService(AppEventSink, sink)),
+    };
     const oauth = makeOAuth(
       db,
       credentials,
@@ -173,6 +197,7 @@ export const createExecutor = (
           ),
       },
       scheduler: schedules.dispatcher,
+      events,
       schedules: schedules.operations,
       accounts: {
         ...makeAccounts(db, credentials, crypto, options.hooks, oauth.revokeRemoved),

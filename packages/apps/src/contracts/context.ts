@@ -2,11 +2,19 @@
 import type { WorkflowControls } from "./workflows.ts";
 import type { AccountSlots, BoundContext } from "./app.ts";
 import type { Sql, SqlReader } from "./sql.ts";
+import type { AnyEventDeclaration, EventEmitter } from "../implementation/events.ts";
 
 /** Requirements are pure values; selected accounts and SQL access belong to invocations. */
 export interface AppRequirements {
   readonly accounts: AccountSlots;
+  /** Events this app emits, by name, such as `issue.opened`. */
+  readonly events?: Readonly<Record<string, AnyEventDeclaration>>;
 }
+
+/** The emitter for an app's declared events. */
+type EventsContext<Requirements extends AppRequirements> = {
+  readonly events: EventEmitter<NonNullable<Requirements["events"]>>;
+};
 
 /**
  * Every handler has `ctx.sql`. The app's database exists once the build has SQL files in
@@ -29,7 +37,8 @@ export type QueryContext<Requirements extends AppRequirements = AppRequirements>
 export type MutationContext<Requirements extends AppRequirements = AppRequirements> = Omit<
   AppContext<Requirements>,
   "workflows"
-> & { readonly workflows: WorkflowControls } & StorageContext<true>;
+> & { readonly workflows: WorkflowControls } & StorageContext<true> &
+  EventsContext<Requirements>;
 
 /** Background webhook context has account and storage access without interactive input. */
 export type WebhookContext<Requirements extends AppRequirements = AppRequirements> = Omit<

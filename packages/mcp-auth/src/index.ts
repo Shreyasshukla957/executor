@@ -12,6 +12,7 @@ export {
   mcpResourceMetadataUrl,
   GrantPolicy,
   grantAuthorization,
+  grantEventAccess,
   Grant,
   AppPermission,
   GrantForbidden,

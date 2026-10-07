@@ -27,6 +27,7 @@ import type { McpExecutionResult } from "../contracts/execute.ts";
 import { makeExecutions } from "./executions.ts";
 import { executeNative } from "./native-elicitation.ts";
 import { skills } from "./skills.ts";
+import { eventsHandler } from "./events.ts";
 
 // Observe the final protocol value after timeout, admission and resume handling.
 const observeExecution =
@@ -260,7 +261,10 @@ export const makeMcp = (options: McpOptions) =>
                     }),
                   ),
                 );
-        return yield* toolkit.pipe(
+        return yield* Layer.mergeAll(
+          toolkit,
+          McpServer.events(eventsHandler(options.backend)),
+        ).pipe(
           Layer.provide(
             McpServer.layerHttp({
               name: "Executor",

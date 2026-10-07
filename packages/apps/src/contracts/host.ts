@@ -54,6 +54,7 @@ export {
 } from "./elicitation.ts";
 export { McpClientLimits, defaultMcpClientLimits } from "./mcp.ts";
 export * from "./webhook-protocol.ts";
+export * from "./events.ts";
 
 export { AccountId, HttpUrl } from "./schema.ts";
 export {
@@ -78,6 +79,7 @@ export { protocol7, AccountCheckCommand, CredentialHost } from "./protocols/7.ts
 export { protocol8 } from "./protocols/8.ts";
 export { protocol9 } from "./protocols/9.ts";
 export { protocol10, MigrateCommand, MigrateResult } from "./protocols/10.ts";
+export { protocol11 } from "./protocols/11.ts";
 export { AccountCheckResult, AccountInfo } from "./provider.ts";
 import {
   HostAccountsInvalid,
@@ -100,13 +102,13 @@ import {
   ResolvedAccounts,
   type SkillCatalogResponse,
   type TrustedToolApproval,
-} from "./protocols/10.ts";
-export { DeclaredRequirements, HostRequest } from "./protocols/10.ts";
+} from "./protocols/11.ts";
+export { DeclaredRequirements, HostRequest } from "./protocols/11.ts";
 /**
  * The MCP and skill loader failures as they cross the host boundary. Apps throw the author-facing
  * classes from `apps/mcp` and `apps/skills`.
  */
-export { McpError, SkillLoadFailed } from "./protocols/10.ts";
+export { McpError, SkillLoadFailed } from "./protocols/11.ts";
 export {
   DeclaredAuthMethod,
   DeclaredProvider,
@@ -140,7 +142,7 @@ export {
   HostError,
   HostResponse,
   HostInvocation,
-} from "./protocols/10.ts";
+} from "./protocols/11.ts";
 /** Raw host inputs; the host boundary parses and redacts these immediately. */
 export type ResolvedAccountsInput = typeof ResolvedAccounts.Encoded;
 

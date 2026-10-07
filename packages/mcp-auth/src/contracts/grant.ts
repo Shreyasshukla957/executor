@@ -4,6 +4,8 @@ import {
   fullAuthority,
   selectedAuthority,
   type AuthorizationPolicy,
+  permitsApp,
+  eventAccess,
 } from "@executor-js/authorization";
 export { AppPermission } from "@executor-js/authorization";
 import { AppId, ProfileId, ToolName } from "@executor-js/sdk/core";
@@ -67,6 +69,8 @@ export const GrantRefusal = Schema.Union([
   }),
   /** The grant includes the app and how it runs, but not this tool. */
   Schema.Struct({ reason: Schema.Literal("tool"), app: AppId, tool: ToolName }),
+  /** The grant selects some of this app's events, and not the one requested. */
+  Schema.Struct({ reason: Schema.Literal("events"), app: AppId }),
 ]);
 export type GrantRefusal = typeof GrantRefusal.Type;
 
@@ -96,6 +100,14 @@ export const approvalRefusal = (
   target.mode !== "browser"
     ? { reason: "approval", mode: target.mode }
     : undefined;
+/**
+ * Where one of an app's events may reach a grant with this policy, or undefined when it no
+ * longer may. See `eventAccess`.
+ */
+export const grantEventAccess = (policy: GrantPolicy, app: AppId, event: string) => {
+  const authority = grantAuthorization(policy);
+  return permitsApp(authority, app) ? eventAccess(authority, app, event) : undefined;
+};
 /**
  * Why an issued grant cannot serve this MCP URL, or undefined when it can. A grant cannot
  * change mode or connection by changing the request URL.
@@ -194,6 +206,15 @@ const refusalPresentation = (refusal: GrantRefusal): ErrorPresentation =>
           action:
             "Use a tool the grant includes, or add this tool to its connection or grant, then retry.",
           instructions: `An MCP grant, or its connection, selects each app's tools by exact name, as all tools, or as read-only tools only; a read-only selection excludes every tool not marked read-only. Check whether this tool should be available to the client. If so, change the connection's tool selection, or connect again and include the tool, then verify that the call succeeds. ${notBypassed}`,
+        },
+      }),
+      events: ({ app }) => ({
+        title: "Events not included",
+        description: `This credential’s grant does not include this event of the app ${app}.`,
+        recovery: {
+          action:
+            "Add this event to the app's event selection in this connection or grant, then retry.",
+          instructions: `An MCP grant, or its connection, selects each app's events as all events or by exact name, beside its tools. Check whether this client should receive the event. If so, change the connection's event selection for the app, or connect again with it, then verify that events/list includes it. ${notBypassed}`,
         },
       }),
     }),

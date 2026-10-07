@@ -12,6 +12,7 @@ export * from "./owner.ts";
 export * from "./tools.ts";
 export * from "./app-data.ts";
 export * from "./webhooks.ts";
+export * from "./events.ts";
 export * from "./webhook-setup.ts";
 export * from "./http.ts";
 export * from "./executor.ts";

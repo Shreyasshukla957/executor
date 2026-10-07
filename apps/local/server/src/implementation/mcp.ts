@@ -24,9 +24,17 @@ import {
 } from "@executor-js/sdk/core";
 import { Context, Effect, Redacted } from "effect";
 
-/** The local bearer key authorizes the whole instance. No hosted owner or role model is imposed. */
-export const localMcpBackend = (executor: Executor) =>
+/**
+ * The local bearer key authorizes the whole instance. No hosted owner or role model is imposed.
+ * Event subscriptions belong to `principal`, the grant that made them.
+ */
+export const localMcpBackend = (executor: Executor, principal: string) =>
   ({
+    eventDefinitions: (input) => executor.events.definitions(input),
+    findEventSubscription: (key) => executor.events.find({ ...key, principal }),
+    subscribeEvent: ({ key, ...input }) =>
+      executor.events.subscribe({ ...input, key: { ...key, principal }, subject: principal }),
+    unsubscribeEvent: ({ key }) => executor.events.unsubscribe({ ...key, principal }),
     listSkills: (input) => executor.skills.list(input),
     readSkill: (input) => executor.skills.read(input),
     authorizeElicitation: () => Effect.void,
@@ -64,6 +72,10 @@ export const localMcp = (
         callTool: () => Effect.fail(new LocalMcpUnauthorized()),
         resumeInvocation: () => Effect.fail(new LocalMcpUnauthorized()),
         authorizeElicitation: () => Effect.fail(new ElicitationFailed({ reason: "forbidden" })),
+        eventDefinitions: () => Effect.fail(new LocalMcpUnauthorized()),
+        findEventSubscription: () => Effect.fail(new LocalMcpUnauthorized()),
+        subscribeEvent: () => Effect.fail(new LocalMcpUnauthorized()),
+        unsubscribeEvent: () => Effect.fail(new LocalMcpUnauthorized()),
       }),
     });
     const Caller = Context.Reference<string | undefined>("local/McpCaller", {
@@ -98,6 +110,13 @@ export const localMcp = (
           Effect.flatMap(RequestBackend, (b) => b.resumeInvocation(request, response, options)),
         authorizeElicitation: (input) =>
           Effect.flatMap(RequestBackend, (b) => b.authorizeElicitation(input)),
+        eventDefinitions: (input) =>
+          Effect.flatMap(RequestBackend, (b) => b.eventDefinitions(input)),
+        findEventSubscription: (key) =>
+          Effect.flatMap(RequestBackend, (b) => b.findEventSubscription(key)),
+        subscribeEvent: (input) => Effect.flatMap(RequestBackend, (b) => b.subscribeEvent(input)),
+        unsubscribeEvent: (input) =>
+          Effect.flatMap(RequestBackend, (b) => b.unsubscribeEvent(input)),
       },
       caller,
       instructions: executorIntro,
@@ -124,7 +143,10 @@ export const localMcp = (
         return grant;
       });
       const grant = yield* current;
-      const backend = restrictMcpBackend<Error, Error>(localMcpBackend(executor), current);
+      const backend = restrictMcpBackend<Error, Error>(
+        localMcpBackend(executor, grant.id),
+        current,
+      );
       return yield* host.http.pipe(
         Effect.provideService(RequestBackend, backend),
         Effect.provideService(Caller, grant.id),

@@ -22,6 +22,8 @@ import type { MigrateResult } from "../contracts/protocols/10.ts";
 
 /** The receipt table of workflow step mutations. */
 const receipts = `${reservedTablePrefix}step_receipts`;
+/** The events a step's transaction emitted, restored when a retry replays its receipt. */
+const stepEvents = `${reservedTablePrefix}step_events`;
 /** Applied migrations: their order, file name and content hash. */
 const migrationsTable = `${reservedTablePrefix}migrations`;
 /**
@@ -121,6 +123,11 @@ export const authorSql = (
   options: {
     readonly signal: AbortSignal;
     readonly step?: StepReplay;
+    /**
+     * The invocation's emitted events. A transaction that rolls back also discards the events its
+     * callback emitted, so subscribers never hear of writes that did not commit.
+     */
+    readonly emitted?: unknown[];
   },
 ) => {
   let closed = false;
@@ -242,7 +249,12 @@ export const authorSql = (
     transactions += 1;
     violation = undefined;
     const handle = transactionHandle();
-    return storage.transactionSync(() => {
+    const emittedBefore = options.emitted?.length;
+    const discardEmitted = () => {
+      if (options.emitted !== undefined && emittedBefore !== undefined)
+        options.emitted.length = emittedBefore;
+    };
+    const body = () => {
       open = true;
       try {
         const complete = () => {
@@ -264,13 +276,29 @@ export const authorSql = (
         const saved = storage.sql
           .exec(`SELECT fingerprint, result FROM ${receipts} WHERE id = ?`, step.key)
           .toArray()[0];
+        storage.sql.exec(
+          `CREATE TABLE IF NOT EXISTS ${stepEvents} (id TEXT PRIMARY KEY, events TEXT NOT NULL) WITHOUT ROWID`,
+        );
         if (saved !== undefined) {
           if (saved.fingerprint !== step.fingerprint)
             throw new Error("This workflow step already ran with different input.");
+          // A retry after its events could not be saved emits them again, with their IDs.
+          const replayed = storage.sql
+            .exec(`SELECT events FROM ${stepEvents} WHERE id = ?`, step.key)
+            .toArray()[0];
+          if (replayed !== undefined && options.emitted !== undefined)
+            options.emitted.push(...(JSON.parse(String(replayed.events)) as unknown[]));
           // SAFETY: the receipt holds what this transaction returned, encoded below.
           return JSON.parse(String(saved.result)) as T;
         }
         const encoded = JSON.stringify(complete() ?? null);
+        const emitted = options.emitted?.slice(emittedBefore ?? 0) ?? [];
+        if (emitted.length > 0)
+          storage.sql.exec(
+            `INSERT INTO ${stepEvents} (id, events) VALUES (?, ?)`,
+            step.key,
+            JSON.stringify(emitted),
+          );
         storage.sql.exec(
           `INSERT INTO ${receipts} (id, fingerprint, result) VALUES (?, ?, ?)`,
           step.key,
@@ -284,7 +312,14 @@ export const authorSql = (
         open = false;
         handle.end();
       }
-    });
+    };
+    // A failure anywhere, including at commit, rolls back the writes and the events with them.
+    try {
+      return storage.transactionSync(body);
+    } catch (error) {
+      discardEmitted();
+      throw error;
+    }
   };
   const writer: Sql = {
     // A step's writes go through its one transaction, which also records its receipt.

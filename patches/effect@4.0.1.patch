@@ -83,8 +83,402 @@ index 4bb8146..dfb763b 100644
        context.reference(out, rewriteOpenApiComponentsReference(source.$ref));
        return out;
      }
+diff --git a/dist/ai/McpSchema.d.ts b/dist/ai/McpSchema.d.ts
+index 40565fd..62f7a1f 100644
+--- a/dist/ai/McpSchema.d.ts
++++ b/dist/ai/McpSchema.d.ts
+@@ -4433,5 +4433,204 @@ declare const EnabledWhen_base: Context.ServiceClass<EnabledWhen, "effect/ai/Mcp
+  */
+ export declare class EnabledWhen extends EnabledWhen_base {
+ }
++/**
++ * JSON-RPC error code for a referenced entity that does not exist, such as an unknown
++ * event name. Defined by the draft MCP events extension.
++ *
++ * @stability unstable
++ * @category constants
++ * @since 4.0.0
++ */
++export declare const NOT_FOUND_ERROR_CODE: -32011;
++/**
++ * JSON-RPC error code for a principal that may not use this event or arguments. Defined
++ * by the draft MCP events extension.
++ *
++ * @stability unstable
++ * @category constants
++ * @since 4.0.0
++ */
++export declare const FORBIDDEN_ERROR_CODE: -32012;
++/**
++ * JSON-RPC error code for a server-imposed limit, such as the number of subscriptions.
++ * Defined by the draft MCP events extension.
++ *
++ * @stability unstable
++ * @category constants
++ * @since 4.0.0
++ */
++export declare const RESOURCE_EXHAUSTED_ERROR_CODE: -32013;
++/**
++ * JSON-RPC error code for a well-formed request that asks for an unsupported option, such
++ * as a delivery mode the event does not offer. Defined by the draft MCP events extension.
++ *
++ * @stability unstable
++ * @category constants
++ * @since 4.0.0
++ */
++export declare const UNSUPPORTED_ERROR_CODE: -32014;
++/**
++ * JSON-RPC error code for a webhook callback that failed verification or could not be
++ * reached. `data.reason` names the category. Defined by the draft MCP events extension.
++ *
++ * @stability unstable
++ * @category constants
++ * @since 4.0.0
++ */
++export declare const CALLBACK_ENDPOINT_ERROR_CODE: -32015;
++/**
++ * How a client receives an event's occurrences.
++ *
++ * @stability unstable
++ * @category events
++ * @since 4.0.0
++ */
++export declare const EventDeliveryMode: Schema.Literals<readonly ["poll", "push", "webhook"]>;
++/**
++ * An event type a server offers: its subscription arguments, payload shape, and the delivery
++ * modes it supports.
++ *
++ * @stability unstable
++ * @category events
++ * @since 4.0.0
++ */
++export declare const EventDefinition: Schema.Struct<{
++    readonly name: Schema.String;
++    readonly title: Schema.decodeTo<Schema.toType<Schema.optional<Schema.String>>, Schema.optionalKey<Schema.String>, never, never>;
++    readonly description: Schema.decodeTo<Schema.toType<Schema.optional<Schema.String>>, Schema.optionalKey<Schema.String>, never, never>;
++    readonly delivery: Schema.$Array<Schema.Literals<readonly ["poll", "push", "webhook"]>>;
++    readonly inputSchema: Schema.$Record<Schema.String, Schema.Codec<Schema.Json, Schema.Json, never, never>>;
++    readonly payloadSchema: Schema.decodeTo<Schema.toType<Schema.optional<Schema.$Record<Schema.String, Schema.Codec<Schema.Json, Schema.Json, never, never>>>>, Schema.optionalKey<Schema.$Record<Schema.String, Schema.Codec<Schema.Json, Schema.Json, never, never>>>, never, never>;
++    readonly _meta: Schema.decodeTo<Schema.toType<Schema.optional<Schema.$Record<Schema.String, Schema.Codec<Schema.Json, Schema.Json, never, never>>>>, Schema.optionalKey<Schema.$Record<Schema.String, Schema.Codec<Schema.Json, Schema.Json, never, never>>>, never, never>;
++}>;
++/**
++ * @stability unstable
++ * @category events
++ * @since 4.0.0
++ */
++export type EventDefinition = typeof EventDefinition.Type;
++/**
++ * One page of `events/list`.
++ *
++ * @stability unstable
++ * @category events
++ * @since 4.0.0
++ */
++export declare const ListEventsResult: Schema.Struct<{
++    readonly events: Schema.$Array<Schema.Struct<{
++        readonly name: Schema.String;
++        readonly title: Schema.decodeTo<Schema.toType<Schema.optional<Schema.String>>, Schema.optionalKey<Schema.String>, never, never>;
++        readonly description: Schema.decodeTo<Schema.toType<Schema.optional<Schema.String>>, Schema.optionalKey<Schema.String>, never, never>;
++        readonly delivery: Schema.$Array<Schema.Literals<readonly ["poll", "push", "webhook"]>>;
++        readonly inputSchema: Schema.$Record<Schema.String, Schema.Codec<Schema.Json, Schema.Json, never, never>>;
++        readonly payloadSchema: Schema.decodeTo<Schema.toType<Schema.optional<Schema.$Record<Schema.String, Schema.Codec<Schema.Json, Schema.Json, never, never>>>>, Schema.optionalKey<Schema.$Record<Schema.String, Schema.Codec<Schema.Json, Schema.Json, never, never>>>, never, never>;
++        readonly _meta: Schema.decodeTo<Schema.toType<Schema.optional<Schema.$Record<Schema.String, Schema.Codec<Schema.Json, Schema.Json, never, never>>>>, Schema.optionalKey<Schema.$Record<Schema.String, Schema.Codec<Schema.Json, Schema.Json, never, never>>>, never, never>;
++    }>>;
++    readonly nextCursor: Schema.decodeTo<Schema.toType<Schema.optional<Schema.String>>, Schema.optionalKey<Schema.String>, never, never>;
++}>;
++/**
++ * @stability unstable
++ * @category events
++ * @since 4.0.0
++ */
++export type ListEventsResult = typeof ListEventsResult.Type;
++/**
++ * An `events/list` request.
++ *
++ * @stability unstable
++ * @category events
++ * @since 4.0.0
++ */
++export declare const ListEventsParams: Schema.Struct<{
++    readonly cursor: Schema.decodeTo<Schema.toType<Schema.optional<Schema.String>>, Schema.optionalKey<Schema.String>, never, never>;
++}>;
++/**
++ * @stability unstable
++ * @category events
++ * @since 4.0.0
++ */
++export type ListEventsParams = typeof ListEventsParams.Type;
++/**
++ * Where a webhook subscription delivers. The secret is a Standard Webhooks `whsec_` value
++ * supplied by the client.
++ *
++ * @stability unstable
++ * @category events
++ * @since 4.0.0
++ */
++export declare const WebhookEventDelivery: Schema.Struct<{
++    readonly mode: Schema.Literal<"webhook">;
++    readonly url: Schema.String;
++    readonly secret: Schema.String;
++}>;
++/**
++ * An `events/subscribe` request. The same principal, URL, name and arguments address the same
++ * subscription; repeating the request refreshes it.
++ *
++ * @stability unstable
++ * @category events
++ * @since 4.0.0
++ */
++export declare const SubscribeEventParams: Schema.Struct<{
++    readonly name: Schema.String;
++    readonly arguments: Schema.decodeTo<Schema.toType<Schema.optional<Schema.$Record<Schema.String, Schema.Codec<Schema.Json, Schema.Json, never, never>>>>, Schema.optionalKey<Schema.$Record<Schema.String, Schema.Codec<Schema.Json, Schema.Json, never, never>>>, never, never>;
++    readonly delivery: Schema.Struct<{
++        readonly mode: Schema.Literal<"webhook">;
++        readonly url: Schema.String;
++        readonly secret: Schema.String;
++    }>;
++    readonly cursor: Schema.decodeTo<Schema.toType<Schema.optional<Schema.NullOr<Schema.String>>>, Schema.optionalKey<Schema.NullOr<Schema.String>>, never, never>;
++    readonly maxAgeMs: Schema.decodeTo<Schema.toType<Schema.optional<Schema.Int>>, Schema.optionalKey<Schema.Int>, never, never>;
++    readonly ttlMs: Schema.decodeTo<Schema.toType<Schema.optional<Schema.NullOr<Schema.Int>>>, Schema.optionalKey<Schema.NullOr<Schema.Int>>, never, never>;
++}>;
++/**
++ * @stability unstable
++ * @category events
++ * @since 4.0.0
++ */
++export type SubscribeEventParams = typeof SubscribeEventParams.Type;
++/**
++ * The server's grant for an `events/subscribe` request. `refreshBefore` is an ISO 8601 time, or
++ * `null` when the subscription does not expire.
++ *
++ * @stability unstable
++ * @category events
++ * @since 4.0.0
++ */
++export declare const SubscribeEventResult: Schema.Struct<{
++    readonly id: Schema.String;
++    readonly refreshBefore: Schema.NullOr<Schema.String>;
++    readonly cursor: Schema.NullOr<Schema.String>;
++    readonly truncated: Schema.decodeTo<Schema.toType<Schema.optional<Schema.Boolean>>, Schema.optionalKey<Schema.Boolean>, never, never>;
++    readonly deliveryStatus: Schema.decodeTo<Schema.toType<Schema.optional<Schema.$Record<Schema.String, Schema.Codec<Schema.Json, Schema.Json, never, never>>>>, Schema.optionalKey<Schema.$Record<Schema.String, Schema.Codec<Schema.Json, Schema.Json, never, never>>>, never, never>;
++}>;
++/**
++ * @stability unstable
++ * @category events
++ * @since 4.0.0
++ */
++export type SubscribeEventResult = typeof SubscribeEventResult.Type;
++/**
++ * An `events/unsubscribe` request. It names the subscription by the same key as
++ * `events/subscribe`, without the secret.
++ *
++ * @stability unstable
++ * @category events
++ * @since 4.0.0
++ */
++export declare const UnsubscribeEventParams: Schema.Struct<{
++    readonly name: Schema.String;
++    readonly arguments: Schema.decodeTo<Schema.toType<Schema.optional<Schema.$Record<Schema.String, Schema.Codec<Schema.Json, Schema.Json, never, never>>>>, Schema.optionalKey<Schema.$Record<Schema.String, Schema.Codec<Schema.Json, Schema.Json, never, never>>>, never, never>;
++    readonly delivery: Schema.Struct<{
++        readonly mode: Schema.Literal<"webhook">;
++        readonly url: Schema.String;
++    }>;
++}>;
++/**
++ * @stability unstable
++ * @category events
++ * @since 4.0.0
++ */
++export type UnsubscribeEventParams = typeof UnsubscribeEventParams.Type;
+ export {};
+ //# sourceMappingURL=McpSchema.d.ts.map
+\ No newline at end of file
+diff --git a/dist/ai/McpSchema.js b/dist/ai/McpSchema.js
+index 615a9f9..7874d1c 100644
+--- a/dist/ai/McpSchema.js
++++ b/dist/ai/McpSchema.js
+@@ -2563,4 +2563,133 @@ export function param(name, schema) {
+  * @since 4.0.0
+  */
+ export class EnabledWhen extends /*#__PURE__*/Context.Service()("effect/ai/McpSchema/EnabledWhen") {}
++// =============================================================================
++// Events
++// =============================================================================
++/**
++ * JSON-RPC error code for a referenced entity that does not exist, such as an unknown
++ * event name. Defined by the draft MCP events extension.
++ *
++ * @stability unstable
++ * @category constants
++ * @since 4.0.0
++ */
++export const NOT_FOUND_ERROR_CODE = -32011;
++/**
++ * JSON-RPC error code for a principal that may not use this event or arguments.
++ *
++ * @stability unstable
++ * @category constants
++ * @since 4.0.0
++ */
++export const FORBIDDEN_ERROR_CODE = -32012;
++/**
++ * JSON-RPC error code for a server-imposed limit.
++ *
++ * @stability unstable
++ * @category constants
++ * @since 4.0.0
++ */
++export const RESOURCE_EXHAUSTED_ERROR_CODE = -32013;
++/**
++ * JSON-RPC error code for a well-formed request that asks for an unsupported option.
++ *
++ * @stability unstable
++ * @category constants
++ * @since 4.0.0
++ */
++export const UNSUPPORTED_ERROR_CODE = -32014;
++/**
++ * JSON-RPC error code for a webhook callback that failed verification or could not be reached.
++ *
++ * @stability unstable
++ * @category constants
++ * @since 4.0.0
++ */
++export const CALLBACK_ENDPOINT_ERROR_CODE = -32015;
++/**
++ * @stability unstable
++ * @category events
++ * @since 4.0.0
++ */
++export const EventDeliveryMode = /*#__PURE__*/Schema.Literals(["poll", "push", "webhook"]);
++/**
++ * @stability unstable
++ * @category events
++ * @since 4.0.0
++ */
++export const EventDefinition = /*#__PURE__*/Schema.Struct({
++  name: Schema.String,
++  title: /*#__PURE__*/optional(Schema.String),
++  description: /*#__PURE__*/optional(Schema.String),
++  delivery: /*#__PURE__*/Schema.Array(EventDeliveryMode),
++  inputSchema: Schema.JsonObject,
++  payloadSchema: /*#__PURE__*/optional(Schema.JsonObject),
++  _meta: /*#__PURE__*/optional(Schema.JsonObject)
++});
++/**
++ * @stability unstable
++ * @category events
++ * @since 4.0.0
++ */
++export const ListEventsResult = /*#__PURE__*/Schema.Struct({
++  events: /*#__PURE__*/Schema.Array(EventDefinition),
++  nextCursor: /*#__PURE__*/optional(Schema.String)
++});
++/**
++ * @stability unstable
++ * @category events
++ * @since 4.0.0
++ */
++export const ListEventsParams = /*#__PURE__*/Schema.Struct({
++  cursor: /*#__PURE__*/optional(Schema.String)
++});
++/**
++ * @stability unstable
++ * @category events
++ * @since 4.0.0
++ */
++export const WebhookEventDelivery = /*#__PURE__*/Schema.Struct({
++  mode: /*#__PURE__*/Schema.Literal("webhook"),
++  url: Schema.String,
++  secret: Schema.String
++});
++/**
++ * @stability unstable
++ * @category events
++ * @since 4.0.0
++ */
++export const SubscribeEventParams = /*#__PURE__*/Schema.Struct({
++  name: Schema.String,
++  arguments: /*#__PURE__*/optional(/*#__PURE__*/Schema.Record(Schema.String, Schema.Json)),
++  delivery: WebhookEventDelivery,
++  cursor: /*#__PURE__*/optional(/*#__PURE__*/Schema.NullOr(Schema.String)),
++  maxAgeMs: /*#__PURE__*/optional(Schema.Int),
++  ttlMs: /*#__PURE__*/optional(/*#__PURE__*/Schema.NullOr(Schema.Int))
++});
++/**
++ * @stability unstable
++ * @category events
++ * @since 4.0.0
++ */
++export const SubscribeEventResult = /*#__PURE__*/Schema.Struct({
++  id: Schema.String,
++  refreshBefore: /*#__PURE__*/Schema.NullOr(Schema.String),
++  cursor: /*#__PURE__*/Schema.NullOr(Schema.String),
++  truncated: /*#__PURE__*/optional(Schema.Boolean),
++  deliveryStatus: /*#__PURE__*/optional(Schema.JsonObject)
++});
++/**
++ * @stability unstable
++ * @category events
++ * @since 4.0.0
++ */
++export const UnsubscribeEventParams = /*#__PURE__*/Schema.Struct({
++  name: Schema.String,
++  arguments: /*#__PURE__*/optional(/*#__PURE__*/Schema.Record(Schema.String, Schema.Json)),
++  delivery: /*#__PURE__*/Schema.Struct({
++    mode: /*#__PURE__*/Schema.Literal("webhook"),
++    url: Schema.String
++  })
++});
+ //# sourceMappingURL=McpSchema.js.map
+\ No newline at end of file
+diff --git a/dist/ai/McpServer.d.ts b/dist/ai/McpServer.d.ts
+index 63727e7..79bf387 100644
+--- a/dist/ai/McpServer.d.ts
++++ b/dist/ai/McpServer.d.ts
+@@ -315,6 +315,40 @@ export declare const registerToolkit: <Tools extends Record<string, Tool.Any>>(t
+  * @since 4.0.0
+  */
+ export declare const toolkit: <Tools extends Record<string, Tool.Any>>(toolkit: Toolkit.Toolkit<Tools>) => Layer.Layer<never, never, Tool.HandlersFor<Tools> | Exclude<Tool.HandlerServices<Tools>, McpRequestContext>>;
++/**
++ * Handlers for the draft MCP events extension: listing event types and managing webhook
++ * subscriptions. Each handler runs with the request's `McpRequestContext`, so it can
++ * authorize the principal that sent it. Failures are MCP errors and reach the client
++ * unchanged, such as `CALLBACK_ENDPOINT_ERROR_CODE` with `data.reason`.
++ *
++ * Only protocols that define events serve these methods; currently `2026-07-28`.
++ *
++ * @stability unstable
++ * @category events
++ * @since 4.0.0
++ */
++export interface EventsHandler<R = never> {
++    readonly list: (request: McpSchema.ListEventsParams) => Effect.Effect<McpSchema.ListEventsResult, McpSchema.McpError, R>;
++    readonly subscribe: (request: McpSchema.SubscribeEventParams) => Effect.Effect<McpSchema.SubscribeEventResult, McpSchema.McpError, R>;
++    readonly unsubscribe: (request: McpSchema.UnsubscribeEventParams) => Effect.Effect<void, McpSchema.McpError, R>;
++}
++/**
++ * Registers the server's events handlers. The server then advertises the `events`
++ * capability and serves `events/list`, `events/subscribe` and `events/unsubscribe`.
++ *
++ * @stability unstable
++ * @category events
++ * @since 4.0.0
++ */
++export declare const registerEvents: <R>(handler: EventsHandler<R>) => Effect.Effect<void, never, McpServer | Exclude<R, McpRequestContext>>;
++/**
++ * Registers events handlers as a layer, like `toolkit` does for tools.
++ *
++ * @stability unstable
++ * @category events
++ * @since 4.0.0
++ */
++export declare const events: <R>(handler: EventsHandler<R>) => Layer.Layer<never, never, Exclude<R, McpRequestContext>>;
+ /**
+  * Utility type that validates a completion-handler record against the allowed
+  * parameter keys.
 diff --git a/dist/ai/McpServer.js b/dist/ai/McpServer.js
-index 2da594107273980144e84ab9b53636ef34043f6b..aab5f7c8bcbe4822337b393cdc5c23db9475f498 100644
+index 2da5941..eab5665 100644
 --- a/dist/ai/McpServer.js
 +++ b/dist/ai/McpServer.js
 @@ -423,8 +423,15 @@ export class McpServer extends /*#__PURE__*/Context.Service()("effect/ai/McpServ
@@ -273,6 +667,154 @@ index 2da594107273980144e84ab9b53636ef34043f6b..aab5f7c8bcbe4822337b393cdc5c23db
  const mcpMediaTypes = header => header === undefined ? [] : header.split(",").flatMap(part => {
    const [mediaType, ...parameters] = part.split(";");
    const quality = parameters.map(parameter => parameter.trim().toLowerCase()).find(parameter => parameter.startsWith("q="));
+@@ -1400,6 +1449,32 @@ const toolJsonSchema = (schema, strict) => {
+  * @since 4.0.0
+  */
+ export const toolkit = toolkit => Layer.effectDiscard(registerToolkit(toolkit)).pipe(Layer.provide(McpServer.layer));
++/**
++ * Registers the server's events handlers. The server then advertises the `events`
++ * capability and serves `events/list`, `events/subscribe` and `events/unsubscribe`.
++ *
++ * @stability unstable
++ * @category events
++ * @since 4.0.0
++ */
++export const registerEvents = handler => Effect.gen(function* () {
++  const server = yield* McpServer;
++  const services = omitRequestServices(yield* Effect.context());
++  const run = (effect, invocation) => provideInvocationContext(effect, invocation).pipe(Effect.provideContext(services));
++  yield* internalState.get(server).core.events.register({
++    list: (request, invocation) => run(handler.list(request), invocation),
++    subscribe: (request, invocation) => run(handler.subscribe(request), invocation),
++    unsubscribe: (request, invocation) => run(handler.unsubscribe(request), invocation)
++  });
++});
++/**
++ * Registers events handlers as a layer, like `toolkit` does for tools.
++ *
++ * @stability unstable
++ * @category events
++ * @since 4.0.0
++ */
++export const events = handler => Layer.effectDiscard(registerEvents(handler)).pipe(Layer.provide(McpServer.layer));
+ /**
+  * Registers an MCP resource or resource template from an Effect program.
+  *
+diff --git a/dist/ai/Toolkit.js b/dist/ai/Toolkit.js
+index 31c84bb..6ef5ff2 100644
+--- a/dist/ai/Toolkit.js
++++ b/dist/ai/Toolkit.js
+@@ -101,9 +101,9 @@ const Proto = {
+       };
+       const handle = Effect.fnUntraced(function* (name, params, toolCallId, options) {
+         const tool = Object.hasOwn(tools, name) ? tools[name] : undefined;
++        // Tool arguments are caller content; spans record only the tool name.
+         yield* Effect.annotateCurrentSpan({
+-          tool: name,
+-          parameters: params
++          tool: name
+         });
+         if (Predicate.isUndefined(tool)) {
+           return yield* AiError.make({
+diff --git a/dist/ai/internal/mcpCore.js b/dist/ai/internal/mcpCore.js
+index 063320c..8f089b7 100644
+--- a/dist/ai/internal/mcpCore.js
++++ b/dist/ai/internal/mcpCore.js
+@@ -168,16 +168,25 @@ export const make = /*#__PURE__*/Effect.sync(() => {
+       };
+     })
+   };
++  let eventsHandler;
++  const events = {
++    register: handler => Effect.sync(() => {
++      eventsHandler = handler;
++    }),
++    current: /*#__PURE__*/Effect.sync(() => eventsHandler)
++  };
+   const registrationPresence = Effect.sync(() => ({
+     tools: registrations.size > 0,
+     resources: resourceRegistrations.length > 0 || resourceTemplateRegistrations.length > 0,
+-    prompts: promptRegistrations.size > 0
++    prompts: promptRegistrations.size > 0,
++    events: eventsHandler !== undefined
+   }));
+   return {
+     tools,
+     resources,
+     prompts,
+     completions,
++    events,
+     registrationPresence
+   };
+ });
+diff --git a/dist/ai/internal/mcpProtocol/v2026_07_28.js b/dist/ai/internal/mcpProtocol/v2026_07_28.js
+index 0161147..e83835d 100644
+--- a/dist/ai/internal/mcpProtocol/v2026_07_28.js
++++ b/dist/ai/internal/mcpProtocol/v2026_07_28.js
+@@ -219,6 +219,14 @@ export const makeHandlers = (core, _lifecycle, context) => {
+   const decodePromptOutcome = Schema.decodeUnknownEffect(Schema.Union([McpSchema.GetPromptResult, McpSchema.InputRequiredResult]));
+   const decodeCompleteResult = Schema.decodeUnknownEffect(McpSchema.CompleteResult);
+   const decodeListToolsResult = Schema.decodeUnknownEffect(McpSchema.ListToolsResult);
++  const decodeListEventsResult = Schema.decodeUnknownEffect(McpSchema.ListEventsResult);
++  const decodeSubscribeEventResult = Schema.decodeUnknownEffect(McpSchema.SubscribeEventResult);
++  const decodeUnsubscribeEventResult = Schema.decodeUnknownEffect(McpSchema.UnsubscribeEventResult);
++  // Events are reachable only once a handler is registered, like a capability the server lacks.
++  const eventsHandler = Effect.flatMap(core.events.current, handler => handler === undefined ? failWithHttpStatus(404, new McpProtocol.ProtocolError({
++    code: PublicMcpSchema.METHOD_NOT_FOUND_ERROR_CODE,
++    message: "Method not found"
++  })) : Effect.succeed(handler));
+   const sendNotification = context.sendNotification;
+   const supportsSubscriptions = sendNotification !== undefined;
+   // Older adapters accept arbitrary JSON; this binding requires extension settings objects.
+@@ -241,6 +249,7 @@ export const makeHandlers = (core, _lifecycle, context) => {
+     if (presence.prompts) capabilities.prompts = {
+       listChanged: supportsSubscriptions
+     };
++    if (presence.events) capabilities.events = {};
+     return {
+       supportedVersions: context.supportedVersions,
+       capabilities,
+@@ -535,6 +544,40 @@ export const makeHandlers = (core, _lifecycle, context) => {
+         _meta: toolResult._meta
+       }), context.serverInfo);
+     }, Effect.mapError(projectError)),
++    "events/list": Effect.fnUntraced(function* (request) {
++      const handler = yield* eventsHandler;
++      const invocation = yield* getInvocation;
++      const page = yield* handler.list(omitUndefined({
++        cursor: request.cursor
++      }), invocation);
++      const result = yield* projectCompleteResult({
++        events: page.events.map(event => omitUndefined(event)),
++        nextCursor: page.nextCursor
++      }, context.serverInfo);
++      return yield* decodeListEventsResult(result);
++    }, Effect.mapError(projectError)),
++    "events/subscribe": Effect.fnUntraced(function* (request) {
++      const handler = yield* eventsHandler;
++      const invocation = yield* getInvocation;
++      const {
++        _meta: _,
++        ...params
++      } = request;
++      const granted = yield* handler.subscribe(PublicMcpSchema.SubscribeEventParams.make(omitUndefined(params)), invocation);
++      const result = yield* projectCompleteResult(granted, context.serverInfo);
++      return yield* decodeSubscribeEventResult(result);
++    }, Effect.mapError(projectError)),
++    "events/unsubscribe": Effect.fnUntraced(function* (request) {
++      const handler = yield* eventsHandler;
++      const invocation = yield* getInvocation;
++      const {
++        _meta: _,
++        ...params
++      } = request;
++      yield* handler.unsubscribe(PublicMcpSchema.UnsubscribeEventParams.make(omitUndefined(params)), invocation);
++      const result = yield* projectCompleteResult({}, context.serverInfo);
++      return yield* decodeUnsubscribeEventResult(result);
++    }, Effect.mapError(projectError)),
+     "notifications/cancelled": Effect.fnUntraced(function* (_request) {
+       return yield* Effect.void;
+     })
 diff --git a/dist/ai/internal/mcpRuntime.js b/dist/ai/internal/mcpRuntime.js
 index 06370fd..c04af48 100644
 --- a/dist/ai/internal/mcpRuntime.js
@@ -392,6 +934,125 @@ index 06370fd..c04af48 100644
        }
        if (isRequest && admission.protocol?.runtime._tag === "Stateless" && !(admission.protocol.handlerRpcs?.requests.has(input.method) ?? admission.protocol.clientRpcs.requests.has(input.method))) {
          return reject(404, new PublicMcpSchema.MethodNotFound({
+diff --git a/dist/ai/internal/mcpSchema/v2026_07_28.js b/dist/ai/internal/mcpSchema/v2026_07_28.js
+index 5f32a89..c35f862 100644
+--- a/dist/ai/internal/mcpSchema/v2026_07_28.js
++++ b/dist/ai/internal/mcpSchema/v2026_07_28.js
+@@ -67,6 +67,9 @@ export const ServerCapabilities = /*#__PURE__*/Schema.StructWithRest(/*#__PURE__
+   tools: /*#__PURE__*/optional(/*#__PURE__*/Schema.Struct({
+     listChanged: /*#__PURE__*/optional(Schema.Boolean)
+   })),
++  events: /*#__PURE__*/optional(/*#__PURE__*/Schema.Struct({
++    listChanged: /*#__PURE__*/optional(Schema.Boolean)
++  })),
+   extensions: /*#__PURE__*/optional(/*#__PURE__*/Schema.Record(Schema.String, Schema.JsonObject))
+ }), [Schema.JsonObject]);
+ /**
+@@ -724,7 +727,88 @@ export class SubscriptionsAcknowledgedNotification extends /*#__PURE__*/Rpc.make
+ /**
+  * @internal
+  */
+-export class ClientRequestRpcs extends /*#__PURE__*/RpcGroup.make(Discover, Complete, GetPrompt, ListPrompts, ListResources, ListResourceTemplates, ReadResource, SubscriptionsListen, CallTool, ListTools) {}
++export const EventDefinition = /*#__PURE__*/Schema.StructWithRest(/*#__PURE__*/Schema.Struct({
++  name: Schema.String,
++  title: /*#__PURE__*/optional(Schema.String),
++  description: /*#__PURE__*/optional(Schema.String),
++  delivery: /*#__PURE__*/Schema.Array(/*#__PURE__*/Schema.Literals(["poll", "push", "webhook"])),
++  inputSchema: Schema.JsonObject,
++  payloadSchema: /*#__PURE__*/optional(Schema.JsonObject),
++  _meta: Meta
++}), [Schema.JsonObject]);
++/**
++ * @internal
++ */
++export const ListEventsResult = /*#__PURE__*/Schema.StructWithRest(/*#__PURE__*/Schema.Struct({
++  ...PaginatedResult,
++  events: /*#__PURE__*/Schema.Array(EventDefinition)
++}), [Schema.JsonObject]);
++/**
++ * @internal
++ */
++export class ListEvents extends /*#__PURE__*/Rpc.make("events/list", {
++  success: ListEventsResult,
++  error: McpError,
++  payload: PaginatedRequestParams
++}) {}
++const EventArguments = /*#__PURE__*/optional(/*#__PURE__*/Schema.Record(Schema.String, Schema.Json));
++/**
++ * @internal
++ */
++export const SubscribeEventResult = /*#__PURE__*/Schema.StructWithRest(/*#__PURE__*/Schema.Struct({
++  ...ResultMeta,
++  id: Schema.String,
++  refreshBefore: /*#__PURE__*/Schema.NullOr(Schema.String),
++  cursor: /*#__PURE__*/Schema.NullOr(Schema.String),
++  truncated: /*#__PURE__*/optional(Schema.Boolean),
++  deliveryStatus: /*#__PURE__*/optional(Schema.JsonObject)
++}), [Schema.JsonObject]);
++/**
++ * @internal
++ */
++export class SubscribeEvent extends /*#__PURE__*/Rpc.make("events/subscribe", {
++  success: SubscribeEventResult,
++  error: McpError,
++  payload: {
++    ...RequestParams.fields,
++    name: Schema.String,
++    arguments: EventArguments,
++    delivery: /*#__PURE__*/Schema.Struct({
++      mode: /*#__PURE__*/Schema.Literal("webhook"),
++      url: Schema.String,
++      secret: Schema.String
++    }),
++    cursor: /*#__PURE__*/optional(/*#__PURE__*/Schema.NullOr(Schema.String)),
++    maxAgeMs: /*#__PURE__*/optional(Schema.Int),
++    ttlMs: /*#__PURE__*/optional(/*#__PURE__*/Schema.NullOr(Schema.Int))
++  }
++}) {}
++/**
++ * @internal
++ */
++export const UnsubscribeEventResult = /*#__PURE__*/Schema.StructWithRest(/*#__PURE__*/Schema.Struct({
++  ...ResultMeta
++}), [Schema.JsonObject]);
++/**
++ * @internal
++ */
++export class UnsubscribeEvent extends /*#__PURE__*/Rpc.make("events/unsubscribe", {
++  success: UnsubscribeEventResult,
++  error: McpError,
++  payload: {
++    ...RequestParams.fields,
++    name: Schema.String,
++    arguments: EventArguments,
++    delivery: /*#__PURE__*/Schema.Struct({
++      mode: /*#__PURE__*/Schema.Literal("webhook"),
++      url: Schema.String
++    })
++  }
++}) {}
++/**
++ * @internal
++ */
++export class ClientRequestRpcs extends /*#__PURE__*/RpcGroup.make(Discover, Complete, GetPrompt, ListPrompts, ListResources, ListResourceTemplates, ReadResource, SubscriptionsListen, CallTool, ListTools, ListEvents, SubscribeEvent, UnsubscribeEvent) {}
+ /**
+  * @internal
+  */
+diff --git a/dist/rpc/RpcServer.js b/dist/rpc/RpcServer.js
+index 709efbf..b94b832 100644
+--- a/dist/rpc/RpcServer.js
++++ b/dist/rpc/RpcServer.js
+@@ -759,7 +759,9 @@ export const makeProtocolWithHttpEffect = /*#__PURE__*/Effect.fnUntraced(functio
+         contentType: serialization.contentType
+       });
+     }
+-    const initialChunk = yield* Queue.takeAll(queue);
++    // A queue that ends without messages gives an empty body, as a buffered response without
++    // messages does, rather than a `Done` failure. The caller decides whether that is correct.
++    const initialChunk = yield* Effect.orElseSucceed(Queue.takeAll(queue), () => []);
+     if (queue.state._tag === "Done") {
+       return HttpServerResponse.uint8Array(mergeUint8Arrays(initialChunk), {
+         contentType: serialization.contentType
 diff --git a/src/JsonSchema.ts b/src/JsonSchema.ts
 index 133d409..44e28bd 100644
 --- a/src/JsonSchema.ts
@@ -456,8 +1117,226 @@ index 133d409..44e28bd 100644
        context.reference(out, rewriteOpenApiComponentsReference(source.$ref))
        return out
      }
+diff --git a/src/ai/McpSchema.ts b/src/ai/McpSchema.ts
+index 02fa724..c316c3a 100644
+--- a/src/ai/McpSchema.ts
++++ b/src/ai/McpSchema.ts
+@@ -3387,3 +3387,213 @@ export class EnabledWhen extends Context.Service<
+ >()(
+   "effect/ai/McpSchema/EnabledWhen"
+ ) {}
++
++// =============================================================================
++// Events
++// =============================================================================
++
++/**
++ * JSON-RPC error code for a referenced entity that does not exist, such as an unknown
++ * event name. Defined by the draft MCP events extension.
++ *
++ * @stability unstable
++ * @category constants
++ * @since 4.0.0
++ */
++export const NOT_FOUND_ERROR_CODE = -32011 as const
++
++/**
++ * JSON-RPC error code for a principal that may not use this event or arguments. Defined
++ * by the draft MCP events extension.
++ *
++ * @stability unstable
++ * @category constants
++ * @since 4.0.0
++ */
++export const FORBIDDEN_ERROR_CODE = -32012 as const
++
++/**
++ * JSON-RPC error code for a server-imposed limit, such as the number of subscriptions.
++ * Defined by the draft MCP events extension.
++ *
++ * @stability unstable
++ * @category constants
++ * @since 4.0.0
++ */
++export const RESOURCE_EXHAUSTED_ERROR_CODE = -32013 as const
++
++/**
++ * JSON-RPC error code for a well-formed request that asks for an unsupported option, such
++ * as a delivery mode the event does not offer. Defined by the draft MCP events extension.
++ *
++ * @stability unstable
++ * @category constants
++ * @since 4.0.0
++ */
++export const UNSUPPORTED_ERROR_CODE = -32014 as const
++
++/**
++ * JSON-RPC error code for a webhook callback that failed verification or could not be
++ * reached. `data.reason` names the category. Defined by the draft MCP events extension.
++ *
++ * @stability unstable
++ * @category constants
++ * @since 4.0.0
++ */
++export const CALLBACK_ENDPOINT_ERROR_CODE = -32015 as const
++
++/**
++ * How a client receives an event's occurrences.
++ *
++ * @stability unstable
++ * @category events
++ * @since 4.0.0
++ */
++export const EventDeliveryMode = Schema.Literals(["poll", "push", "webhook"])
++
++/**
++ * An event type a server offers: its subscription arguments, payload shape, and the delivery
++ * modes it supports.
++ *
++ * @stability unstable
++ * @category events
++ * @since 4.0.0
++ */
++export const EventDefinition = Schema.Struct({
++  name: Schema.String,
++  title: optional(Schema.String),
++  description: optional(Schema.String),
++  delivery: Schema.Array(EventDeliveryMode),
++  inputSchema: Schema.JsonObject,
++  payloadSchema: optional(Schema.JsonObject),
++  _meta: optional(Schema.JsonObject)
++})
++
++/**
++ * @stability unstable
++ * @category events
++ * @since 4.0.0
++ */
++export type EventDefinition = typeof EventDefinition.Type
++
++/**
++ * One page of `events/list`.
++ *
++ * @stability unstable
++ * @category events
++ * @since 4.0.0
++ */
++export const ListEventsResult = Schema.Struct({
++  events: Schema.Array(EventDefinition),
++  nextCursor: optional(Schema.String)
++})
++
++/**
++ * @stability unstable
++ * @category events
++ * @since 4.0.0
++ */
++export type ListEventsResult = typeof ListEventsResult.Type
++
++/**
++ * An `events/list` request.
++ *
++ * @stability unstable
++ * @category events
++ * @since 4.0.0
++ */
++export const ListEventsParams = Schema.Struct({
++  cursor: optional(Schema.String)
++})
++
++/**
++ * @stability unstable
++ * @category events
++ * @since 4.0.0
++ */
++export type ListEventsParams = typeof ListEventsParams.Type
++
++/**
++ * Where a webhook subscription delivers. The secret is a Standard Webhooks `whsec_` value
++ * supplied by the client.
++ *
++ * @stability unstable
++ * @category events
++ * @since 4.0.0
++ */
++export const WebhookEventDelivery = Schema.Struct({
++  mode: Schema.Literal("webhook"),
++  url: Schema.String,
++  secret: Schema.String
++})
++
++/**
++ * An `events/subscribe` request. The same principal, URL, name and arguments address the same
++ * subscription; repeating the request refreshes it.
++ *
++ * @stability unstable
++ * @category events
++ * @since 4.0.0
++ */
++export const SubscribeEventParams = Schema.Struct({
++  name: Schema.String,
++  arguments: optional(Schema.Record(Schema.String, Schema.Json)),
++  delivery: WebhookEventDelivery,
++  cursor: optional(Schema.NullOr(Schema.String)),
++  maxAgeMs: optional(Schema.Int),
++  ttlMs: optional(Schema.NullOr(Schema.Int))
++})
++
++/**
++ * @stability unstable
++ * @category events
++ * @since 4.0.0
++ */
++export type SubscribeEventParams = typeof SubscribeEventParams.Type
++
++/**
++ * The server's grant for an `events/subscribe` request. `refreshBefore` is an ISO 8601 time, or
++ * `null` when the subscription does not expire.
++ *
++ * @stability unstable
++ * @category events
++ * @since 4.0.0
++ */
++export const SubscribeEventResult = Schema.Struct({
++  id: Schema.String,
++  refreshBefore: Schema.NullOr(Schema.String),
++  cursor: Schema.NullOr(Schema.String),
++  truncated: optional(Schema.Boolean),
++  deliveryStatus: optional(Schema.JsonObject)
++})
++
++/**
++ * @stability unstable
++ * @category events
++ * @since 4.0.0
++ */
++export type SubscribeEventResult = typeof SubscribeEventResult.Type
++
++/**
++ * An `events/unsubscribe` request. It names the subscription by the same key as
++ * `events/subscribe`, without the secret.
++ *
++ * @stability unstable
++ * @category events
++ * @since 4.0.0
++ */
++export const UnsubscribeEventParams = Schema.Struct({
++  name: Schema.String,
++  arguments: optional(Schema.Record(Schema.String, Schema.Json)),
++  delivery: Schema.Struct({
++    mode: Schema.Literal("webhook"),
++    url: Schema.String
++  })
++})
++
++/**
++ * @stability unstable
++ * @category events
++ * @since 4.0.0
++ */
++export type UnsubscribeEventParams = typeof UnsubscribeEventParams.Type
 diff --git a/src/ai/McpServer.ts b/src/ai/McpServer.ts
-index 8c601ab29aac1f6de2318a7b69e24389215775fa..5bb9f957ce506ecf1c4c809250c14273bd7f9c87 100644
+index 8c601ab..2060c9f 100644
 --- a/src/ai/McpServer.ts
 +++ b/src/ai/McpServer.ts
 @@ -650,14 +650,37 @@ export class McpServer extends Context.Service<McpServer, {
@@ -672,6 +1551,260 @@ index 8c601ab29aac1f6de2318a7b69e24389215775fa..5bb9f957ce506ecf1c4c809250c14273
  const mcpMediaTypes = (header: string | undefined): ReadonlyArray<string> =>
    header === undefined
      ? []
+@@ -1979,6 +2057,72 @@ export const toolkit = <Tools extends Record<string, Tool.Any>>(
+     Layer.provide(McpServer.layer)
+   )
+ 
++/**
++ * Handlers for the draft MCP events extension: listing event types and managing webhook
++ * subscriptions. Each handler runs with the request's `McpRequestContext`, so it can
++ * authorize the principal that sent it. Failures are MCP errors and reach the client
++ * unchanged, such as `CALLBACK_ENDPOINT_ERROR_CODE` with `data.reason`.
++ *
++ * Only protocols that define events serve these methods; currently `2026-07-28`.
++ *
++ * @stability unstable
++ * @category events
++ * @since 4.0.0
++ */
++export interface EventsHandler<R = never> {
++  readonly list: (
++    request: McpSchema.ListEventsParams
++  ) => Effect.Effect<McpSchema.ListEventsResult, McpSchema.McpError, R>
++  readonly subscribe: (
++    request: McpSchema.SubscribeEventParams
++  ) => Effect.Effect<McpSchema.SubscribeEventResult, McpSchema.McpError, R>
++  readonly unsubscribe: (
++    request: McpSchema.UnsubscribeEventParams
++  ) => Effect.Effect<void, McpSchema.McpError, R>
++}
++
++/**
++ * Registers the server's events handlers. The server then advertises the `events`
++ * capability and serves `events/list`, `events/subscribe` and `events/unsubscribe`.
++ *
++ * @stability unstable
++ * @category events
++ * @since 4.0.0
++ */
++export const registerEvents = <R>(
++  handler: EventsHandler<R>
++): Effect.Effect<void, never, McpServer | Exclude<R, McpRequestContext>> =>
++  Effect.gen(function*() {
++    const server = yield* McpServer
++    const services = omitRequestServices(yield* Effect.context<Exclude<R, McpRequestContext>>())
++    const run = <A>(
++      effect: Effect.Effect<A, McpSchema.McpError, R>,
++      invocation: McpCore.McpInvocation
++    ): Effect.Effect<A, McpSchema.McpError> =>
++      provideInvocationContext(effect, invocation).pipe(
++        Effect.provideContext(services as Context.Context<Exclude<R, McpRequestContext>>)
++      )
++    yield* internalState.get(server)!.core.events.register({
++      list: (request, invocation) => run(handler.list(request), invocation),
++      subscribe: (request, invocation) => run(handler.subscribe(request), invocation),
++      unsubscribe: (request, invocation) => run(handler.unsubscribe(request), invocation)
++    })
++  })
++
++/**
++ * Registers events handlers as a layer, like `toolkit` does for tools.
++ *
++ * @stability unstable
++ * @category events
++ * @since 4.0.0
++ */
++export const events = <R>(
++  handler: EventsHandler<R>
++): Layer.Layer<never, never, Exclude<R, McpRequestContext>> =>
++  Layer.effectDiscard(registerEvents(handler)).pipe(
++    Layer.provide(McpServer.layer)
++  )
++
+ /**
+  * Utility type that validates a completion-handler record against the allowed
+  * parameter keys.
+diff --git a/src/ai/Toolkit.ts b/src/ai/Toolkit.ts
+index c017c35..072f6ea 100644
+--- a/src/ai/Toolkit.ts
++++ b/src/ai/Toolkit.ts
+@@ -344,9 +344,9 @@ const Proto = {
+       ) {
+         const tool = Object.hasOwn(tools, name) ? tools[name] : undefined
+ 
++        // Tool arguments are caller content; spans record only the tool name.
+         yield* Effect.annotateCurrentSpan({
+-          tool: name,
+-          parameters: params
++          tool: name
+         })
+ 
+         if (Predicate.isUndefined(tool)) {
+diff --git a/src/ai/internal/mcpCore.ts b/src/ai/internal/mcpCore.ts
+index a7d200d..c6ef344 100644
+--- a/src/ai/internal/mcpCore.ts
++++ b/src/ai/internal/mcpCore.ts
+@@ -386,6 +386,35 @@ export type ServerNotification = Data.TaggedEnum<{
+  */
+ export const ServerNotification = Data.taggedEnum<ServerNotification>()
+ 
++/**
++ * One server's events: listing, and webhook subscriptions. Handlers fail with an MCP error,
++ * whose code and data reach the client unchanged.
++ *
++ * @internal
++ */
++export interface EventsHandler {
++  readonly list: (
++    request: McpSchema.ListEventsParams,
++    invocation: McpInvocation
++  ) => Effect.Effect<McpSchema.ListEventsResult, McpSchema.McpError>
++  readonly subscribe: (
++    request: McpSchema.SubscribeEventParams,
++    invocation: McpInvocation
++  ) => Effect.Effect<McpSchema.SubscribeEventResult, McpSchema.McpError>
++  readonly unsubscribe: (
++    request: McpSchema.UnsubscribeEventParams,
++    invocation: McpInvocation
++  ) => Effect.Effect<void, McpSchema.McpError>
++}
++
++/**
++ * @internal
++ */
++export interface Events {
++  readonly register: (handler: EventsHandler) => Effect.Effect<void>
++  readonly current: Effect.Effect<EventsHandler | undefined>
++}
++
+ /**
+  * @internal
+  */
+@@ -394,10 +423,12 @@ export interface McpCore {
+   readonly resources: Resources
+   readonly prompts: Prompts
+   readonly completions: Completions
++  readonly events: Events
+   readonly registrationPresence: Effect.Effect<{
+     readonly tools: boolean
+     readonly resources: boolean
+     readonly prompts: boolean
++    readonly events: boolean
+   }>
+ }
+ 
+@@ -536,11 +567,21 @@ export const make: Effect.Effect<McpCore> = Effect.sync(() => {
+     })
+   }
+ 
++  let eventsHandler: EventsHandler | undefined
++  const events: Events = {
++    register: (handler) =>
++      Effect.sync(() => {
++        eventsHandler = handler
++      }),
++    current: Effect.sync(() => eventsHandler)
++  }
++
+   const registrationPresence = Effect.sync(() => ({
+     tools: registrations.size > 0,
+     resources: resourceRegistrations.length > 0 || resourceTemplateRegistrations.length > 0,
+-    prompts: promptRegistrations.size > 0
++    prompts: promptRegistrations.size > 0,
++    events: eventsHandler !== undefined
+   }))
+ 
+-  return { tools, resources, prompts, completions, registrationPresence }
++  return { tools, resources, prompts, completions, events, registrationPresence }
+ })
+diff --git a/src/ai/internal/mcpProtocol.ts b/src/ai/internal/mcpProtocol.ts
+index 1426562..a28f3f7 100644
+--- a/src/ai/internal/mcpProtocol.ts
++++ b/src/ai/internal/mcpProtocol.ts
+@@ -411,6 +411,7 @@ export interface HandlerInstallationContext {
+     readonly tools: boolean
+     readonly resources: boolean
+     readonly prompts: boolean
++    readonly events: boolean
+   }>
+ }
+ 
+diff --git a/src/ai/internal/mcpProtocol/v2026_07_28.ts b/src/ai/internal/mcpProtocol/v2026_07_28.ts
+index c1cce20..37dfe24 100644
+--- a/src/ai/internal/mcpProtocol/v2026_07_28.ts
++++ b/src/ai/internal/mcpProtocol/v2026_07_28.ts
+@@ -322,6 +322,20 @@ export const makeHandlers = (
+   ]))
+   const decodeCompleteResult = Schema.decodeUnknownEffect(McpSchema.CompleteResult)
+   const decodeListToolsResult = Schema.decodeUnknownEffect(McpSchema.ListToolsResult)
++  const decodeListEventsResult = Schema.decodeUnknownEffect(McpSchema.ListEventsResult)
++  const decodeSubscribeEventResult = Schema.decodeUnknownEffect(McpSchema.SubscribeEventResult)
++  const decodeUnsubscribeEventResult = Schema.decodeUnknownEffect(McpSchema.UnsubscribeEventResult)
++  // Events are reachable only once a handler is registered, like a capability the server lacks.
++  const eventsHandler = Effect.flatMap(core.events.current, (handler) =>
++    handler === undefined
++      ? failWithHttpStatus(
++        404,
++        new McpProtocol.ProtocolError({
++          code: PublicMcpSchema.METHOD_NOT_FOUND_ERROR_CODE,
++          message: "Method not found"
++        })
++      )
++      : Effect.succeed(handler))
+   const sendNotification = context.sendNotification
+   const supportsSubscriptions = sendNotification !== undefined
+   // Older adapters accept arbitrary JSON; this binding requires extension settings objects.
+@@ -337,6 +351,7 @@ export const makeHandlers = (
+       capabilities.resources = { listChanged: supportsSubscriptions, subscribe: supportsSubscriptions }
+     }
+     if (presence.prompts) capabilities.prompts = { listChanged: supportsSubscriptions }
++    if (presence.events) capabilities.events = {}
+     return { supportedVersions: context.supportedVersions, capabilities, serverInfo: context.serverInfo }
+   })
+   const getInvocation = PublicMcpSchema.McpRequestContext.useSync(
+@@ -665,6 +680,42 @@ export const makeHandlers = (
+         context.serverInfo
+       )
+     }, Effect.mapError(projectError)),
++    "events/list": Effect.fnUntraced(function*(request: typeof McpSchema.ListEvents.payloadSchema.Type) {
++      const handler = yield* eventsHandler
++      const invocation = yield* getInvocation
++      const page = yield* handler.list(omitUndefined({ cursor: request.cursor }), invocation)
++      const result = yield* projectCompleteResult({
++        events: page.events.map((event) => omitUndefined(event)),
++        nextCursor: page.nextCursor
++      }, context.serverInfo)
++      return yield* decodeListEventsResult(result)
++    }, Effect.mapError(projectError)),
++    "events/subscribe": Effect.fnUntraced(function*(
++      request: typeof McpSchema.SubscribeEvent.payloadSchema.Type
++    ) {
++      const handler = yield* eventsHandler
++      const invocation = yield* getInvocation
++      const { _meta: _, ...params } = request
++      const granted = yield* handler.subscribe(
++        PublicMcpSchema.SubscribeEventParams.make(omitUndefined(params) as typeof params),
++        invocation
++      )
++      const result = yield* projectCompleteResult(granted, context.serverInfo)
++      return yield* decodeSubscribeEventResult(result)
++    }, Effect.mapError(projectError)),
++    "events/unsubscribe": Effect.fnUntraced(function*(
++      request: typeof McpSchema.UnsubscribeEvent.payloadSchema.Type
++    ) {
++      const handler = yield* eventsHandler
++      const invocation = yield* getInvocation
++      const { _meta: _, ...params } = request
++      yield* handler.unsubscribe(
++        PublicMcpSchema.UnsubscribeEventParams.make(omitUndefined(params) as typeof params),
++        invocation
++      )
++      const result = yield* projectCompleteResult({}, context.serverInfo)
++      return yield* decodeUnsubscribeEventResult(result)
++    }, Effect.mapError(projectError)),
+     "notifications/cancelled": Effect.fnUntraced(function*(
+       _request: typeof McpSchema.CancelledNotification.payloadSchema.Type
+     ) {
 diff --git a/src/ai/internal/mcpRuntime.ts b/src/ai/internal/mcpRuntime.ts
 index b388d17..ff4d359 100644
 --- a/src/ai/internal/mcpRuntime.ts
@@ -829,55 +1962,134 @@ index b388d17..ff4d359 100644
        }
        if (
          isRequest && admission.protocol?.runtime._tag === "Stateless" &&
-diff --git a/dist/ai/Toolkit.js b/dist/ai/Toolkit.js
-index 31c84bb6900978cc54dce79f7f9dabbe6f0943a0..6ef5ff2e5013cbf1c406f055a24fb1eaa941d788 100644
---- a/dist/ai/Toolkit.js
-+++ b/dist/ai/Toolkit.js
-@@ -101,9 +101,9 @@ const Proto = {
-       };
-       const handle = Effect.fnUntraced(function* (name, params, toolCallId, options) {
-         const tool = Object.hasOwn(tools, name) ? tools[name] : undefined;
-+        // Tool arguments are caller content; spans record only the tool name.
-         yield* Effect.annotateCurrentSpan({
--          tool: name,
--          parameters: params
-+          tool: name
-         });
-         if (Predicate.isUndefined(tool)) {
-           return yield* AiError.make({
-diff --git a/src/ai/Toolkit.ts b/src/ai/Toolkit.ts
-index c017c35adddc6ddc2e3cf9279db34b8fc6a957aa..072f6ea7bdcbd129472211aeaaa31e18dd4b9956 100644
---- a/src/ai/Toolkit.ts
-+++ b/src/ai/Toolkit.ts
-@@ -344,9 +344,9 @@ const Proto = {
-       ) {
-         const tool = Object.hasOwn(tools, name) ? tools[name] : undefined
+diff --git a/src/ai/internal/mcpSchema/v2026_07_28.ts b/src/ai/internal/mcpSchema/v2026_07_28.ts
+index b38c929..d395e31 100644
+--- a/src/ai/internal/mcpSchema/v2026_07_28.ts
++++ b/src/ai/internal/mcpSchema/v2026_07_28.ts
+@@ -73,6 +73,7 @@ export const ServerCapabilities = Schema.StructWithRest(
+       listChanged: optional(Schema.Boolean)
+     })),
+     tools: optional(Schema.Struct({ listChanged: optional(Schema.Boolean) })),
++    events: optional(Schema.Struct({ listChanged: optional(Schema.Boolean) })),
+     extensions: optional(Schema.Record(Schema.String, Schema.JsonObject))
+   }),
+   [Schema.JsonObject]
+@@ -810,6 +811,101 @@ export class SubscriptionsAcknowledgedNotification extends Rpc.make(
+   { payload: { ...NotificationParams.fields, notifications: SubscriptionFilter } }
+ ) {}
  
-+        // Tool arguments are caller content; spans record only the tool name.
-         yield* Effect.annotateCurrentSpan({
--          tool: name,
--          parameters: params
-+          tool: name
-         })
++/**
++ * @internal
++ */
++export const EventDefinition = Schema.StructWithRest(
++  Schema.Struct({
++    name: Schema.String,
++    title: optional(Schema.String),
++    description: optional(Schema.String),
++    delivery: Schema.Array(Schema.Literals(["poll", "push", "webhook"])),
++    inputSchema: Schema.JsonObject,
++    payloadSchema: optional(Schema.JsonObject),
++    _meta: Meta
++  }),
++  [Schema.JsonObject]
++)
++/**
++ * @internal
++ */
++export const ListEventsResult = Schema.StructWithRest(
++  Schema.Struct({
++    ...PaginatedResult,
++    events: Schema.Array(EventDefinition)
++  }),
++  [Schema.JsonObject]
++)
++/**
++ * @internal
++ */
++export class ListEvents extends Rpc.make("events/list", {
++  success: ListEventsResult,
++  error: McpError,
++  payload: PaginatedRequestParams
++}) {}
++
++const EventArguments = optional(Schema.Record(Schema.String, Schema.Json))
++
++/**
++ * @internal
++ */
++export const SubscribeEventResult = Schema.StructWithRest(
++  Schema.Struct({
++    ...ResultMeta,
++    id: Schema.String,
++    refreshBefore: Schema.NullOr(Schema.String),
++    cursor: Schema.NullOr(Schema.String),
++    truncated: optional(Schema.Boolean),
++    deliveryStatus: optional(Schema.JsonObject)
++  }),
++  [Schema.JsonObject]
++)
++/**
++ * @internal
++ */
++export class SubscribeEvent extends Rpc.make("events/subscribe", {
++  success: SubscribeEventResult,
++  error: McpError,
++  payload: {
++    ...RequestParams.fields,
++    name: Schema.String,
++    arguments: EventArguments,
++    delivery: Schema.Struct({
++      mode: Schema.Literal("webhook"),
++      url: Schema.String,
++      secret: Schema.String
++    }),
++    cursor: optional(Schema.NullOr(Schema.String)),
++    maxAgeMs: optional(Schema.Int),
++    ttlMs: optional(Schema.NullOr(Schema.Int))
++  }
++}) {}
++
++/**
++ * @internal
++ */
++export const UnsubscribeEventResult = Schema.StructWithRest(
++  Schema.Struct({ ...ResultMeta }),
++  [Schema.JsonObject]
++)
++/**
++ * @internal
++ */
++export class UnsubscribeEvent extends Rpc.make("events/unsubscribe", {
++  success: UnsubscribeEventResult,
++  error: McpError,
++  payload: {
++    ...RequestParams.fields,
++    name: Schema.String,
++    arguments: EventArguments,
++    delivery: Schema.Struct({
++      mode: Schema.Literal("webhook"),
++      url: Schema.String
++    })
++  }
++}) {}
++
+ /**
+  * @internal
+  */
+@@ -823,7 +919,10 @@ export class ClientRequestRpcs extends RpcGroup.make(
+   ReadResource,
+   SubscriptionsListen,
+   CallTool,
+-  ListTools
++  ListTools,
++  ListEvents,
++  SubscribeEvent,
++  UnsubscribeEvent
+ ) {}
  
-         if (Predicate.isUndefined(tool)) {
-diff --git a/dist/rpc/RpcServer.js b/dist/rpc/RpcServer.js
-index 709efbf8789dc6a16396a070767ceeae3f067b48..b94b832654d856dd349dcc72c92d8a6b6b7c23a2 100644
---- a/dist/rpc/RpcServer.js
-+++ b/dist/rpc/RpcServer.js
-@@ -759,7 +759,9 @@ export const makeProtocolWithHttpEffect = /*#__PURE__*/Effect.fnUntraced(functio
-         contentType: serialization.contentType
-       });
-     }
--    const initialChunk = yield* Queue.takeAll(queue);
-+    // A queue that ends without messages gives an empty body, as a buffered response without
-+    // messages does, rather than a `Done` failure. The caller decides whether that is correct.
-+    const initialChunk = yield* Effect.orElseSucceed(Queue.takeAll(queue), () => []);
-     if (queue.state._tag === "Done") {
-       return HttpServerResponse.uint8Array(mergeUint8Arrays(initialChunk), {
-         contentType: serialization.contentType
+ /**
 diff --git a/src/rpc/RpcServer.ts b/src/rpc/RpcServer.ts
-index a6d06f709f37e67fa2dee015fc18dd98a6b0538f..af783b86e0226c1d3af39ed8a803219c811b5324 100644
+index a6d06f7..af783b8 100644
 --- a/src/rpc/RpcServer.ts
 +++ b/src/rpc/RpcServer.ts
 @@ -1181,7 +1181,12 @@ export const makeProtocolWithHttpEffect: (

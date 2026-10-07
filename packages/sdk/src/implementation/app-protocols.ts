@@ -49,11 +49,11 @@ export interface AppProtocol {
   readonly concurrentData: boolean;
 }
 
-/** Protocol 10 is the host's current protocol, so its messages need no conversion. */
-const protocol10: AppProtocol = {
-  version: 10,
+/** Protocol 11 is the host's current protocol, so its messages need no conversion. */
+const protocol11: AppProtocol = {
+  version: 11,
   workerEntry: appBridge,
-  nodeEntry: nodeAppEntry(10),
+  nodeEntry: nodeAppEntry(11),
   invocation: (input) => JSON.stringify(input),
   request: (command) => command,
   refuse: () => undefined,
@@ -61,6 +61,12 @@ const protocol10: AppProtocol = {
   workflow: (execution) => execution,
   concurrentData: true,
 };
+
+/**
+ * Protocol 10 is protocol 11 without events. Its requirements declare none and its replies emit
+ * none, so every message and reply is unchanged.
+ */
+const protocol10: AppProtocol = { ...protocol11, version: 10, nodeEntry: nodeAppEntry(10) };
 
 /**
  * Protocol 9 is protocol 10 without app-owned SQL. Its apps never declare `sql`, so the host never
@@ -183,6 +189,7 @@ const protocols: ReadonlyMap<number, AppProtocol> = new Map(
     protocol8,
     protocol9,
     protocol10,
+    protocol11,
   ].map((protocol) => [protocol.version, protocol]),
 );
 

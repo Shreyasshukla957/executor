@@ -477,7 +477,7 @@
     },
     "packages/apps": {
       "name": "apps",
-      "version": "0.0.1-beta.46",
+      "version": "0.0.1-beta.47",
       "dependencies": {
         "@cfworker/json-schema": "4.1.1",
         "@csstools/css-tokenizer": "4.0.2",
@@ -635,6 +635,7 @@
       "name": "@executor-js/sdk",
       "dependencies": {
         "@alchemy.run/cloudflare-runtime": "2.0.0-beta.80",
+        "@cfworker/json-schema": "4.1.1",
         "@cloudflare/worker-bundler": "0.2.4",
         "@distilled.cloud/cloudflare": "1.0.0-rc.13",
         "@effect/platform-browser": "4.0.1",

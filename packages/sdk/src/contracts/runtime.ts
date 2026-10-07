@@ -80,6 +80,27 @@ export const RuntimeCallTimings = Context.Reference<
 >("executor/RuntimeCallTimings", { defaultValue: () => undefined });
 
 /**
+ * Where an invocation's emitted events go once it succeeds. The executor provides it around every
+ * runtime call. When they cannot be saved the call fails, so its caller retries it; the events'
+ * stable IDs keep a retry from delivering them twice. A call with no sink fails the same way.
+ */
+export const AppEventSink = Context.Reference<{
+  readonly emitted: (input: {
+    readonly app: string;
+    /** Every account bound to the invocation: its events may carry data from any of them. */
+    readonly accounts: readonly string[];
+    readonly events: readonly import("apps/contracts").EmittedEvent[];
+  }) => Effect.Effect<void, RuntimeProtocolFailed>;
+}>("executor/AppEventSink", {
+  defaultValue: () => ({
+    emitted: () =>
+      Effect.logError("App events were emitted where no event sink was provided").pipe(
+        Effect.andThen(Effect.fail(new RuntimeProtocolFailed({ reason: "data" }))),
+      ),
+  }),
+});
+
+/**
  * The scheduled run an app invocation serves, if any. The runner records it on the build loads it
  * makes for the invocation, so a query can tell a run's own build loads from those of other runs
  * that share its scheduler trace. Telemetry only: nothing decides on it.

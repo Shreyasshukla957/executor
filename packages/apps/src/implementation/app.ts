@@ -17,6 +17,8 @@ import type { WorkflowContext } from "../contracts/workflows.ts";
 import { nativeOperation } from "./operations.ts";
 import { declaredOperations, nativeRouter, type RouterDeclaration } from "./router.ts";
 import { decoderOf, isSchema, type Schema } from "./schema.ts";
+import { nativeEvent } from "./events.ts";
+import type { AppEvent } from "../contracts/events.ts";
 
 type PromiseCatalog<Catalog> =
   Catalog extends Readonly<Record<string, object>>
@@ -213,8 +215,22 @@ export const defineApp = <
   if (typeof definition !== "function") rejectCatalogs(definition);
   const evaluate = typeof definition === "function" ? definition : async () => definition;
   const factory = fromPromise(evaluate, "factory");
+  const events =
+    requirements.events === undefined
+      ? undefined
+      : Object.fromEntries(
+          Object.entries(requirements.events).map(([name, declared]): [string, AppEvent] => {
+            const native = nativeEvent(declared);
+            if (native === undefined)
+              throw new TypeError(
+                `The event ${JSON.stringify(name)} must be declared with event()`,
+              );
+            return [name, native];
+          }),
+        );
   const native: NativeApp<Requirements["accounts"], EffectDefinition<Def>> = {
     accounts: requirements.accounts,
+    ...(events === undefined ? {} : { events }),
     evaluate: (context) =>
       factory(context).pipe(Effect.map((value) => adaptDefinition<Requirements, Def>(value))),
   };

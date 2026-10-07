@@ -11,6 +11,7 @@ import {
 import { Effect } from "effect";
 import {
   permitsApp,
+  permitsEvent,
   permitsTarget,
   permitsRouter,
   permitsTool,
@@ -105,7 +106,42 @@ export const restrictMcpBackend = <E extends Error, G extends Error>(
     });
   const check = (input: Invocation) =>
     Effect.flatMap(authority, (policy) => authorize(policy, input));
+  /** An event needs the app and a grant that names it, or all of the app's events. */
+  const checkEvent = (app: AppId, event: string) =>
+    authority.pipe(
+      Effect.flatMap((policy) =>
+        refuse(
+          !permitsApp(policy, app)
+            ? { reason: "app", app }
+            : !permitsEvent(policy, app, event)
+              ? { reason: "events", app }
+              : undefined,
+        ),
+      ),
+    );
   return {
+    eventDefinitions: (input) =>
+      Effect.gen(function* () {
+        const policy = yield* authority;
+        yield* refuse(
+          permitsApp(policy, input.app) ? undefined : { reason: "app", app: input.app },
+        );
+        const definitions = yield* backend.eventDefinitions(input);
+        return definitions.filter((definition) => permitsEvent(policy, input.app, definition.name));
+      }),
+    findEventSubscription: (key) => backend.findEventSubscription(key),
+    subscribeEvent: (input) =>
+      checkEvent(input.target.app, input.target.event).pipe(
+        Effect.andThen(() => backend.subscribeEvent(input)),
+      ),
+    // Stopping a subscription needs only the app; a grant narrowed since may still clean up.
+    unsubscribeEvent: (input) =>
+      authority.pipe(
+        Effect.flatMap((policy) =>
+          refuse(permitsApp(policy, input.app) ? undefined : { reason: "app", app: input.app }),
+        ),
+        Effect.andThen(() => backend.unsubscribeEvent(input)),
+      ),
     listSkills: (input) =>
       checkApp(input.app, input.profile).pipe(Effect.andThen(() => backend.listSkills(input))),
     readSkill: (input) =>

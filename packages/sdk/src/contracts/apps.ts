@@ -55,6 +55,8 @@ export const AppRequirements = Schema.Struct({
   database: DeclaredRequirements.fields.database,
   sql: DeclaredRequirements.fields.sql,
   accounts: Schema.Record(Schema.NonEmptyString, AccountRequirement),
+  /** The events the app emits, read without evaluating it. */
+  events: DeclaredRequirements.fields.events,
 });
 
 export type AppRequirements = typeof AppRequirements.Type;
