@@ -1173,6 +1173,17 @@ export const scenarios = {
       local: na("Local serves MCP sessions in its server process, with no gateway hop."),
     },
   },
+  cloudMcpStreamLifetime: {
+    fixtures: "actors",
+    file: "cloud-mcp-stream-lifetime.spec.ts",
+    title:
+      "Cloud MCP request spans say whether the session holds the response open, and each close records how long it stayed open",
+    targets: {
+      cloud: managedCloud,
+      "self-host": na("Self-host serves MCP sessions in its server process, with no gateway hop."),
+      local: na("Local serves MCP sessions in its server process, with no gateway hop."),
+    },
+  },
   cloudAppFrameworkPin: {
     fixtures: "actors",
     file: "app-framework-pin.spec.ts",
