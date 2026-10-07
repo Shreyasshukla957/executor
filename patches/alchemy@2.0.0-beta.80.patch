@@ -976,3 +976,649 @@ index b07a50d07003d6c78fae8ad2d1661f5dc6da61a0..d55689cc1f4d86e95f1733906984b326
  
  export type ResourceConstructor<R extends ResourceLike, Req = never> = {
    Type: R["Type"];
+diff --git a/lib/Bundle/Bundle.js b/lib/Bundle/Bundle.js
+--- a/lib/Bundle/Bundle.js
++++ b/lib/Bundle/Bundle.js
+@@ -4,6 +4,8 @@
+ import * as Schema from "effect/Schema";
+ import * as Stream from "effect/Stream";
+ import assert from "node:assert";
++import * as NodeFS from "node:fs";
++import * as NodePath from "node:path";
+ import { sha256, sha256Object } from "../Util/sha256.js";
+ import { bundleAnalyzerPlugin, } from "./BundleAnalyzerPlugin.js";
+ import { purePlugin } from "./PurePlugin.js";
+@@ -134,6 +136,265 @@
+     catch: bundleErrorFromUnknown,
+ }).pipe(Effect.flatMap(Effect.forEach(bundleFileFromOutputChunk)), Effect.flatMap(bundleOutputFromFiles));
+ /**
++ * Rebuild on macOS when a file of the module graph changes, from one
++ * recursive `fs.watch` over the graph's common directory.
++ *
++ * Rolldown's FSEvents watcher makes every watched directory its own watch
++ * root, and FSEvents holds a descriptor for that directory and each of its
++ * ancestors up to `/`. A workspace directory therefore costs as many
++ * descriptors as its path is deep, again for every Worker that imports it.
++ * Local Workers sharing workspace sources took the sidecar past OPEN_MAX
++ * (10,240); macOS `posix_spawn` refuses pipes above it, so every later
++ * workerd spawn failed with `spawn EBADF`. A recursive `fs.watch` is one
++ * FSEvents stream with no per-directory descriptors. Linux keeps rolldown's
++ * watcher: inotify needs no descriptor per directory, and a recursive
++ * `fs.watch` there would add a watch for every directory under the root.
++ *
++ * The watch covers each source before rolldown reads it. Changes during a
++ * build are kept and checked against the graph the build collected, so an
++ * edit made while it runs rebuilds again. A source whose stat changed after
++ * the build loaded it also rebuilds, since a new FSEvents stream starts
++ * asynchronously and may miss a change made just after it is created. The
++ * watched directory's inode is polled: when it or an ancestor moves, the
++ * graph rebuilds (reporting the missing entry) and the watch moves to the
++ * nearest directory that still exists. A move undone between two polls keeps
++ * the inode and may send no event, but sets the moved directory's change
++ * time; the poll then compares each source with what the build read.
++ * Plugins' `watchChange` hooks are not called.
++ */
++const watchModuleTree = (rolldown, inputOptions, outputOptions, start, fail) => {
++    let files = new Set();
++    // Directories between the watched directory and a file; renaming one
++    // moves the file.
++    let directories = new Set();
++    // The graph's common directory.
++    let root;
++    // The directory under watch: `root`, or its nearest existing ancestor
++    // once `root` has moved away.
++    let watched;
++    // Device and inode of `watched` when the watch started.
++    let identity;
++    // Change times of `watched` and its ancestors at the last idle poll.
++    let lineage;
++    let tree;
++    let poller;
++    // Watchers a build replaced by moving the watch; closed when it ends.
++    let replaced = [];
++    // Paths changed during the current build; `null` for an unnamed change.
++    let changed = new Set();
++    // Each source's stat when the current build loaded it.
++    let loaded = new Map();
++    let timer;
++    let building;
++    let again = false;
++    let closed = false;
++    // A graph file or a directory holding one changed. An event without a
++    // file name may be either.
++    const affects = (path) => path === null || files.has(path) || directories.has(path);
++    const inode = (path) => {
++        try {
++            const stat = NodeFS.statSync(path);
++            return `${stat.dev}:${stat.ino}`;
++        }
++        catch {
++            return undefined;
++        }
++    };
++    const stamp = (path) => {
++        try {
++            const stat = NodeFS.statSync(path);
++            return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`;
++        }
++        catch {
++            return "";
++        }
++    };
++    const changedAt = (path) => {
++        try {
++            return NodeFS.statSync(path).ctimeMs;
++        }
++        catch {
++            return undefined;
++        }
++    };
++    // A source changed after the current build read it.
++    const edited = () => [...loaded].some(([file, before]) => stamp(file) !== before);
++    // When `watched` moved or was replaced, watch where the graph is now and
++    // rebuild, which reports a missing entry. When it or an ancestor moved and
++    // came back, rebuild if a source changed meanwhile.
++    const poll = () => {
++        const target = watched;
++        NodeFS.stat(target, (error, stat) => {
++            if (closed || target !== watched)
++                return;
++            if (error === null && `${stat.dev}:${stat.ino}` === identity) {
++                let times = "";
++                for (let path = target; path !== NodePath.dirname(path); path = NodePath.dirname(path))
++                    times += `${changedAt(path)}:`;
++                // A build in progress compares its sources when it ends.
++                if (building === undefined && times !== lineage) {
++                    lineage = times;
++                    if (edited())
++                        schedule();
++                }
++                return;
++            }
++            observe();
++            if (building !== undefined)
++                changed.add(null);
++            else
++                schedule();
++        });
++    };
++    // Watch `root`, or its nearest existing ancestor while it is missing.
++    // The current watch stays while it contains `root` and has not moved. A
++    // replaced watcher keeps running until the build ends so nothing is
++    // missed while the new one starts.
++    const observe = () => {
++        if (closed || root === undefined)
++            return;
++        if (watched !== undefined &&
++            !NodePath.relative(watched, root).startsWith("..") &&
++            inode(watched) === identity)
++            return;
++        let next = root;
++        let current = inode(next);
++        while (current === undefined && next !== NodePath.dirname(next)) {
++            next = NodePath.dirname(next);
++            current = inode(next);
++        }
++        if (tree !== undefined)
++            replaced.push(tree);
++        watched = next;
++        identity = current;
++        tree = NodeFS.watch(next, { recursive: true }, (_event, name) => {
++            const path = name === null ? null : NodePath.join(next, name);
++            if (building !== undefined)
++                changed.add(path);
++            else if (affects(path))
++                schedule();
++        }).on("error", fail);
++        poller ??= setInterval(poll, 500).unref();
++    };
++    // Widen the root to contain `file`. The root never narrows.
++    const cover = (file) => {
++        if (closed || !NodePath.isAbsolute(file))
++            return;
++        const directory = NodePath.dirname(file);
++        let next = root ?? directory;
++        while (NodePath.relative(next, directory).startsWith(".."))
++            next = NodePath.dirname(next);
++        if (next === root)
++            return;
++        root = next;
++        observe();
++    };
++    const coverage = {
++        name: "alchemy:watch-sources",
++        load: {
++            filter: { id: { exclude: /[\\/]node_modules[\\/]/ } },
++            handler(id) {
++                if (!NodePath.isAbsolute(id))
++                    return;
++                loaded.set(id, stamp(id));
++                cover(id);
++            },
++        },
++    };
++    // Adopt the build's graph; true when a source changed after the build
++    // read it, or a change during the build affects the graph.
++    const settle = (next, failed) => {
++        const sources = next.filter((file) => NodePath.isAbsolute(file) &&
++            !file.split(NodePath.sep).includes("node_modules"));
++        // A failed build may stop before loading every module; keep watching
++        // the last complete graph so fixing any of its files rebuilds.
++        files = new Set(failed ? [...files, ...sources] : sources);
++        // Watch files a plugin added without rolldown loading them.
++        for (const file of files)
++            cover(file);
++        directories = new Set();
++        for (const file of files) {
++            let directory = NodePath.dirname(file);
++            while (directory !== watched && !directories.has(directory)) {
++                directories.add(directory);
++                directory = NodePath.dirname(directory);
++            }
++        }
++        for (const watcher of replaced)
++            watcher.close();
++        replaced = [];
++        return edited() || [...changed].some(affects);
++    };
++    const rebuild = async () => {
++        let failed = false;
++        let next = [];
++        try {
++            // Plugins' `options` hooks rewrite `input` in place (the virtual
++            // entries wrap it); rolldown's own watcher runs them once, so each
++            // build here starts from a copy of the caller's options.
++            const bundle = await rolldown.rolldown({
++                ...inputOptions,
++                plugins: [coverage, inputOptions.plugins],
++            });
++            try {
++                await bundle.write(outputOptions);
++            }
++            catch (error) {
++                failed = true;
++                fail(error);
++            }
++            finally {
++                next = await bundle.watchFiles;
++                await bundle.close();
++            }
++        }
++        catch (error) {
++            failed = true;
++            fail(error);
++        }
++        return settle(next, failed);
++    };
++    const run = () => {
++        if (building) {
++            again = true;
++            return;
++        }
++        changed = new Set();
++        loaded = new Map();
++        building = rebuild()
++            .catch((error) => {
++            fail(error);
++            return false;
++        })
++            .then((stale) => {
++            building = undefined;
++            if ((stale || again) && !closed) {
++                again = false;
++                schedule();
++            }
++        });
++    };
++    const schedule = () => {
++        clearTimeout(timer);
++        timer = setTimeout(() => {
++            start();
++            run();
++        }, 50);
++    };
++    run();
++    return {
++        close: async () => {
++            closed = true;
++            clearTimeout(timer);
++            clearInterval(poller);
++            tree?.close();
++            for (const watcher of replaced)
++                watcher.close();
++            await building;
++        },
++    };
++};
++/**
+  * Watch for changes in the bundle and return a stream of bundle output.
+  * @param inputOptions - The input options for the bundle.
+  * @param outputOptions - The output options for the bundle.
+@@ -141,7 +402,10 @@
+  */
+ export const watch = (inputOptions, outputOptions, extra) => Stream.callback((queue) => Effect.acquireRelease(Effect.promise(async () => {
+     const rolldown = await loadRolldown();
+-    const watcher = rolldown.watch({
++    const start = () => {
++        Queue.offerUnsafe(queue, { _tag: "Start" });
++    };
++    const options = {
+         ...withAlchemyDefine(inputOptions),
+         plugins: [
+             inputOptions.plugins,
+@@ -149,11 +413,7 @@
+             // The watcher event listener does not receive the bundle output, so we grab it using a plugin.
+             {
+                 name: "alchemy:watch-bundle",
+-                watchChange() {
+-                    Queue.offerUnsafe(queue, {
+-                        _tag: "Start",
+-                    });
+-                },
++                watchChange: start,
+                 generateBundle(_outputOptions, bundle) {
+                     Queue.offerUnsafe(queue, {
+                         _tag: "Success",
+@@ -162,6 +422,15 @@
+                 },
+             },
+         ],
++    };
++    if (process.platform === "darwin") {
++        return watchModuleTree(rolldown, options, withDceDefault(outputOptions), start, (error) => Queue.offerUnsafe(queue, {
++            _tag: "Error",
++            error: bundleErrorFromUnknown(error),
++        }));
++    }
++    const watcher = rolldown.watch({
++        ...options,
+         watch: {
+             // Watching the full module graph of an Effect worker (all of
+             // `effect`, `alchemy`, `@distilled.cloud/*`) registers thousands
+diff --git a/src/Bundle/Bundle.ts b/src/Bundle/Bundle.ts
+--- a/src/Bundle/Bundle.ts
++++ b/src/Bundle/Bundle.ts
+@@ -4,6 +4,8 @@
+ import * as Schema from "effect/Schema";
+ import * as Stream from "effect/Stream";
+ import assert from "node:assert";
++import * as NodeFS from "node:fs";
++import * as NodePath from "node:path";
+ import type * as rolldown from "rolldown";
+ import { sha256, sha256Object } from "../Util/sha256.ts";
+ import {
+@@ -251,6 +253,263 @@
+     Effect.flatMap(Effect.forEach(bundleFileFromOutputChunk)),
+     Effect.flatMap(bundleOutputFromFiles),
+   );
++
++/**
++ * Rebuild on macOS when a file of the module graph changes, from one
++ * recursive `fs.watch` over the graph's common directory.
++ *
++ * Rolldown's FSEvents watcher makes every watched directory its own watch
++ * root, and FSEvents holds a descriptor for that directory and each of its
++ * ancestors up to `/`. A workspace directory therefore costs as many
++ * descriptors as its path is deep, again for every Worker that imports it.
++ * Local Workers sharing workspace sources took the sidecar past OPEN_MAX
++ * (10,240); macOS `posix_spawn` refuses pipes above it, so every later
++ * workerd spawn failed with `spawn EBADF`. A recursive `fs.watch` is one
++ * FSEvents stream with no per-directory descriptors. Linux keeps rolldown's
++ * watcher: inotify needs no descriptor per directory, and a recursive
++ * `fs.watch` there would add a watch for every directory under the root.
++ *
++ * The watch covers each source before rolldown reads it. Changes during a
++ * build are kept and checked against the graph the build collected, so an
++ * edit made while it runs rebuilds again. A source whose stat changed after
++ * the build loaded it also rebuilds, since a new FSEvents stream starts
++ * asynchronously and may miss a change made just after it is created. The
++ * watched directory's inode is polled: when it or an ancestor moves, the
++ * graph rebuilds (reporting the missing entry) and the watch moves to the
++ * nearest directory that still exists. A move undone between two polls keeps
++ * the inode and may send no event, but sets the moved directory's change
++ * time; the poll then compares each source with what the build read.
++ * Plugins' `watchChange` hooks are not called.
++ */
++const watchModuleTree = (
++  rolldown: typeof import("rolldown"),
++  inputOptions: rolldown.InputOptions,
++  outputOptions: rolldown.OutputOptions,
++  start: () => void,
++  fail: (error: unknown) => void,
++) => {
++  let files = new Set<string>();
++  // Directories between the watched directory and a file; renaming one
++  // moves the file.
++  let directories = new Set<string>();
++  // The graph's common directory.
++  let root: string | undefined;
++  // The directory under watch: `root`, or its nearest existing ancestor
++  // once `root` has moved away.
++  let watched: string | undefined;
++  // Device and inode of `watched` when the watch started.
++  let identity: string | undefined;
++  // Change times of `watched` and its ancestors at the last idle poll.
++  let lineage: string | undefined;
++  let tree: NodeFS.FSWatcher | undefined;
++  let poller: ReturnType<typeof setInterval> | undefined;
++  // Watchers a build replaced by moving the watch; closed when it ends.
++  let replaced: Array<NodeFS.FSWatcher> = [];
++  // Paths changed during the current build; `null` for an unnamed change.
++  let changed = new Set<string | null>();
++  // Each source's stat when the current build loaded it.
++  let loaded = new Map<string, string>();
++  let timer: ReturnType<typeof setTimeout> | undefined;
++  let building: Promise<void> | undefined;
++  let again = false;
++  let closed = false;
++  // A graph file or a directory holding one changed. An event without a
++  // file name may be either.
++  const affects = (path: string | null) =>
++    path === null || files.has(path) || directories.has(path);
++  const inode = (path: string) => {
++    try {
++      const stat = NodeFS.statSync(path);
++      return `${stat.dev}:${stat.ino}`;
++    } catch {
++      return undefined;
++    }
++  };
++  const stamp = (path: string) => {
++    try {
++      const stat = NodeFS.statSync(path);
++      return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`;
++    } catch {
++      return "";
++    }
++  };
++  const changedAt = (path: string) => {
++    try {
++      return NodeFS.statSync(path).ctimeMs;
++    } catch {
++      return undefined;
++    }
++  };
++  // A source changed after the current build read it.
++  const edited = () =>
++    [...loaded].some(([file, before]) => stamp(file) !== before);
++  // When `watched` moved or was replaced, watch where the graph is now and
++  // rebuild, which reports a missing entry. When it or an ancestor moved and
++  // came back, rebuild if a source changed meanwhile.
++  const poll = () => {
++    const target = watched!;
++    NodeFS.stat(target, (error, stat) => {
++      if (closed || target !== watched) return;
++      if (error === null && `${stat.dev}:${stat.ino}` === identity) {
++        let times = "";
++        for (
++          let path = target;
++          path !== NodePath.dirname(path);
++          path = NodePath.dirname(path)
++        )
++          times += `${changedAt(path)}:`;
++        // A build in progress compares its sources when it ends.
++        if (building === undefined && times !== lineage) {
++          lineage = times;
++          if (edited()) schedule();
++        }
++        return;
++      }
++      observe();
++      if (building !== undefined) changed.add(null);
++      else schedule();
++    });
++  };
++  // Watch `root`, or its nearest existing ancestor while it is missing.
++  // The current watch stays while it contains `root` and has not moved. A
++  // replaced watcher keeps running until the build ends so nothing is
++  // missed while the new one starts.
++  const observe = () => {
++    if (closed || root === undefined) return;
++    if (
++      watched !== undefined &&
++      !NodePath.relative(watched, root).startsWith("..") &&
++      inode(watched) === identity
++    )
++      return;
++    let next = root;
++    let current = inode(next);
++    while (current === undefined && next !== NodePath.dirname(next)) {
++      next = NodePath.dirname(next);
++      current = inode(next);
++    }
++    if (tree !== undefined) replaced.push(tree);
++    watched = next;
++    identity = current;
++    tree = NodeFS.watch(next, { recursive: true }, (_event, name) => {
++      const path = name === null ? null : NodePath.join(next, name);
++      if (building !== undefined) changed.add(path);
++      else if (affects(path)) schedule();
++    }).on("error", fail);
++    poller ??= setInterval(poll, 500).unref();
++  };
++  // Widen the root to contain `file`. The root never narrows.
++  const cover = (file: string) => {
++    if (closed || !NodePath.isAbsolute(file)) return;
++    const directory = NodePath.dirname(file);
++    let next = root ?? directory;
++    while (NodePath.relative(next, directory).startsWith(".."))
++      next = NodePath.dirname(next);
++    if (next === root) return;
++    root = next;
++    observe();
++  };
++  const coverage: rolldown.Plugin = {
++    name: "alchemy:watch-sources",
++    load: {
++      filter: { id: { exclude: /[\\/]node_modules[\\/]/ } },
++      handler(id) {
++        if (!NodePath.isAbsolute(id)) return;
++        loaded.set(id, stamp(id));
++        cover(id);
++      },
++    },
++  };
++  // Adopt the build's graph; true when a source changed after the build
++  // read it, or a change during the build affects the graph.
++  const settle = (next: ReadonlyArray<string>, failed: boolean) => {
++    const sources = next.filter(
++      (file) =>
++        NodePath.isAbsolute(file) &&
++        !file.split(NodePath.sep).includes("node_modules"),
++    );
++    // A failed build may stop before loading every module; keep watching
++    // the last complete graph so fixing any of its files rebuilds.
++    files = new Set(failed ? [...files, ...sources] : sources);
++    // Watch files a plugin added without rolldown loading them.
++    for (const file of files) cover(file);
++    directories = new Set();
++    for (const file of files) {
++      let directory = NodePath.dirname(file);
++      while (directory !== watched && !directories.has(directory)) {
++        directories.add(directory);
++        directory = NodePath.dirname(directory);
++      }
++    }
++    for (const watcher of replaced) watcher.close();
++    replaced = [];
++    return edited() || [...changed].some(affects);
++  };
++  const rebuild = async () => {
++    let failed = false;
++    let next: ReadonlyArray<string> = [];
++    try {
++      // Plugins' `options` hooks rewrite `input` in place (the virtual
++      // entries wrap it); rolldown's own watcher runs them once, so each
++      // build here starts from a copy of the caller's options.
++      const bundle = await rolldown.rolldown({
++        ...inputOptions,
++        plugins: [coverage, inputOptions.plugins],
++      });
++      try {
++        await bundle.write(outputOptions);
++      } catch (error) {
++        failed = true;
++        fail(error);
++      } finally {
++        next = await bundle.watchFiles;
++        await bundle.close();
++      }
++    } catch (error) {
++      failed = true;
++      fail(error);
++    }
++    return settle(next, failed);
++  };
++  const run = (): void => {
++    if (building) {
++      again = true;
++      return;
++    }
++    changed = new Set();
++    loaded = new Map();
++    building = rebuild()
++      .catch((error) => {
++        fail(error);
++        return false;
++      })
++      .then((stale) => {
++        building = undefined;
++        if ((stale || again) && !closed) {
++          again = false;
++          schedule();
++        }
++      });
++  };
++  const schedule = () => {
++    clearTimeout(timer);
++    timer = setTimeout(() => {
++      start();
++      run();
++    }, 50);
++  };
++  run();
++  return {
++    close: async () => {
++      closed = true;
++      clearTimeout(timer);
++      clearInterval(poller);
++      tree?.close();
++      for (const watcher of replaced) watcher.close();
++      await building;
++    },
++  };
++};
+ 
+ /**
+  * Watch for changes in the bundle and return a stream of bundle output.
+@@ -272,9 +531,12 @@
+       }
+   >((queue) =>
+     Effect.acquireRelease(
+-      Effect.promise(async () => {
++      Effect.promise(async (): Promise<{ close(): Promise<void> }> => {
+         const rolldown = await loadRolldown();
+-        const watcher = rolldown.watch({
++        const start = () => {
++          Queue.offerUnsafe(queue, { _tag: "Start" });
++        };
++        const options: rolldown.InputOptions = {
+           ...withAlchemyDefine(inputOptions),
+           plugins: [
+             inputOptions.plugins,
+@@ -282,11 +544,7 @@
+             // The watcher event listener does not receive the bundle output, so we grab it using a plugin.
+             {
+               name: "alchemy:watch-bundle",
+-              watchChange() {
+-                Queue.offerUnsafe(queue, {
+-                  _tag: "Start",
+-                });
+-              },
++              watchChange: start,
+               generateBundle(_outputOptions, bundle) {
+                 Queue.offerUnsafe(queue, {
+                   _tag: "Success",
+@@ -295,6 +553,22 @@
+               },
+             },
+           ],
++        };
++        if (process.platform === "darwin") {
++          return watchModuleTree(
++            rolldown,
++            options,
++            withDceDefault(outputOptions),
++            start,
++            (error) =>
++              Queue.offerUnsafe(queue, {
++                _tag: "Error",
++                error: bundleErrorFromUnknown(error),
++              }),
++          );
++        }
++        const watcher = rolldown.watch({
++          ...options,
+           watch: {
+             // Watching the full module graph of an Effect worker (all of
+             // `effect`, `alchemy`, `@distilled.cloud/*`) registers thousands

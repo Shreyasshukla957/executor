@@ -21,6 +21,29 @@ and the Bun TypeScript entry points (`src/`). It carries:
 - **Local Durable Object bindings.** A local Worker declares only its own
   Durable Object namespaces, not another Worker's bindings whose script name
   is still unresolved during precreate.
+- **macOS dev watching.** `Bundle.watch` on macOS rebuilds from one recursive
+  `fs.watch` over the module graph's common directory instead of rolldown's
+  watcher. Rolldown's FSEvents backend holds a descriptor for each watched
+  directory and every ancestor up to `/`, per Worker. Cloud's local Workers
+  took the dev sidecar past 10,240 descriptors, macOS `posix_spawn` refuses
+  pipes above that (`OPEN_MAX`), and workerd failed with `spawn EBADF`. A load
+  hook widens the watch before rolldown reads each source and records its
+  stat. Changes during a build are kept and checked against the graph it
+  collected, and a source whose stat changed after it was loaded rebuilds
+  again, which covers edits FSEvents misses while a new stream starts.
+  Renaming a directory that holds a graph file rebuilds, and so does an event
+  without a file name. The watched directory's inode is polled every 500 ms:
+  when it or an ancestor is moved or replaced, the graph rebuilds (a missing
+  entry is reported as rolldown's own watcher does) and the watch moves to the
+  nearest directory that still exists, so moving it back rebuilds again. A
+  move undone between two polls keeps the inode and may send no event; the
+  poll also tracks the change times of the watched directory and its
+  ancestors and, when one changes, rebuilds if a source differs from what the
+  last build read. Rebuilds that follow a build go through the same 50 ms
+  debounce as file events, and the poll timer is unref'd.
+  Plugins' `watchChange` hooks are not called; alchemy's own, which reports
+  the rebuild, is the only one in use. Linux keeps rolldown's watcher. Drop
+  this part when rolldown watches without per-directory descriptors on macOS.
 
 Upstream beta.80 now provides what the beta.79 patch also carried: storing a
 no-op resource before signalling dependents
@@ -36,6 +59,11 @@ interruption or failure data it cannot serialize (such as an error with a
 defects, and Executor's provisioning, app workflow and organization removal
 steps used to die. They now fail with typed errors, so their configured retries
 still apply; an app's `NonRetryableError` remains a defect.
+
+Do not use `bun patch --commit` to regenerate this patch. It previously
+dropped a trailing `};` from an unrelated no-newline-at-EOF hunk. Preserve
+existing sections byte-for-byte, append targeted diffs manually, and compare
+patched installs outside the intended files.
 
 When upgrading, port each part onto the new release by hand and check it
 against upstream changes. Context-free application of the old patch misplaced
