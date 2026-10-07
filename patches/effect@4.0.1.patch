@@ -84,10 +84,77 @@ index 4bb8146..dfb763b 100644
        return out;
      }
 diff --git a/dist/ai/McpServer.js b/dist/ai/McpServer.js
-index 2da5941..0a80e29 100644
+index 2da594107273980144e84ab9b53636ef34043f6b..aab5f7c8bcbe4822337b393cdc5c23db9475f498 100644
 --- a/dist/ai/McpServer.js
 +++ b/dist/ai/McpServer.js
-@@ -1090,9 +1090,7 @@ export const layerHttp = options => {
+@@ -423,8 +423,15 @@ export class McpServer extends /*#__PURE__*/Context.Service()("effect/ai/McpServ
+ const MCP_SESSION_ID_HEADER = "mcp-session-id";
+ const MCP_PROTOCOL_VERSION_HEADER = "mcp-protocol-version";
+ const MCP_INVALID_BATCH_METHOD = "invalid/json-rpc-batch";
+-const cancelledResponses = /*#__PURE__*/new WeakMap();
+ const requestKey = requestId => `${typeof requestId}:${requestId}`;
++const httpPostRequests = /*#__PURE__*/new WeakMap();
++// A cancelled request's exit, and where the encoder records that it withheld the response.
++const cancelledResponses = /*#__PURE__*/new WeakMap();
++/**
++ * A POST carrying a JSON-RPC request ended without a response for it that the server withheld
++ * on purpose, for example because writing the response failed.
++ */
++class McpResponseNotWritten extends /*#__PURE__*/Data.TaggedError("McpResponseNotWritten") {}
+ class McpClientKey extends Data.Class {}
+ /**
+  * Runs an MCP server over the current `RpcServer.Protocol`.
+@@ -509,6 +516,8 @@ const runWithRuntime = /*#__PURE__*/Effect.fnUntraced(function* (options, runtim
+     if (!cancelRequest(clientId, requestId)) {
+       return Effect.void;
+     }
++    // Ending the HTTP stream withholds the subscription's response.
++    activeRequests.get(clientId)?.get(requestKey(requestId))?.post?.withheld.add(requestKey(requestId));
+     return isHttp ? protocol.end(clientId) : sendNotification(protocolVersion, clientId, {
+       tag: "notifications/cancelled",
+       payload: {
+@@ -636,13 +645,16 @@ const runWithRuntime = /*#__PURE__*/Effect.fnUntraced(function* (options, runtim
+       if (response._tag === "Exit") {
+         const requests = activeRequests.get(clientId);
+         const key = requestKey(response.requestId);
+-        const cancelled = requests?.get(key)?.cancelled;
++        const active = requests?.get(key);
+         if (requests !== undefined && requests.delete(key) && requests.size === 0) {
+           activeRequests.delete(clientId);
+         }
+-        if (cancelled === true) {
++        if (active?.cancelled === true) {
+           if (transport === "custom") return Effect.void;
+-          cancelledResponses.set(response, response.requestId);
++          cancelledResponses.set(response, {
++            requestId: response.requestId,
++            post: active.post
++          });
+           return protocol.send(clientId, response);
+         }
+         if (response.exit._tag === "Failure" && !response.exit.cause.some(failure => failure._tag === "Fail")) {
+@@ -769,9 +781,19 @@ const runWithRuntime = /*#__PURE__*/Effect.fnUntraced(function* (options, runtim
+               }
+               if (request.isNotification !== true) {
+                 const requests = activeRequests.get(clientId) ?? new Map();
++                let post;
++                if (httpRequest !== undefined) {
++                  post = httpPostRequests.get(httpRequest) ?? {
++                    requests: new Set(),
++                    withheld: new Set()
++                  };
++                  post.requests.add(requestKey(request.id));
++                  httpPostRequests.set(httpRequest, post);
++                }
+                 requests.set(requestKey(request.id), {
+                   prepared,
+-                  cancelled: false
++                  cancelled: false,
++                  post
+                 });
+                 activeRequests.set(clientId, requests);
+               }
+@@ -1090,9 +1112,7 @@ export const layerHttp = options => {
        allow: "POST"
      }
    });
@@ -98,7 +165,7 @@ index 2da5941..0a80e29 100644
    const routes = Layer.mergeAll(HttpRouter.add("GET", options.path, methodNotAllowed), HttpRouter.add("PUT", options.path, methodNotAllowed), HttpRouter.add("PATCH", options.path, methodNotAllowed), HttpRouter.add("DELETE", options.path, methodNotAllowed), HttpRouter.add("OPTIONS", options.path, methodNotAllowed));
    return Layer.merge(layerWithRuntime(options, "http"), routes).pipe(Layer.provide(layerMcpProtocolHttp(options)), Layer.provide(runtime), Layer.provide(RpcSerialization.layerJsonRpc()));
  };
-@@ -1105,20 +1103,14 @@ const layerMcpProtocolHttp = options => Layer.effect(RpcServer.Protocol)(Effect.
+@@ -1105,20 +1125,14 @@ const layerMcpProtocolHttp = options => Layer.effect(RpcServer.Protocol)(Effect.
    const router = yield* HttpRouter.HttpRouter;
    yield* router.add("POST", options.path, request => {
      if (!isAllowedMcpOrigin(request, options.allowedOrigins)) {
@@ -122,7 +189,71 @@ index 2da5941..0a80e29 100644
      }
      return Effect.gen(function* () {
        const parsed = yield* Effect.result(Effect.flatMap(request.text, Schema.decodeEffect(Schema.UnknownFromJsonString)));
-@@ -1244,6 +1236,19 @@ const isAllowedMcpOrigin = (request, allowedOrigins) => {
+@@ -1126,10 +1140,26 @@ const layerMcpProtocolHttp = options => Layer.effect(RpcServer.Protocol)(Effect.
+       if (admission._tag === "Rejected") {
+         return admission.response;
+       }
+-      const response = Effect.map(httpEffect, response => {
++      // The protocol registers this POST's requests under the request in the current context.
++      const httpRequest = yield* HttpServerRequest.HttpServerRequest;
++      const response = Effect.flatMap(httpEffect, response => {
++        if (!admission.acknowledge && response.body._tag === "Uint8Array" && response.body.body.length === 0) {
++          // A POST with a request must answer with JSON or SSE. Without a response, that is only
++          // correct when the server withheld every request's response after its cancellation.
++          // https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#sending-messages-to-the-server
++          const post = httpPostRequests.get(httpRequest);
++          return post !== undefined && post.requests.size > 0 && Array.from(post.requests).every(key => post.withheld.has(key)) ? Effect.succeed(HttpServerResponse.stream(Stream.empty, {
++            status: response.status,
++            headers: Headers.remove(response.headers, "content-type"),
++            cookies: response.cookies,
++            contentType: "text/event-stream"
++          })) : Effect.die(new McpResponseNotWritten({
++            message: "The MCP request ended without writing its response"
++          }));
++        }
+         // Completed responses may already contain notifications followed by the result.
+         const hasMultipleMessages = response.body._tag === "Uint8Array" && response.body.body.subarray(0, -1).includes(10);
+-        return admission.isSubscription || response.body._tag === "Stream" || hasMultipleMessages ? toServerSentEvents(response, admission.isSubscription) : response;
++        return Effect.succeed(admission.isSubscription || response.body._tag === "Stream" || hasMultipleMessages ? toServerSentEvents(response, admission.isSubscription) : response);
+       });
+       return yield* admission.acknowledge ? Effect.catchCause(response, () => Effect.succeed(HttpServerResponse.empty({
+         status: 202
+@@ -1180,15 +1210,16 @@ function mcpJsonRpcSerialization(options) {
+     ...serialization,
+     makeUnsafe: () => {
+       const parser = serialization.makeUnsafe();
+-      const cancelledIds = new Set();
++      // Cancelled request IDs, and the POST to record each withheld response in.
++      const cancelledIds = new Map();
+       return {
+         decode: parser.decode,
+         encode: response => {
+           if (Predicate.isReadonlyObject(response)) {
+-            const cancelledId = cancelledResponses.get(response);
+-            if (cancelledId !== undefined) {
++            const cancelled = cancelledResponses.get(response);
++            if (cancelled !== undefined) {
+               cancelledResponses.delete(response);
+-              cancelledIds.add(cancelledId);
++              cancelledIds.set(cancelled.requestId, cancelled.post);
+             }
+           }
+           const encoded = parser.encode(response);
+@@ -1198,7 +1229,12 @@ function mcpJsonRpcSerialization(options) {
+           if (cancelledIds.size > 0) {
+             // Count cancelled completions toward the batch, but never write their responses.
+             // https://modelcontextprotocol.io/specification/2025-03-26/basic/utilities/cancellation
+-            const keep = message => !(Predicate.isReadonlyObject(message) && !Predicate.hasProperty(message, "method") && (typeof message.id === "string" || typeof message.id === "number") && cancelledIds.delete(message.id));
++            const keep = message => {
++              if (!Predicate.isReadonlyObject(message) || Predicate.hasProperty(message, "method") || typeof message.id !== "string" && typeof message.id !== "number" || !cancelledIds.has(message.id)) return true;
++              cancelledIds.get(message.id)?.withheld.add(requestKey(message.id));
++              cancelledIds.delete(message.id);
++              return false;
++            };
+             if (Array.isArray(message)) {
+               const remaining = message.filter(keep);
+               if (remaining.length === 0) return undefined;
+@@ -1244,6 +1280,19 @@ const isAllowedMcpOrigin = (request, allowedOrigins) => {
    const origin = request.headers["origin"];
    return origin === undefined || (allowedOrigins ?? []).includes(origin);
  };
@@ -326,10 +457,90 @@ index 133d409..44e28bd 100644
        return out
      }
 diff --git a/src/ai/McpServer.ts b/src/ai/McpServer.ts
-index 8c601ab..73d5fff 100644
+index 8c601ab29aac1f6de2318a7b69e24389215775fa..5bb9f957ce506ecf1c4c809250c14273bd7f9c87 100644
 --- a/src/ai/McpServer.ts
 +++ b/src/ai/McpServer.ts
-@@ -1567,7 +1567,7 @@ export const layerHttp = (options: {
+@@ -650,14 +650,37 @@ export class McpServer extends Context.Service<McpServer, {
+ const MCP_SESSION_ID_HEADER = "mcp-session-id"
+ const MCP_PROTOCOL_VERSION_HEADER = "mcp-protocol-version"
+ const MCP_INVALID_BATCH_METHOD = "invalid/json-rpc-batch"
+-const cancelledResponses = new WeakMap<object, string | number>()
+ const requestKey = (requestId: string | number): string => `${typeof requestId}:${requestId}`
+ 
++/**
++ * The JSON-RPC requests of one HTTP POST, and those whose response the server withheld because
++ * the client cancelled them. Only a POST whose every request was withheld may end without one.
++ */
++interface HttpPostRequests {
++  readonly requests: Set<string>
++  readonly withheld: Set<string>
++}
++const httpPostRequests = new WeakMap<HttpServerRequest.HttpServerRequest, HttpPostRequests>()
++// A cancelled request's exit, and where the encoder records that it withheld the response.
++const cancelledResponses = new WeakMap<object, {
++  readonly requestId: string | number
++  readonly post: HttpPostRequests | undefined
++}>()
++
+ interface ActiveRequest {
+   readonly prepared: McpRuntime.PreparedRequest
+   readonly cancelled: boolean
++  readonly post: HttpPostRequests | undefined
+ }
+ 
++/**
++ * A POST carrying a JSON-RPC request ended without a response for it that the server withheld
++ * on purpose, for example because writing the response failed.
++ */
++class McpResponseNotWritten extends Data.TaggedError("McpResponseNotWritten")<{
++  readonly message: string
++}> {}
++
+ class McpClientKey extends Data.Class<{
+   readonly clientId: number
+   readonly profile: McpCore.NegotiatedProtocolProfile<string>
+@@ -798,6 +821,8 @@ const runWithRuntime = Effect.fnUntraced(function*(
+       if (!cancelRequest(clientId, requestId)) {
+         return Effect.void
+       }
++      // Ending the HTTP stream withholds the subscription's response.
++      activeRequests.get(clientId)?.get(requestKey(requestId))?.post?.withheld.add(requestKey(requestId))
+       return isHttp
+         ? protocol.end(clientId)
+         : sendNotification(protocolVersion, clientId, {
+@@ -948,13 +973,13 @@ const runWithRuntime = Effect.fnUntraced(function*(
+       if (response._tag === "Exit") {
+         const requests = activeRequests.get(clientId)
+         const key = requestKey(response.requestId)
+-        const cancelled = requests?.get(key)?.cancelled
++        const active = requests?.get(key)
+         if (requests !== undefined && requests.delete(key) && requests.size === 0) {
+           activeRequests.delete(clientId)
+         }
+-        if (cancelled === true) {
++        if (active?.cancelled === true) {
+           if (transport === "custom") return Effect.void
+-          cancelledResponses.set(response, response.requestId)
++          cancelledResponses.set(response, { requestId: response.requestId, post: active.post })
+           return protocol.send(clientId, response)
+         }
+         if (
+@@ -1130,7 +1155,13 @@ const runWithRuntime = Effect.fnUntraced(function*(
+               }
+               if (request.isNotification !== true) {
+                 const requests = activeRequests.get(clientId) ?? new Map<string, ActiveRequest>()
+-                requests.set(requestKey(request.id), { prepared, cancelled: false })
++                let post: HttpPostRequests | undefined
++                if (httpRequest !== undefined) {
++                  post = httpPostRequests.get(httpRequest) ?? { requests: new Set(), withheld: new Set() }
++                  post.requests.add(requestKey(request.id))
++                  httpPostRequests.set(httpRequest, post)
++                }
++                requests.set(requestKey(request.id), { prepared, cancelled: false, post })
+                 activeRequests.set(clientId, requests)
+               }
+               const handled = f(clientId, routedRequest)
+@@ -1567,7 +1598,7 @@ export const layerHttp = (options: {
    const methodNotAllowed = (request: HttpServerRequest.HttpServerRequest) =>
      isAllowedMcpOrigin(request, options.allowedOrigins)
        ? Effect.succeed(methodNotAllowedResponse)
@@ -338,7 +549,7 @@ index 8c601ab..73d5fff 100644
    const routes = Layer.mergeAll(
      HttpRouter.add("GET", options.path, methodNotAllowed),
      HttpRouter.add("PUT", options.path, methodNotAllowed),
-@@ -1598,14 +1598,21 @@ const layerMcpProtocolHttp = (options: {
+@@ -1598,14 +1629,21 @@ const layerMcpProtocolHttp = (options: {
      const router = yield* HttpRouter.HttpRouter
      yield* router.add("POST", options.path, (request) => {
        if (!isAllowedMcpOrigin(request, options.allowedOrigins)) {
@@ -363,7 +574,86 @@ index 8c601ab..73d5fff 100644
        }
        return Effect.gen(function*() {
          const parsed = yield* Effect.result(
-@@ -1751,6 +1758,18 @@ const isAllowedMcpOrigin = (
+@@ -1615,13 +1653,34 @@ const layerMcpProtocolHttp = (options: {
+         if (admission._tag === "Rejected") {
+           return admission.response
+         }
+-        const response = Effect.map(httpEffect, (response) => {
++        // The protocol registers this POST's requests under the request in the current context.
++        const httpRequest = yield* HttpServerRequest.HttpServerRequest
++        const response = Effect.flatMap(httpEffect, (response) => {
++          if (!admission.acknowledge && response.body._tag === "Uint8Array" && response.body.body.length === 0) {
++            // A POST with a request must answer with JSON or SSE. Without a response, that is only
++            // correct when the server withheld every request's response after its cancellation.
++            // https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#sending-messages-to-the-server
++            const post = httpPostRequests.get(httpRequest)
++            return post !== undefined && post.requests.size > 0 &&
++                Array.from(post.requests).every((key) => post.withheld.has(key))
++              ? Effect.succeed(HttpServerResponse.stream(Stream.empty, {
++                status: response.status,
++                headers: Headers.remove(response.headers, "content-type"),
++                cookies: response.cookies,
++                contentType: "text/event-stream"
++              }))
++              : Effect.die(
++                new McpResponseNotWritten({ message: "The MCP request ended without writing its response" })
++              )
++          }
+           // Completed responses may already contain notifications followed by the result.
+           const hasMultipleMessages = response.body._tag === "Uint8Array" &&
+             response.body.body.subarray(0, -1).includes(10)
+-          return admission.isSubscription || response.body._tag === "Stream" || hasMultipleMessages
+-            ? toServerSentEvents(response, admission.isSubscription)
+-            : response
++          return Effect.succeed(
++            admission.isSubscription || response.body._tag === "Stream" || hasMultipleMessages
++              ? toServerSentEvents(response, admission.isSubscription)
++              : response
++          )
+         })
+         return yield* admission.acknowledge
+           ? Effect.catchCause(response, () => Effect.succeed(HttpServerResponse.empty({ status: 202 })))
+@@ -1677,15 +1736,16 @@ function mcpJsonRpcSerialization(options?: {
+     ...serialization,
+     makeUnsafe: () => {
+       const parser = serialization.makeUnsafe()
+-      const cancelledIds = new Set<string | number>()
++      // Cancelled request IDs, and the POST to record each withheld response in.
++      const cancelledIds = new Map<string | number, HttpPostRequests | undefined>()
+       return {
+         decode: parser.decode,
+         encode: (response) => {
+           if (Predicate.isReadonlyObject(response)) {
+-            const cancelledId = cancelledResponses.get(response)
+-            if (cancelledId !== undefined) {
++            const cancelled = cancelledResponses.get(response)
++            if (cancelled !== undefined) {
+               cancelledResponses.delete(response)
+-              cancelledIds.add(cancelledId)
++              cancelledIds.set(cancelled.requestId, cancelled.post)
+             }
+           }
+           const encoded = parser.encode(response)
+@@ -1695,9 +1755,15 @@ function mcpJsonRpcSerialization(options?: {
+           if (cancelledIds.size > 0) {
+             // Count cancelled completions toward the batch, but never write their responses.
+             // https://modelcontextprotocol.io/specification/2025-03-26/basic/utilities/cancellation
+-            const keep = (message: unknown) =>
+-              !(Predicate.isReadonlyObject(message) && !Predicate.hasProperty(message, "method") &&
+-                (typeof message.id === "string" || typeof message.id === "number") && cancelledIds.delete(message.id))
++            const keep = (message: unknown) => {
++              if (
++                !Predicate.isReadonlyObject(message) || Predicate.hasProperty(message, "method") ||
++                (typeof message.id !== "string" && typeof message.id !== "number") || !cancelledIds.has(message.id)
++              ) return true
++              cancelledIds.get(message.id)?.withheld.add(requestKey(message.id))
++              cancelledIds.delete(message.id)
++              return false
++            }
+             if (Array.isArray(message)) {
+               const remaining = message.filter(keep)
+               if (remaining.length === 0) return undefined
+@@ -1751,6 +1817,18 @@ const isAllowedMcpOrigin = (
    return origin === undefined || (allowedOrigins ?? []).includes(origin)
  }
  
@@ -571,3 +861,36 @@ index c017c35adddc6ddc2e3cf9279db34b8fc6a957aa..072f6ea7bdcbd129472211aeaaa31e18
          })
  
          if (Predicate.isUndefined(tool)) {
+diff --git a/dist/rpc/RpcServer.js b/dist/rpc/RpcServer.js
+index 709efbf8789dc6a16396a070767ceeae3f067b48..b94b832654d856dd349dcc72c92d8a6b6b7c23a2 100644
+--- a/dist/rpc/RpcServer.js
++++ b/dist/rpc/RpcServer.js
+@@ -759,7 +759,9 @@ export const makeProtocolWithHttpEffect = /*#__PURE__*/Effect.fnUntraced(functio
+         contentType: serialization.contentType
+       });
+     }
+-    const initialChunk = yield* Queue.takeAll(queue);
++    // A queue that ends without messages gives an empty body, as a buffered response without
++    // messages does, rather than a `Done` failure. The caller decides whether that is correct.
++    const initialChunk = yield* Effect.orElseSucceed(Queue.takeAll(queue), () => []);
+     if (queue.state._tag === "Done") {
+       return HttpServerResponse.uint8Array(mergeUint8Arrays(initialChunk), {
+         contentType: serialization.contentType
+diff --git a/src/rpc/RpcServer.ts b/src/rpc/RpcServer.ts
+index a6d06f709f37e67fa2dee015fc18dd98a6b0538f..af783b86e0226c1d3af39ed8a803219c811b5324 100644
+--- a/src/rpc/RpcServer.ts
++++ b/src/rpc/RpcServer.ts
+@@ -1181,7 +1181,12 @@ export const makeProtocolWithHttpEffect: (
+       })
+     }
+ 
+-    const initialChunk = yield* Queue.takeAll(queue) as any as Effect.Effect<NonEmptyReadonlyArray<Uint8Array>>
++    // A queue that ends without messages gives an empty body, as a buffered response without
++    // messages does, rather than a `Done` failure. The caller decides whether that is correct.
++    const initialChunk: ReadonlyArray<Uint8Array> = yield* Effect.orElseSucceed(
++      Queue.takeAll(queue as Queue.Dequeue<Uint8Array, Cause.Done>),
++      () => []
++    )
+     if (queue.state._tag === "Done") {
+       return HttpServerResponse.uint8Array(mergeUint8Arrays(initialChunk), {
+         contentType: serialization.contentType

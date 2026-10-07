@@ -4225,7 +4225,8 @@ export const scenarios = {
   mcpProtocolVersions: {
     fixtures: "actors",
     file: "mcp-protocol-versions.spec.ts",
-    title: "Hosted MCP negotiates older protocol versions and explains rejected requests",
+    title:
+      "Hosted MCP negotiates older protocol versions, explains rejected requests and ends a cancelled call without a result",
     targets: {
       "self-host": scheduled,
       cloud: scheduled,
