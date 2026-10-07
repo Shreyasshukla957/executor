@@ -300,6 +300,7 @@ export const accountRouter = <Account extends { readonly id: string }>(
     Effect.gen(function* () {
       const routers = new Map<string, AppNode>();
       for (const account of accounts) {
+        // oxlint-disable-next-line executor/authored-code-through-adapter -- discover is the app's, called from the app's own code
         const declaration = yield* Effect.tryPromise({
           try: () => discover(account),
           catch: (error) => accountProviderError(error, account.id),

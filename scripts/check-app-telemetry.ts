@@ -164,7 +164,32 @@ const attributes = (node: ts.Expression): void => {
   }
 };
 
+/** Whether `helper` spreads `parameter` into an object it builds, as `ownedBy` does with options. */
+const spreads = (helper: ts.SignatureDeclaration, parameter: ts.ParameterDeclaration) => {
+  let found = false;
+  const visit = (node: ts.Node) => {
+    if (
+      ts.isSpreadAssignment(node) &&
+      ts.isIdentifier(node.expression) &&
+      checker.getSymbolAtLocation(node.expression)?.valueDeclaration === parameter
+    )
+      found = true;
+    else ts.forEachChild(node, visit);
+  };
+  ts.forEachChild(helper, visit);
+  return found;
+};
+
 const options = (node: ts.Expression) => {
+  // A helper that adds to the caller's options, such as `ownedBy(owner, options)`: read what the
+  // caller passed.
+  if (ts.isCallExpression(node)) {
+    const helper = target(node);
+    helper?.parameters.forEach((parameter, index) => {
+      if (spreads(helper, parameter)) read(node.arguments[index], "options");
+    });
+    return;
+  }
   if (!ts.isObjectLiteralExpression(node)) return;
   for (const property of node.properties)
     if (

@@ -64,6 +64,7 @@ export const collectTelemetry = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     let dropped = 0;
     const capture: typeof fetch = async (input, init) => {
       const request = new Request(input, init);
+      // oxlint-disable-next-line executor/authored-code-through-adapter -- the exporter's own request
       const body = await request.text();
       if (new URL(request.url).pathname === "/v1/traces") {
         const payload = Schema.decodeUnknownSync(TracePayload)(body);

@@ -1,8 +1,9 @@
 /** Revisioned catalog storage shared by remote protocols. Executables are never persisted. */
 import { CacheError } from "@executor-js/app-cache";
-import { Duration, Effect, Schema } from "effect";
+import { Deferred, Duration, Effect, Schema } from "effect";
 import type { AccountCredential, AppCache, CacheLoadContext } from "../contracts/cache.ts";
 import { JsonObject, type JsonValue } from "../contracts/schema.ts";
+import { fromPromise, method, toPromise } from "./authoring.ts";
 import { wrap } from "./schema.ts";
 
 export interface CatalogCacheOptions {
@@ -69,9 +70,6 @@ export interface KeptCatalog<A> {
   readonly header: JsonObject | undefined;
   readonly tools: Effect.Effect<readonly A[], unknown>;
 }
-const invoke = <A>(work: () => Promise<A>) =>
-  Effect.tryPromise({ try: work, catch: (error) => error });
-
 export const catalogCache = <A extends { readonly name: string }, S>(
   options: Omit<CatalogCacheOptions, "cache"> & {
     /** The scope from `catalogScope`; undefined keeps discovery invocation-local. */
@@ -120,13 +118,11 @@ export const catalogCache = <A extends { readonly name: string }, S>(
         const batches = yield* Effect.forEach(
           Array.from({ length: Math.ceil(count / 4) }, (_, batch) => batch * 4),
           (offset) =>
-            invoke(() =>
-              cache.readMany(
-                Array.from({ length: Math.min(4, count - offset) }, (_, index) =>
-                  part(revision, kind, offset + index),
-                ),
-                schema(Schema.Array(decoder)),
+            fromPromise(method(cache, "readMany"), "cache")(
+              Array.from({ length: Math.min(4, count - offset) }, (_, index) =>
+                part(revision, kind, offset + index),
               ),
+              schema(Schema.Array(decoder)),
             ),
           { concurrency: "unbounded" },
         );
@@ -139,7 +135,7 @@ export const catalogCache = <A extends { readonly name: string }, S>(
       });
     /** The catalog a refresh replaces, from the scope that refresh writes. */
     const kept = (cache: AppCache) =>
-      invoke(() => cache.read(key, schema(Manifest))).pipe(
+      fromPromise(method(cache, "read"), "cache")(key, schema(Manifest)).pipe(
         Effect.map((manifest) =>
           manifest === undefined
             ? undefined
@@ -153,12 +149,15 @@ export const catalogCache = <A extends { readonly name: string }, S>(
       Effect.gen(function* () {
         const { tools, header } = yield* options.load(context, kept(context.cache));
         // Content-addressed, so refreshing an unchanged catalog renews the same parts.
-        const digest = yield* invoke(() =>
-          crypto.subtle.digest(
-            "SHA-256",
-            new TextEncoder().encode(JSON.stringify({ tools, header: header ?? null })),
-          ),
-        );
+        // oxlint-disable-next-line executor/authored-code-through-adapter -- Web Crypto
+        const digest = yield* Effect.tryPromise({
+          try: () =>
+            crypto.subtle.digest(
+              "SHA-256",
+              new TextEncoder().encode(JSON.stringify({ tools, header: header ?? null })),
+            ),
+          catch: (error) => error,
+        });
         const revision = Array.from(new Uint8Array(digest), (byte) =>
           byte.toString(16).padStart(2, "0"),
         ).join("");
@@ -178,7 +177,7 @@ export const catalogCache = <A extends { readonly name: string }, S>(
             batch = [];
             batchBytes = 0;
             if (!entries.length) return Effect.void;
-            return invoke(() => context.cache.write(entries, retention)).pipe(
+            return fromPromise(method(context.cache, "write"), "cache")(entries, retention).pipe(
               Effect.withSpan("app.cache.flush", {
                 attributes: {
                   "cache.flush.index": flushes++,
@@ -243,24 +242,33 @@ export const catalogCache = <A extends { readonly name: string }, S>(
       freshFor,
       staleFor,
       ...(options.stale === undefined ? {} : { stale: options.stale }),
-      load: (context: CacheLoadContext) =>
-        Effect.runPromise(refresh(context), { signal: context.signal }),
+      // A cache may call the loader as a Promise; its own signal cancels that load.
+      load: toPromise(refresh, (context: CacheLoadContext) => context.signal),
     };
     // A router reads its catalog's header and its tools together; concurrent reads share one
     // manifest round trip.
-    let reading: Promise<typeof Manifest.Type> | undefined;
+    let reading: Deferred.Deferred<typeof Manifest.Type, unknown> | undefined;
     const current = () =>
-      cache === undefined
-        ? Effect.fail(new CacheError({ reason: "unavailable" }))
-        : invoke(
-            () =>
-              (reading ??= cache.get(getOptions).finally(() => {
-                reading = undefined;
-              })),
-          );
+      Effect.suspend(() => {
+        if (cache === undefined) return Effect.fail(new CacheError({ reason: "unavailable" }));
+        const shared = reading;
+        if (shared !== undefined) return Deferred.await(shared);
+        const deferred = Deferred.makeUnsafe<typeof Manifest.Type, unknown>();
+        reading = deferred;
+        return fromPromise(
+          method(cache, "get"),
+          "cache",
+        )(getOptions).pipe(
+          Effect.onExit((exit) =>
+            Effect.sync(() => {
+              if (reading === deferred) reading = undefined;
+            }).pipe(Effect.andThen(Deferred.done(deferred, exit))),
+          ),
+        );
+      });
     if (options.revalidate) {
       if (cache === undefined) yield* local;
-      else yield* invoke(() => cache.revalidate(getOptions));
+      else yield* fromPromise(method(cache, "revalidate"), "cache")(getOptions);
     }
     const metadata = () =>
       Effect.gen(function* () {
@@ -294,8 +302,9 @@ export const catalogCache = <A extends { readonly name: string }, S>(
           ? local.pipe(Effect.map(({ tools }) => tools.find((tool) => tool.name === name)))
           : current().pipe(
               Effect.flatMap((manifest) =>
-                invoke(() =>
-                  cache.read(part(manifest.revision, "tool", name), schema(options.schema)),
+                fromPromise(method(cache, "read"), "cache")(
+                  part(manifest.revision, "tool", name),
+                  schema(options.schema),
                 ),
               ),
             ),

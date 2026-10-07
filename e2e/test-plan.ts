@@ -3584,6 +3584,156 @@ export const scenarios = {
       local: na("This scenario uses hosted APIs; the runtime and collector are shared with Local."),
     },
   },
+  toolCallOverhead: {
+    fixtures: "actors",
+    file: "tool-call-overhead.spec.ts",
+    title: "a tool call records its Executor time apart from its upstream wait",
+    targets: {
+      "self-host": scheduled,
+      cloud: managedCloud,
+      local: na("This scenario uses hosted MCP; the runtime and collector are shared with Local."),
+    },
+  },
+  toolCallOverheadParallel: {
+    fixtures: "actors",
+    file: "tool-call-overhead.spec.ts",
+    title: "concurrent upstream waits count once against a tool call's Executor time",
+    targets: {
+      "self-host": scheduled,
+      cloud: managedCloud,
+      local: na("This scenario uses hosted MCP; the runtime and collector are shared with Local."),
+    },
+  },
+  toolCallOverheadAuthored: {
+    fixtures: "actors",
+    file: "tool-call-overhead.spec.ts",
+    title: "a tool call's Executor time excludes the app's factory, approval policy and handler",
+    targets: {
+      "self-host": scheduled,
+      cloud: managedCloud,
+      local: na("This scenario uses hosted MCP; the runtime and collector are shared with Local."),
+    },
+  },
+  toolCallOverheadElicitation: {
+    fixtures: "actors",
+    file: "tool-call-overhead.spec.ts",
+    title: "a person's answer is not Executor time, whether the app or its MCP server asked",
+    targets: {
+      "self-host": scheduled,
+      cloud: managedCloud,
+      local: na("This scenario uses hosted MCP; the runtime and collector are shared with Local."),
+    },
+  },
+  toolCallOverheadStale: {
+    fixtures: "actors",
+    file: "tool-call-overhead.spec.ts",
+    title: "Executor time flags an app isolate whose clock reads more than its caller waited",
+    targets: {
+      "self-host": scheduled,
+      cloud: managedCloud,
+      local: na("This scenario uses hosted MCP; the runtime and collector are shared with Local."),
+    },
+  },
+  toolCallOverheadFailure: {
+    fixtures: "actors",
+    file: "tool-call-overhead.spec.ts",
+    title: "a failed tool call still records its Executor time",
+    targets: {
+      "self-host": scheduled,
+      cloud: managedCloud,
+      local: na("This scenario uses hosted MCP; the runtime and collector are shared with Local."),
+    },
+  },
+  toolCallOverheadCancelled: {
+    fixtures: "actors",
+    file: "tool-call-overhead.spec.ts",
+    title: "a cancelled tool call records no Executor time it could not measure",
+    targets: {
+      "self-host": scheduled,
+      cloud: managedCloud,
+      local: na("This scenario uses hosted MCP; the runtime and collector are shared with Local."),
+    },
+  },
+  toolCallOverheadApproved: {
+    fixtures: "actors",
+    file: "tool-call-overhead.spec.ts",
+    title: "an approved tool call records its Executor time when it resumes",
+    targets: {
+      "self-host": scheduled,
+      cloud: managedCloud,
+      local: na("This scenario uses hosted MCP; the runtime and collector are shared with Local."),
+    },
+  },
+  toolCallOverheadServiceInUpstream: {
+    fixtures: "actors",
+    file: "tool-call-overhead.spec.ts",
+    title: "Executor time keeps Executor's cache work inside an upstream session",
+    targets: {
+      "self-host": scheduled,
+      cloud: managedCloud,
+      local: na("This scenario uses hosted MCP; the runtime and collector are shared with Local."),
+    },
+  },
+  toolCallOverheadLoader: {
+    fixtures: "actors",
+    file: "tool-call-overhead.spec.ts",
+    title: "Executor time excludes an app's cache loader inside Executor's cache",
+    targets: {
+      "self-host": scheduled,
+      cloud: managedCloud,
+      local: na("This scenario uses hosted MCP; the runtime and collector are shared with Local."),
+    },
+  },
+  toolCallOverheadAuthoredCache: {
+    fixtures: "actors",
+    file: "tool-call-overhead.spec.ts",
+    title: "Executor time excludes an app's own cache methods that Executor's catalog calls",
+    targets: {
+      "self-host": scheduled,
+      cloud: managedCloud,
+      local: na("This scenario uses hosted MCP; the runtime and collector are shared with Local."),
+    },
+  },
+  toolCallOverheadAuthoredCacheReceiver: {
+    fixtures: "actors",
+    file: "tool-call-overhead.spec.ts",
+    title: "Executor's catalog calls an app's own cache methods on the cache itself",
+    targets: {
+      "self-host": scheduled,
+      cloud: managedCloud,
+      local: na("This scenario uses hosted MCP; the runtime and collector are shared with Local."),
+    },
+  },
+  toolCallOverheadDatabase: {
+    fixtures: "actors",
+    file: "tool-call-overhead.spec.ts",
+    title: "Executor time covers a tool that writes and reads its SQL database",
+    targets: {
+      "self-host": scheduled,
+      cloud: managedCloud,
+      local: na("This scenario uses hosted MCP; the runtime and collector are shared with Local."),
+    },
+  },
+  toolCallOverheadStart: {
+    fixtures: "actors",
+    file: "tool-call-overhead.spec.ts",
+    title: "Executor time does not count the app's work while its isolate starts",
+    targets: {
+      "self-host": scheduled,
+      cloud: managedCloud,
+      local: na("This scenario uses hosted MCP; the runtime and collector are shared with Local."),
+    },
+  },
+  toolCallOverheadDispatch: {
+    fixtures: "actors",
+    file: "tool-call-overhead.spec.ts",
+    title: "Executor time includes the framework's work around the app's call span",
+    targets: {
+      "self-host": scheduled,
+      cloud: managedCloud,
+      local: na("This scenario uses hosted MCP; the runtime and collector are shared with Local."),
+    },
+  },
   appDomainStatus: {
     fixtures: "actors",
     file: "app-domain-status.spec.ts",
@@ -4711,6 +4861,18 @@ export const scenarios = {
     file: "cached-skills.spec.ts",
     title:
       "a skill read without a revision gets a new publication at once and pinned reads keep theirs",
+    targets: {
+      "self-host": scheduled,
+      cloud: managedCloud,
+      local: na(
+        "Shared runtime and HTTP behavior are covered on hosted targets; local MCP has its own skill scenario.",
+      ),
+    },
+  },
+  cachedSkillsCustomCacheCancel: {
+    fixtures: "actors",
+    file: "cached-skills.spec.ts",
+    title: "an app's own cache that abandons a GitHub skills load aborts its download",
     targets: {
       "self-host": scheduled,
       cloud: managedCloud,

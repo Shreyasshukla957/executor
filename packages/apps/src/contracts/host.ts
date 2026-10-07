@@ -252,6 +252,25 @@ export const ToolResultObservation = Context.Reference<{ readonly failed: () => 
   { defaultValue: () => ({ failed: () => {} }) },
 );
 
+/**
+ * One tool invocation's own timing, on the isolate's clock: how long it ran, and how much of that
+ * it waited on upstream providers, waited on elicitation answers and ran the app's authored code.
+ * Each instant counts once, so the rest is Executor's own time. The isolated handler returns it
+ * beside the result so the host can add the other isolates' parts.
+ */
+export const InvocationTiming = Schema.Struct({
+  elapsedMs: Schema.Finite,
+  upstreamMs: Schema.Finite,
+  elicitationMs: Schema.Finite,
+  authoredMs: Schema.Finite,
+});
+export type InvocationTiming = typeof InvocationTiming.Type;
+/** Receives the invocation's timing once it is over; hosts that do not return it ignore it. */
+export const InvocationTimingSink = Context.Reference<(timing: InvocationTiming) => void>(
+  "apps/InvocationTimingSink",
+  { defaultValue: () => () => {} },
+);
+
 /** Native handler; context comes from host authority, never from request content. */
 export type AppHandler = (request: Request, context: HostContext) => Effect.Effect<Response>;
 

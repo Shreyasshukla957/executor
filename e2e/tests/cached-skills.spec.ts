@@ -10,6 +10,7 @@ import { App } from "../support/contracts.ts";
 import { skillUpstream } from "../support/skill-upstream.ts";
 import { Evidence, Telemetry } from "../support/evidence.ts";
 import { appsManifest } from "../support/apps-release.ts";
+import { createProfile } from "../support/profiles.ts";
 
 const Bundle = Schema.Struct({
   revision: Schema.String,
@@ -295,6 +296,89 @@ export default defineApp({ accounts: {} }, async (ctx) => ({
         yield* Effect.sleep("1500 millis");
         expect((yield* reference(second.revision)).status).toBe(200);
         expect((yield* read).revision).toBe(second.revision);
+      }),
+    ),
+  );
+
+  it.effect(scenarios.cachedSkillsCustomCacheCancel.title, (context) =>
+    withHostedCase(
+      context,
+      Effect.gen(function* () {
+        const api = yield* Api,
+          actors = yield* Actors;
+        const upstream = yield* skillUpstream;
+        const prefix = `/api/organizations/${actors.organization.id}/apps`;
+        // The app's own cache runs each load itself under a signal it owns. Once the repository's
+        // tree download starts, the cache gives up on that load, as a cache with its own timeout
+        // would. The download answers only when its request is aborted, or after 10 seconds.
+        const response = yield* api.request(actors.owner, "POST", `${prefix}/deploy`, {
+          name: `Abandoned skills ${randomUUID().slice(0, 8)}`,
+          files: [
+            {
+              path: "index.ts",
+              content: `import { defineApp, query, object, router } from "apps";
+import { githubSkills } from "apps/skills";
+export default defineApp({ accounts: {} }, async (ctx) => ({
+  tools: router({ probe: query({ input: object({}) }, async () => {
+    const loads = [];
+    let aborted = false;
+    const cache = { ...ctx.cache, get: (options) => {
+      const load = new AbortController();
+      loads.push(load);
+      return options.load({ cache, fetch: ctx.fetch, signal: load.signal });
+    } };
+    const fetch = async (input, init) => {
+      const url = new URL(input instanceof Request ? input.url : input);
+      const body = init?.body instanceof Uint8Array ? new TextDecoder().decode(init.body) : "";
+      if (!body.includes("command=fetch"))
+        return ctx.fetch(${JSON.stringify(upstream.url)} + "/github" + url.pathname + url.search, init);
+      setTimeout(() => loads.at(-1)?.abort(), 100);
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => resolve(new Response(null, { status: 503 })), 10_000);
+        init?.signal?.addEventListener("abort", () => {
+          aborted = true;
+          clearTimeout(timer);
+          reject(init.signal.reason);
+        }, { once: true });
+      });
+    };
+    const settled = await Promise.race([
+      githubSkills({ repo: "synthetic/skills", path: "skills", cache, fetch, signal: ctx.signal }).then(() => "loaded", () => "failed"),
+      new Promise((resolve) => setTimeout(() => resolve("pending"), 5_000)),
+    ]);
+    return { settled, loads: loads.length, aborted };
+  }) }),
+}));`,
+            },
+            appsManifest,
+          ],
+        });
+        expect(response.status, JSON.stringify(response.body)).toBe(200);
+        const app = yield* body(App, response);
+        const path = `${prefix}/${app.id}`;
+        yield* Effect.addFinalizer(() =>
+          api.request(actors.owner, "DELETE", path).pipe(Effect.orDie),
+        );
+        const profile = yield* createProfile(actors.owner, path);
+        const call = yield* api.request(actors.owner, "POST", `${path}/tools/call`, {
+          profile: profile.id,
+          tool: "probe",
+          kind: "query",
+          input: {},
+        });
+        expect(call.status, JSON.stringify(call.body)).toBe(200);
+        // Two loads: the skill catalog, then the repository's directories inside it. Abandoning the
+        // directories' load aborts its download and fails the read, instead of leaving it waiting.
+        expect(
+          yield* body(
+            Schema.Struct({
+              settled: Schema.String,
+              loads: Schema.Number,
+              aborted: Schema.Boolean,
+            }),
+            call,
+          ),
+        ).toEqual({ settled: "failed", loads: 2, aborted: true });
       }),
     ),
   );

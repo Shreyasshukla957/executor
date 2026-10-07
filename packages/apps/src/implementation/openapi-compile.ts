@@ -340,6 +340,7 @@ export const compileOpenApiDocument = (
     if (input === undefined) fail("invalid_document", "This API definition was already compiled.");
     return input;
   };
+  // oxlint-disable-next-line executor/authored-code-through-adapter -- this module's own parser
   return Effect.tryPromise({
     try: async () => {
       const document = await openApiDocument(take());

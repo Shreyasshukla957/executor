@@ -341,6 +341,7 @@ interface Migration {
 }
 
 const sha256 = (text: string) =>
+  // oxlint-disable-next-line executor/authored-code-through-adapter -- Web Crypto
   Effect.promise(() => crypto.subtle.digest("SHA-256", new TextEncoder().encode(text))).pipe(
     Effect.map((digest) =>
       Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join(""),

@@ -3,7 +3,7 @@
  * invocations for the runner, gives each invocation a build loader over the host's build store,
  * and decodes the reply. Hosts differ only in where the runner lives and how builds are stored.
  */
-import { Effect, Option, Redacted, Result, Schema, type Scope, type Stream } from "effect";
+import { Clock, Effect, Option, Redacted, Result, Schema, type Scope, type Stream } from "effect";
 import { makeTelemetryForwarder, TelemetryBatch, traceHeaders } from "@executor-js/telemetry";
 import { recordAs } from "@executor-js/utils/recorded-message";
 import {
@@ -17,6 +17,7 @@ import {
   HostResponse,
   MigrateResult,
   indexCommand,
+  InvocationTiming,
   inspectCommand,
   selectTools,
   skillCatalog,
@@ -28,8 +29,12 @@ import {
 } from "apps/contracts";
 import {
   AppCacheChanges,
+  DispatchTiming,
   InvocationRun,
+  IsolateTiming,
+  RuntimeCallTimings,
   RuntimeProtocolFailed,
+  type RuntimeCallTiming,
   type RuntimeProtocolUnsupported,
   type Runtime,
   type RuntimeBuildUnavailable,
@@ -41,6 +46,7 @@ import { appWorker, type AppCapabilities, type AppInvocation } from "./app-runne
 import { appProtocol } from "./app-protocols.ts";
 import { invocationElicitation } from "./worker-elicitation.ts";
 import { invocationWorkflowControls } from "./worker-workflow-rpc.ts";
+import { runtimeCallParts } from "./tool-call-overhead.ts";
 
 /** What telemetry records for an error an app's reply carried, beside the error's name. */
 const appErrorRecorded = "The app returned this error; its text is not recorded";
@@ -140,8 +146,11 @@ export const appRuntime = (host: AppRuntimeHost) =>
       command: HostRequest,
       output: Schema.Decoder<A>,
       errors: Schema.Decoder<E>,
-    ) =>
-      Effect.scoped(
+    ) => {
+      // This call's share of a tool call, reported when it is over.
+      let invoked: RuntimeCallTiming["invoked"];
+      let parts: RuntimeCallTiming["parts"];
+      return Effect.scoped(
         Effect.gen(function* () {
           const lifetime = yield* Effect.acquireRelease(
             Effect.sync(() => new AbortController()),
@@ -165,28 +174,77 @@ export const appRuntime = (host: AppRuntimeHost) =>
           // Only the trusted runner or data supervisor calls the loader. The runner may sit behind
           // RPC, so the loader keeps an unsupported protocol as this call's typed failure.
           const loader = yield* invocationBuildLoader(invocation, host.loadBuild(build));
-          const body = yield* loader.refused(
-            host.invoke(invocation, {
-              load: loader.load,
-              elicit:
-                input.elicitation === undefined
-                  ? null
-                  : invocationElicitation(input.elicitation, lifetime.signal),
-              controls:
-                input.workflowControls === undefined
-                  ? null
-                  : yield* invocationWorkflowControls(input.workflowControls, lifetime.signal),
-              ...(input.workflow === undefined ? {} : { workflow: input.workflow }),
-            }),
-          );
+          const from = yield* Clock.currentTimeNanos;
+          const body = yield* loader
+            .refused(
+              host.invoke(invocation, {
+                load: loader.load,
+                elicit:
+                  input.elicitation === undefined
+                    ? null
+                    : invocationElicitation(input.elicitation, lifetime.signal),
+                controls:
+                  input.workflowControls === undefined
+                    ? null
+                    : yield* invocationWorkflowControls(input.workflowControls, lifetime.signal),
+                ...(input.workflow === undefined ? {} : { workflow: input.workflow }),
+              }),
+            )
+            .pipe(
+              Effect.ensuring(
+                Effect.flatMap(Clock.currentTimeNanos, (to) =>
+                  Effect.sync(() => {
+                    invoked = [from, to];
+                  }),
+                ),
+              ),
+            );
           // Telemetry is an additive transport field. Retained builds keep their original protocol.
           const collected = yield* Schema.decodeUnknownEffect(
             Schema.Struct({
               telemetry: Schema.optional(TelemetryBatch),
               executorRevision: Schema.optional(Schema.Int),
               cacheChanged: Schema.optional(Schema.Boolean),
+              timing: Schema.optional(InvocationTiming),
+              dispatch: Schema.optional(DispatchTiming),
+              runner: Schema.optional(IsolateTiming),
+              supervisor: Schema.optional(IsolateTiming),
             }),
           )(body).pipe(Effect.result);
+          // Each isolate reports its own part on its own clock; see tool-call-overhead.ts.
+          if (
+            Result.isSuccess(collected) &&
+            collected.success.timing !== undefined &&
+            collected.success.dispatch !== undefined &&
+            collected.success.runner !== undefined &&
+            invoked !== undefined
+          ) {
+            const { timing, dispatch, runner, supervisor } = collected.success;
+            parts = runtimeCallParts(
+              Number(invoked[1] - invoked[0]) / 1_000_000,
+              runner,
+              supervisor,
+              dispatch,
+              timing,
+            );
+            yield* Effect.annotateCurrentSpan({
+              "executor.runner.own_ms": runner.elapsedMs - runner.waitMs,
+              ...(supervisor === undefined
+                ? {}
+                : { "executor.supervisor.own_ms": supervisor.elapsedMs - supervisor.waitMs }),
+              "executor.app.elapsed_ms": dispatch.elapsedMs,
+              "executor.app.own_ms": parts.appOwnMs,
+              "executor.upstream.wait_ms": parts.upstreamMs,
+              "executor.elicitation.wait_ms": parts.elicitationMs,
+              "executor.authored_ms": parts.authoredMs,
+              ...(parts.staleClocks.length === 0
+                ? {}
+                : {
+                    "executor.clock.stale": true,
+                    "executor.clock.stale_between": parts.staleClocks.join(","),
+                  }),
+            });
+          }
           if (Result.isFailure(collected)) yield* Effect.logWarning("Invalid app telemetry batch");
           if (Result.isSuccess(collected) && collected.success.telemetry !== undefined) {
             const span = yield* Effect.currentSpan.pipe(Effect.option);
@@ -218,10 +276,20 @@ export const appRuntime = (host: AppRuntimeHost) =>
           return value;
         }),
       ).pipe(
+        Effect.onExit(() =>
+          Effect.gen(function* () {
+            const report = yield* RuntimeCallTimings;
+            report?.({
+              ...(invoked === undefined ? {} : { invoked }),
+              ...(parts === undefined ? {} : { parts }),
+            });
+          }),
+        ),
         Effect.catchTag("SchemaError", () =>
           Effect.fail(new RuntimeProtocolFailed({ reason: "invalid-reply" })),
         ),
       );
+    };
     const span = (operation: string) => `${host.name}.${operation}`;
     return {
       build: (input) => host.build(input).pipe(Effect.withSpan(span("build"))),

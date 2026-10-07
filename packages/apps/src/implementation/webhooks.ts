@@ -19,6 +19,7 @@ import {
 } from "../contracts/webhook-protocol.ts";
 import { JsonObject, JsonValue } from "../contracts/schema.ts";
 import { importedJsonSchema } from "./schema.ts";
+import { appCode } from "./authoring.ts";
 
 const safe = <A, E>(work: () => Effect.Effect<A, unknown>, error: E) =>
   Effect.suspend(work).pipe(
@@ -178,7 +179,9 @@ export const dispatchWebhook = <
     const chunks: Uint8Array[] = [];
     let size = 0;
     const stream = response.body;
+    // The body is the app's: a stream it returns runs its own code as it is read.
     if (stream !== null)
+      // oxlint-disable-next-line executor/authored-code-through-adapter -- read inside appCode
       yield* Stream.fromReadableStream({
         evaluate: () => stream,
         onError: () => new HostOutputInvalid(),
@@ -191,6 +194,7 @@ export const dispatchWebhook = <
             chunks.push(chunk);
           }),
         ),
+        appCode("webhook"),
       );
     const bytes = new Uint8Array(size);
     let offset = 0;

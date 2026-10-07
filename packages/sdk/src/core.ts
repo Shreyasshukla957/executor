@@ -8,6 +8,7 @@ export { probeOAuthChallenge } from "./implementation/oauth-probe.ts";
 export { discoverResourceOAuth } from "./implementation/oauth-protocol.ts";
 export { bearerChallenge, bearerResourceMetadata } from "./implementation/oauth-challenge.ts";
 export { subscribeAppQuery } from "./implementation/live.ts";
+export { toolCallSpan } from "./implementation/tool-call-overhead.ts";
 export {
   runtimeAdapter,
   toEffectRuntime,

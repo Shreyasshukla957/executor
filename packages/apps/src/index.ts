@@ -195,6 +195,7 @@ export const decodeJson = <T>(response: JsonResponse, schema: Schema<T, boolean>
   const native: NativeResponse = {
     status: response.status,
     json: () =>
+      // oxlint-disable-next-line executor/authored-code-through-adapter -- a Response the app passes from its own code
       Effect.tryPromise({
         try: () => response.json(),
         catch: (error) => error,

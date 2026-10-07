@@ -362,6 +362,44 @@ const sealedWorkflow = (
       ),
 });
 
+/** Times one step of an invocation on the runner's clock. */
+type Timed = <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
+const notTimed: Timed = (effect) => effect;
+
+/**
+ * The runner's own part of one invocation, on its own clock: how long it took, and how much of that
+ * it waited on the isolate running the app. Starting the call there, cold starts included, is the
+ * runner's own time: the app runs only once the runner waits for its result. A caller in another
+ * isolate cannot measure any of it, since Workers clocks advance only on I/O and are not comparable
+ * across isolates.
+ */
+const runnerTiming = () => {
+  let waitMs = 0;
+  const waiting: Timed = (effect) =>
+    Effect.flatMap(Clock.currentTimeNanos, (from) =>
+      effect.pipe(
+        Effect.ensuring(
+          Effect.flatMap(Clock.currentTimeNanos, (to) =>
+            Effect.sync(() => {
+              waitMs += Number(to - from) / 1_000_000;
+            }),
+          ),
+        ),
+      ),
+    );
+  /** Add the timing to an object reply: an additive field, like `cacheChanged`. */
+  const report = <E, R>(invoke: Effect.Effect<unknown, E, R>) =>
+    Effect.gen(function* () {
+      const started = yield* Clock.currentTimeNanos;
+      const result = yield* invoke;
+      const elapsedMs = Number((yield* Clock.currentTimeNanos) - started) / 1_000_000;
+      return typeof result === "object" && result !== null && !Array.isArray(result)
+        ? { ...result, runner: { elapsedMs, waitMs } }
+        : result;
+    });
+  return { waiting, report };
+};
+
 /** Build the runner for one host's bindings. */
 export const makeAppRunner = (host: AppRunnerHost) => {
   /** Start one call in a loaded Worker and release its invocation capability afterwards. */
@@ -378,6 +416,7 @@ export const makeAppRunner = (host: AppRunnerHost) => {
       readonly cache: Effect.Effect<CacheSession> | null;
       /** Keep a failure's text for the deployer; see `failed`. */
       readonly explain: boolean;
+      readonly waiting: Timed;
     },
   ) =>
     Effect.scoped(
@@ -526,6 +565,7 @@ export const makeAppRunner = (host: AppRunnerHost) => {
           },
         );
         return yield* attempt(() => call.result(), options.explain).pipe(
+          options.waiting,
           Effect.withSpan("runtime.app.rpc.result"),
         );
       }),
@@ -555,6 +595,7 @@ export const makeAppRunner = (host: AppRunnerHost) => {
     protocol: AppProtocol,
     load: () => Promise<LoadedWorkerBuild>,
     body: string,
+    waiting: Timed,
   ) =>
     Effect.gen(function* () {
       const target = host.data(invocation.app);
@@ -590,6 +631,7 @@ export const makeAppRunner = (host: AppRunnerHost) => {
           capabilities.controls,
         )
         .pipe(
+          waiting,
           Effect.catch(failedData),
           Effect.flatMap((value) =>
             Schema.decodeUnknownEffect(FacetResult)(value).pipe(
@@ -606,6 +648,8 @@ export const makeAppRunner = (host: AppRunnerHost) => {
         ...value,
         executorRevision: result.revision,
         ...(result.cacheChanged === true ? { cacheChanged: true } : {}),
+        // The supervisor's own part, on its clock, when it reports one.
+        ...(result.timing === undefined ? {} : { supervisor: result.timing }),
       };
     });
 
@@ -614,8 +658,9 @@ export const makeAppRunner = (host: AppRunnerHost) => {
      * Run an authorized call of a retained build. Its Worker is named by app, build and account
      * selection, so renewed credentials, other runs and other calls of the same selection reuse it.
      */
-    invoke: (invocation: AppInvocation, capabilities: AppCapabilities) =>
-      Effect.gen(function* () {
+    invoke: (invocation: AppInvocation, capabilities: AppCapabilities) => {
+      const timing = runnerTiming();
+      return Effect.gen(function* () {
         const { identity, mode, name } = yield* appWorker(invocation).pipe(
           Effect.catch(() => failed("internal")),
         );
@@ -648,7 +693,15 @@ export const makeAppRunner = (host: AppRunnerHost) => {
             : { workflowRun: capabilities.workflow.runId }),
         });
         if (mode === "facet")
-          return yield* facet(invocation, identity, capabilities, protocol, load, body);
+          return yield* facet(
+            invocation,
+            identity,
+            capabilities,
+            protocol,
+            load,
+            body,
+            timing.waiting,
+          );
         const data = host.data(invocation.app);
         const services = yield* Effect.context<never>();
         // Cache writes after the result (background refreshes) are not reported to the host.
@@ -705,6 +758,7 @@ export const makeAppRunner = (host: AppRunnerHost) => {
               }),
           cache,
           explain: false,
+          waiting: timing.waiting,
         });
         const result = yield* protocol.response(invocation.command, reply);
         return cacheChanged &&
@@ -713,7 +767,8 @@ export const makeAppRunner = (host: AppRunnerHost) => {
           !Array.isArray(result)
           ? { ...result, cacheChanged: true }
           : result;
-      }).pipe(Effect.scoped, Effect.withSpan("runtime.app.invoke")),
+      }).pipe(Effect.scoped, timing.report, Effect.withSpan("runtime.app.invoke"));
+    },
     /**
      * Evaluate a new build's declarations before it is retained. No later call can reuse this
      * Worker, so it is not named and the runtime does not keep it; it has no network or cache.
@@ -733,6 +788,7 @@ export const makeAppRunner = (host: AppRunnerHost) => {
           cache: null,
           // The deployer sees why the app's declarations failed, in the app's own terms.
           explain: true,
+          waiting: notTimed,
         });
         return yield* protocol.response(command, reply);
       }).pipe(Effect.withSpan("runtime.app.declare")),

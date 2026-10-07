@@ -14,7 +14,7 @@ import {
 import { makeWorkflowContext, workflowSafe } from "./workflow-context.ts";
 /** Framework-owned dispatch. Each inspect/call binds accounts and evaluates afresh. */
 import { Cause, Clock, Effect, Match, Option, Redacted, Schema } from "effect";
-import { captureTelemetry, type InvocationTelemetry } from "@executor-js/telemetry";
+import { captureTelemetry, owned, type InvocationTelemetry } from "@executor-js/telemetry";
 import { appInvocationFetch } from "./network.ts";
 import type { AccountSlots, BoundContext } from "../contracts/app.ts";
 import {
@@ -59,6 +59,7 @@ import {
   type ElicitationHandler,
 } from "../contracts/elicitation.ts";
 import { makeElicit } from "./elicitation.ts";
+import { timedInvocation, workflowControlSpan } from "./invocation-timing.ts";
 import { inputInvalid } from "./input-problems.ts";
 import { ApprovalDecision } from "../contracts/approval.ts";
 import { jsonSchemaDocument } from "./schema.ts";
@@ -432,44 +433,68 @@ function dispatch(
       const delivery: ElicitationHandler = (request, signal) =>
         Effect.suspend(() =>
           running !== undefined && context.elicitation !== undefined
-            ? context
-                .elicitation(request, signal)
-                .pipe(
-                  Effect.withSpan("app.tool.elicitation"),
-                  Effect.provideContext(running.context),
-                )
+            ? context.elicitation(request, signal).pipe(
+                // Delivering the question and waiting for its answer is the person's time.
+                owned("person", "app.tool.elicitation"),
+                Effect.provideContext(running.context),
+              )
             : Effect.fail(new ElicitationFailed({ reason: "unavailable" })),
         );
       const unavailableWorkflow = () =>
         Effect.fail(new WorkflowFailure({ reason: "unavailable", retryable: false }));
+      // Authored code calls these as Promises; they run in this invocation's telemetry, so their
+      // spans join its trace and its timing.
+      const telemetry = yield* captureTelemetry;
+      const control = <A, E>(operation: string, work: Effect.Effect<A, E>) =>
+        work.pipe(
+          owned("executor", workflowControlSpan, {
+            attributes: { "executor.workflow.operation": operation },
+          }),
+        );
       const workflowControls: WorkflowControls = {
         start: toPromise(
           (input) =>
-            context.workflowControls === undefined
-              ? unavailableWorkflow()
-              : context.workflowControls.start(input),
+            control(
+              "start",
+              context.workflowControls === undefined
+                ? unavailableWorkflow()
+                : context.workflowControls.start(input),
+            ),
           invocationSignal,
+          telemetry.context,
         ),
         get: toPromise(
           (input) =>
-            context.workflowControls === undefined
-              ? unavailableWorkflow()
-              : context.workflowControls.get(input),
+            control(
+              "get",
+              context.workflowControls === undefined
+                ? unavailableWorkflow()
+                : context.workflowControls.get(input),
+            ),
           invocationSignal,
+          telemetry.context,
         ),
         list: toPromise(
           (input) =>
-            context.workflowControls === undefined
-              ? unavailableWorkflow()
-              : context.workflowControls.list(input),
+            control(
+              "list",
+              context.workflowControls === undefined
+                ? unavailableWorkflow()
+                : context.workflowControls.list(input),
+            ),
           invocationSignal,
+          telemetry.context,
         ),
         terminate: toPromise(
           (input) =>
-            context.workflowControls === undefined
-              ? unavailableWorkflow()
-              : context.workflowControls.terminate(input),
+            control(
+              "terminate",
+              context.workflowControls === undefined
+                ? unavailableWorkflow()
+                : context.workflowControls.terminate(input),
+            ),
           invocationSignal,
+          telemetry.context,
         ),
       };
       const workflowReads: WorkflowReads = {
@@ -495,6 +520,7 @@ function dispatch(
           },
           Redacted.value(context.accounts),
           invocationSignal,
+          telemetry.context,
           deadline,
         ),
         files,
@@ -504,7 +530,7 @@ function dispatch(
         workflows: workflowReads,
         signal: invocationSignal,
         fetch: yield* appInvocationFetch(fetching.signal),
-        elicit: makeElicit(delivery, invocationSignal),
+        elicit: makeElicit(delivery, invocationSignal, telemetry.context),
       };
       const definition = yield* evaluationSafe(native.evaluate(bound), secrets).pipe(
         Effect.withSpan("app.evaluate"),
@@ -595,6 +621,7 @@ function dispatch(
                     context.cache ?? unavailableCache,
                     Redacted.value(current.accounts),
                     signal,
+                    (yield* captureTelemetry).context,
                   ),
                   files,
                   fetch: yield* appInvocationFetch(signal),
@@ -686,7 +713,9 @@ function dispatch(
           ? undefined
           : location.kind === "operation"
             ? location.operation
-            : yield* evaluationSafe(location.source.resolve(location.name), secrets);
+            : yield* evaluationSafe(location.source.resolve(location.name), secrets).pipe(
+                Effect.withSpan("app.tool.resolve"),
+              );
       if (tool === undefined)
         return yield* request.operation === "call"
           ? new HostToolNotFound()
@@ -935,6 +964,7 @@ export const createAppHandler =
   (request, context) =>
     Effect.gen(function* () {
       if (request.method !== "POST") return yield* Effect.fail(new HostRequestInvalid());
+      // oxlint-disable-next-line executor/authored-code-through-adapter -- the host's Request
       const input = yield* Effect.tryPromise({
         try: () => request.json(),
         catch: () => new HostRequestInvalid(),
@@ -967,7 +997,13 @@ export const createAppHandler =
               })
             : Effect.void,
         ),
-        Effect.withSpan(`app.${command.operation}`),
+        // Tool operations time themselves, dividing their time by who owned the work in progress.
+        // Other operations do not.
+        command.operation === "call" ||
+          command.operation === "query" ||
+          command.operation === "mutate"
+          ? timedInvocation(command.operation)
+          : Effect.withSpan(`app.${command.operation}`),
       );
       if (toolError)
         yield* Effect.annotateCurrentSpan({

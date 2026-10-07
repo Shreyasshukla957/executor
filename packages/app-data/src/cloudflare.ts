@@ -35,13 +35,15 @@ export const FacetInvocation = Schema.Struct({
   headers: Schema.Record(Schema.String, Schema.String),
 });
 /**
- * The supervisor attaches the revision the invocation observed, and whether
- * the invocation invalidated app cache data.
+ * The supervisor attaches the revision the invocation observed, whether the invocation
+ * invalidated app cache data, and its own part of the invocation on its own clock, queueing
+ * included: how long it took and how much of that it waited on the facet.
  */
 export const FacetResult = Schema.Struct({
   value: Schema.Json,
   revision: Schema.Int,
   cacheChanged: Schema.optionalKey(Schema.Boolean),
+  timing: Schema.optionalKey(Schema.Struct({ elapsedMs: Schema.Finite, waitMs: Schema.Finite })),
 });
 const causes = new WeakMap<AppDatabaseError, unknown>();
 /** Internal diagnostics, deliberately absent from the serialized error. */
@@ -409,6 +411,7 @@ export const makeFacetSupervisor = (
       load: () => Promise<typeof FacetBundle.Type>,
       elicitation: ((input: unknown) => Promise<unknown>) | null,
       workflows: ((input: unknown) => Promise<unknown>) | null,
+      waited: (ms: number) => void,
     ) =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -491,7 +494,10 @@ export const makeFacetSupervisor = (
                   await closeLeases();
                 }),
             );
+            // Waiting on the facet, which runs the app, is not the supervisor's own time.
+            const from = yield* Clock.currentTimeNanos;
             const result = yield* Effect.promise(() => call.result);
+            waited(Number((yield* Clock.currentTimeNanos) - from) / 1_000_000);
             if (Result.isFailure(result)) return yield* failed(result.failure);
             return yield* Schema.decodeUnknownEffect(Schema.Json)(result.success).pipe(
               Effect.mapError(failed),
@@ -536,10 +542,16 @@ export const makeFacetSupervisor = (
                   yield* Deferred.succeed(handle.done, undefined);
                 }),
             );
-            return yield* Effect.raceFirst(
-              invoke(invocation, load, elicitation, workflows),
+            const started = yield* Clock.currentTimeNanos;
+            let waitMs = 0;
+            const result = yield* Effect.raceFirst(
+              invoke(invocation, load, elicitation, workflows, (ms) => {
+                waitMs += ms;
+              }),
               Deferred.await(handle.cancel).pipe(Effect.andThen(Effect.interrupt)),
             );
+            const elapsedMs = Number((yield* Clock.currentTimeNanos) - started) / 1_000_000;
+            return { ...result, timing: { elapsedMs, waitMs } };
           }),
         ),
       cancel: (id: string) =>

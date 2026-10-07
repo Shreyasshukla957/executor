@@ -28,7 +28,7 @@ import { protocolOperations, type OperationKinds } from "./protocol-operations.t
 import { routerDeclaration, type RouterDeclaration } from "./router.ts";
 import { nativeOperation } from "./operations.ts";
 import { wrap } from "./schema.ts";
-import { fromPromise, toPromise } from "./authoring.ts";
+import { fromPromise, method, toPromise } from "./authoring.ts";
 import { createRequest } from "./openapi-request.ts";
 
 /**
@@ -178,16 +178,20 @@ const base64 = (bytes: Uint8Array) => {
   return btoa(binary);
 };
 const gzip = (text: string) =>
-  invoke(async () =>
-    base64(
-      new Uint8Array(
-        await new Response(
-          new Blob([text]).stream().pipeThrough(new CompressionStream("gzip")),
-        ).arrayBuffer(),
+  // oxlint-disable-next-line executor/authored-code-through-adapter -- Compression Streams
+  Effect.tryPromise({
+    try: async () =>
+      base64(
+        new Uint8Array(
+          await new Response(
+            new Blob([text]).stream().pipeThrough(new CompressionStream("gzip")),
+          ).arrayBuffer(),
+        ),
       ),
-    ),
-  );
+    catch: (error) => error,
+  });
 const gunzip = (stored: string) =>
+  // oxlint-disable-next-line executor/authored-code-through-adapter -- Compression Streams
   Effect.tryPromise({
     try: () =>
       new Response(
@@ -204,8 +208,6 @@ const decodeText =
       Effect.flatMap((value) => Schema.decodeUnknownEffect(decoder)(value)),
     );
 const schema = <A>(decoder: Schema.Decoder<A>) => wrap(decoder, false);
-const invoke = <A>(work: () => Promise<A>) =>
-  Effect.tryPromise({ try: work, catch: (error) => error });
 const invalid = () => new OpenapiError({ reason: "invalid_definition" });
 
 /**
@@ -222,9 +224,11 @@ const readParts = Math.floor(cacheLimits.batchBytes / bucketLimit);
 /** SHA-256 of a value's JSON, as lowercase hex. The JSON text exists only while it is hashed,
  * so a large document is not held twice by the effect that yielded it. */
 const sha256Json = (value: JsonValue) =>
-  invoke(() =>
-    crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(value))),
-  ).pipe(
+  // oxlint-disable-next-line executor/authored-code-through-adapter -- Web Crypto
+  Effect.tryPromise({
+    try: () => crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(value))),
+    catch: (error) => error,
+  }).pipe(
     Effect.map((hash) =>
       Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join(""),
     ),
@@ -403,9 +407,12 @@ const parseYaml = (text: string): unknown => {
 /** Fetch a bounded document using the loader's owned lifetime, never the original request signal. */
 const download = (url: string, context: CacheLoadContext) =>
   Effect.gen(function* () {
-    const response = yield* invoke(() =>
-      context.fetch(url, { signal: context.signal, redirect: "manual" }),
-    );
+    // The loader's fetch is the invocation's, which opens its own upstream boundary.
+    // oxlint-disable-next-line executor/authored-code-through-adapter -- fetch
+    const response = yield* Effect.tryPromise({
+      try: () => context.fetch(url, { signal: context.signal, redirect: "manual" }),
+      catch: (error) => error,
+    });
     if (!response.ok || response.body === null) return yield* invalid();
     const reader = response.body.getReader();
     const text = yield* Effect.acquireUseRelease(
@@ -416,7 +423,11 @@ const download = (url: string, context: CacheLoadContext) =>
           const chunks: string[] = [];
           let bytes = 0;
           while (true) {
-            const chunk = yield* invoke(() => reader.read());
+            // oxlint-disable-next-line executor/authored-code-through-adapter -- Streams
+            const chunk = yield* Effect.tryPromise({
+              try: () => reader.read(),
+              catch: (error) => error,
+            });
             if (chunk.done) break;
             bytes += chunk.value.byteLength;
             if (bytes > 40_000_000) return yield* invalid();
@@ -425,7 +436,11 @@ const download = (url: string, context: CacheLoadContext) =>
           chunks.push(decoder.decode());
           return chunks.join("");
         }),
-      (reader) => invoke(() => reader.cancel()).pipe(Effect.catch(() => Effect.void)),
+      (reader) =>
+        // oxlint-disable-next-line executor/authored-code-through-adapter -- Streams
+        Effect.tryPromise({ try: () => reader.cancel(), catch: (error) => error }).pipe(
+          Effect.catch(() => Effect.void),
+        ),
     );
     return yield* Effect.try({
       try: () =>
@@ -449,6 +464,7 @@ export const liveOpenapiRouter = (options: OpenapiSourceOptions): RouterDeclarat
   // The key includes every static input to compilation. It never includes account credentials.
   // Large inline documents are hashed once below rather than copied into storage keys.
   const identity = Effect.cached(
+    // oxlint-disable-next-line executor/authored-code-through-adapter -- Web Crypto
     Effect.tryPromise({
       try: async () => {
         const bytes = new TextEncoder().encode(
@@ -492,6 +508,7 @@ export const liveOpenapiRouter = (options: OpenapiSourceOptions): RouterDeclarat
             ),
         options.patches,
       );
+      // oxlint-disable-next-line executor/authored-code-through-adapter -- scheduler yield
       yield* Effect.promise(yieldToRuntime);
       // Revisions are content-addressed: refreshing an unchanged document rewrites the
       // same parts and renews their retention instead of storing another copy.
@@ -525,6 +542,7 @@ export const liveOpenapiRouter = (options: OpenapiSourceOptions): RouterDeclarat
   const serialize = (context: CacheLoadContext) =>
     Effect.gen(function* () {
       const { revision, meta, compiled } = yield* compile(context);
+      // oxlint-disable-next-line executor/authored-code-through-adapter -- scheduler yield
       yield* Effect.promise(yieldToRuntime);
       const summaries = paginate(compiled.operations.map(summaryOf));
       const operations = bucketize(
@@ -550,6 +568,7 @@ export const liveOpenapiRouter = (options: OpenapiSourceOptions): RouterDeclarat
       const retained = new Map<string, string>();
       let retainedBytes = 0;
       for (const [index, part] of parts.entries()) {
+        // oxlint-disable-next-line executor/authored-code-through-adapter -- scheduler yield
         if (index % 32 === 31) yield* Effect.promise(yieldToRuntime);
         const text = JSON.stringify(part.value);
         const entry = { key: partKey(revision, part.kind, part.name), value: yield* gzip(text) };
@@ -588,7 +607,7 @@ export const liveOpenapiRouter = (options: OpenapiSourceOptions): RouterDeclarat
       yield* Effect.forEach(
         batches,
         ({ entries, bytes }, index) =>
-          fromPromise(context.cache.write)(entries, retention).pipe(
+          fromPromise(method(context.cache, "write"), "cache")(entries, retention).pipe(
             Effect.withSpan("app.cache.flush", {
               attributes: {
                 "cache.flush.index": index,
@@ -616,12 +635,15 @@ export const liveOpenapiRouter = (options: OpenapiSourceOptions): RouterDeclarat
     reading = deferred;
     return pointer.pipe(
       Effect.flatMap((key) =>
-        fromPromise(options.cache.get)({
+        fromPromise(
+          method(options.cache, "get"),
+          "cache",
+        )({
           key,
           schema: schema(Manifest),
           freshFor,
           staleFor,
-          load: toPromise(refresh),
+          load: toPromise(refresh, (context: CacheLoadContext) => context.signal),
         }),
       ),
       Effect.onExit((exit) =>
@@ -651,7 +673,7 @@ export const liveOpenapiRouter = (options: OpenapiSourceOptions): RouterDeclarat
     return Effect.forEach(
       groups,
       (group) =>
-        fromPromise(options.cache.readMany)(
+        fromPromise(method(options.cache, "readMany"), "cache")(
           group.map((name) => partKey(revision, kind, name)),
           partText,
         ).pipe(
@@ -816,7 +838,7 @@ export const liveOpenapiRouter = (options: OpenapiSourceOptions): RouterDeclarat
       for (let attempt = 0; attempt < 2; attempt++) {
         const result = yield* work(yield* current);
         if (result !== undefined) return result.value;
-        yield* fromPromise(options.cache.invalidate)(yield* pointer);
+        yield* fromPromise(method(options.cache, "invalidate"), "cache")(yield* pointer);
       }
       return yield* invalid();
     });

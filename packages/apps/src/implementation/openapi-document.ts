@@ -337,6 +337,7 @@ const supportedVersion = /^3\.[12]\.\d+$/;
 export async function openApiDocument(input: JsonObject) {
   // The caller hands over the document; each original entry is released as it is upgraded.
   const root = upgradeOwned(record(input));
+  // oxlint-disable-next-line executor/authored-code-through-adapter -- scheduler yield
   await yieldToRuntime();
   const spec = decodeDefinition(DocumentSpecification, root, "#", "definition");
   if (!supportedVersion.test(spec.openapi))
@@ -354,6 +355,7 @@ export async function openApiDocument(input: JsonObject) {
     ...root,
     components: { ...componentsObject, schemas: {} },
   });
+  // oxlint-disable-next-line executor/authored-code-through-adapter -- scheduler yield
   await yieldToRuntime();
   const parsed = decodeDefinition(
     DocumentSpecification,

@@ -3,6 +3,7 @@ import type { ExecutionRejected } from "../contracts/execute.ts";
 import type { CodeMode } from "@opencode-ai/codemode";
 import {
   ElicitationFailed,
+  toolCallSpan,
   ToolInputs,
   type ToolCallResult,
   type ToolPending,
@@ -356,7 +357,7 @@ export const makeExecutions = (
                     elicitation: elicitation(run, operation, interactionTool(input)),
                   })
                   .pipe(
-                    Effect.withSpan("mcp.tool.call", {
+                    toolCallSpan("mcp.tool.call", {
                       attributes: {
                         "executor.app.id": input.app,
                         "executor.tool.name": input.tool,
@@ -634,7 +635,8 @@ export const makeExecutions = (
                     ),
                   })
                   .pipe(
-                    Effect.withSpan("mcp.tool.resume", {
+                    // The approved call runs here, so this span carries its Executor time.
+                    toolCallSpan("mcp.tool.resume", {
                       attributes: {
                         "executor.app.id": pending.request.invocation.app,
                         "executor.tool.name": pending.request.invocation.tool,

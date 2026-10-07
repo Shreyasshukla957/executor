@@ -19,6 +19,7 @@
  * Attributes outside these namespaces are the product's own and pass through.
  */
 import { Effect, Exit, Layer, Option, Schema, Tracer } from "effect";
+import { declaredOwner, ownerAttribute } from "./ownership.ts";
 import { recordedCause } from "./recorded-failure.ts";
 
 class LogicalOperationFailed extends Schema.TaggedError<LogicalOperationFailed>()(
@@ -134,6 +135,8 @@ export const spanAttributes = (
           )
             span.attribute("executor.trace.parent_sampled", options.parent.value.sampled);
           if (clock !== undefined) span.attribute("executor.clock.type", clock);
+          const owner = declaredOwner(options.annotations);
+          if (owner !== undefined) span.attribute(ownerAttribute, owner);
           return span;
         },
       })),

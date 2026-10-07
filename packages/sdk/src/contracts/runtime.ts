@@ -33,6 +33,53 @@ export const AppCacheChanges = Context.Reference<{
 }>("executor/AppCacheChanges", { defaultValue: () => ({ changed: () => Effect.void }) });
 
 /**
+ * One isolate's own part of an invocation, on its own clock: how long it took and how much of that
+ * it waited on the next isolate. The runner and the data supervisor report it beside their reply.
+ */
+export const IsolateTiming = Schema.Struct({
+  elapsedMs: Schema.Finite,
+  waitMs: Schema.Finite,
+});
+export type IsolateTiming = typeof IsolateTiming.Type;
+
+/**
+ * The app isolate's whole part of an invocation, on its clock, from the runtime's bridge: the app's
+ * spans and the framework's work around them. The bridge adds it beside the app's reply.
+ */
+export const DispatchTiming = Schema.Struct({ elapsedMs: Schema.Finite });
+export type DispatchTiming = typeof DispatchTiming.Type;
+
+/**
+ * One runtime call's share of a tool call, reported when the call is over. Workers clocks are not
+ * comparable across isolates, so the caller measures only its own wait and every other isolate
+ * reports its own part on its own clock.
+ */
+export interface RuntimeCallTiming {
+  /** When the caller waited on the runner, on its own clock. Absent if the call never got there. */
+  readonly invoked?: readonly [start: bigint, end: bigint];
+  /**
+   * The other isolates' parts. Absent when the call was invoked but did not finish, or its build
+   * or runner predates timing; the call's Executor time is then unknown.
+   */
+  readonly parts?: {
+    /** The runner's, data supervisor's and app isolate's own time, each on its own clock. */
+    readonly ownMs: number;
+    /** The app isolate's own time, which `ownMs` includes. */
+    readonly appOwnMs: number;
+    readonly upstreamMs: number;
+    readonly elicitationMs: number;
+    readonly authoredMs: number;
+    /** Adjacent isolates whose clocks disagree, such as `runner/app`: a lower bound. */
+    readonly staleClocks: readonly string[];
+  };
+}
+
+/** Receives each runtime call's timing within one tool call. Telemetry only. */
+export const RuntimeCallTimings = Context.Reference<
+  ((timing: RuntimeCallTiming) => void) | undefined
+>("executor/RuntimeCallTimings", { defaultValue: () => undefined });
+
+/**
  * The scheduled run an app invocation serves, if any. The runner records it on the build loads it
  * makes for the invocation, so a query can tell a run's own build loads from those of other runs
  * that share its scheduler trace. Telemetry only: nothing decides on it.

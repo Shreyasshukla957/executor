@@ -56,9 +56,11 @@ export const appFetch =
   async (input, init) => {
     const unsupported = unsupportedOption(init);
     if (unsupported !== undefined) throw unsupported;
+    // oxlint-disable-next-line executor/authored-code-through-adapter -- the invocation's fetch
     const response = await fetch(input, init);
     const header = refusalHeader(response.status, response.headers.get(networkRefusalHeader));
     if (header === undefined) return response;
+    // oxlint-disable-next-line executor/authored-code-through-adapter -- Streams
     await response.body?.cancel();
     throw Schema.decodeUnknownSync(NetworkRefusedHeader)(header);
   };

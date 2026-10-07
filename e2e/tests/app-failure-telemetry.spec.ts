@@ -530,7 +530,8 @@ layer(HostedLive, { excludeTestServices: true })("App failure telemetry", (it) =
               /^ {4}at .+ \([^()\s]+:\d+:\d+\)$/,
             );
           // Every record forwarded from the app isolate has only the host's vocabulary: its own
-          // attributes from closed sets, and exceptions by kind with fixed text.
+          // attributes from closed sets, its owners and timing, and exceptions by kind with fixed
+          // text.
           for (const { span } of appSpans(spans)) {
             expect(
               Object.keys(span.tags).filter(
@@ -545,6 +546,14 @@ layer(HostedLive, { excludeTestServices: true })("App failure telemetry", (it) =
                     "executor.failure.source",
                     "executor.failure.code",
                     "error.type",
+                    "executor.owner",
+                    "executor.app.code",
+                    "cache.method",
+                    "executor.workflow.operation",
+                    "executor.upstream.wait_ms",
+                    "executor.elicitation.wait_ms",
+                    "executor.authored_ms",
+                    "executor.overhead_ms",
                   ].includes(key),
               ),
               `${name}: ${span.operationName} records only the host's attributes`,
@@ -563,6 +572,11 @@ layer(HostedLive, { excludeTestServices: true })("App failure telemetry", (it) =
           "error.type": "unrecognized",
           "executor.failure.source": "app",
           "executor.failure.code": "unrecognized",
+          // How the call's time divided by owner: measured values, kept as numbers.
+          "executor.upstream.wait_ms": expect.stringMatching(/^\d+(\.\d+)?$/),
+          "executor.elicitation.wait_ms": expect.stringMatching(/^\d+(\.\d+)?$/),
+          "executor.authored_ms": expect.stringMatching(/^\d+(\.\d+)?$/),
+          "executor.overhead_ms": expect.stringMatching(/^\d+(\.\d+)?$/),
         };
         expect(named(thrown.spans, "app.call")).toMatchObject([
           { tags: appCall, events: [appException("HostOperationFailed")] },

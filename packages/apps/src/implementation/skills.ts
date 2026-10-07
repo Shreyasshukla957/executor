@@ -4,6 +4,7 @@ import { Base64, Hex } from "effect/encoding";
 import { FetchHttpClient, HttpBody, HttpClient } from "effect/http";
 import { skillFromFiles } from "./skill-files.ts";
 import { wrap } from "./schema.ts";
+import { fromPromise, method, toPromise } from "./authoring.ts";
 import { accountProviderError, httpProviderError } from "./provider-error.ts";
 import { InflateLimitExceeded } from "./inflate.ts";
 import { failOnNetworkRefusal } from "./network.ts";
@@ -16,7 +17,7 @@ import {
   treeFetchRequest,
 } from "./git.ts";
 import { catalogCache, catalogScope, type CatalogScopeProblem } from "./catalog-cache.ts";
-import type { AppCache } from "../contracts/cache.ts";
+import type { AppCache, CacheLoadContext } from "../contracts/cache.ts";
 import type { JsonValue } from "../contracts/schema.ts";
 import { NetworkRefused, networkRefusalStatus } from "../contracts/network.ts";
 import { ProviderError } from "../contracts/provider-error.ts";
@@ -200,6 +201,7 @@ const unreadable = () =>
     message: "GitHub returned a git response Executor could not read.",
   });
 const git = <A>(run: () => A | Promise<A>) =>
+  // oxlint-disable-next-line executor/authored-code-through-adapter -- this module's git parsing
   Effect.tryPromise({
     try: async () => run(),
     catch: (error) => (error instanceof InflateLimitExceeded ? failed("limit") : unreadable()),
@@ -342,28 +344,31 @@ const cachedSkillDirectories = (
   options: GitHubSkillsOptions,
   commit: string,
 ) =>
-  Effect.tryPromise({
-    try: () =>
-      cache.get({
-        key: ["apps/githubSkills/directories", 1, options.repo, commit, options.path ?? null],
-        schema: wrap(SkillDirectories, false),
-        freshFor: "7 days",
-        load: (context) =>
-          Effect.runPromise(
-            // Keep the author's fetch and this read's token, as every other request in it does.
-            reader({ fetch: transport.fetch, signal: context.signal }).pipe(
-              Effect.flatMap((remote) =>
-                skillDirectories(
-                  githubRequests(remote, options.repo, options.token),
-                  commit,
-                  options.path,
-                ),
-              ),
+  fromPromise(
+    method(cache, "get"),
+    "cache",
+  )<typeof SkillDirectories.Type>({
+    key: ["apps/githubSkills/directories", 1, options.repo, commit, options.path ?? null],
+    schema: wrap(SkillDirectories, false),
+    freshFor: "7 days",
+    // Executor's own loader: the app's cache runs it natively, so only its requests are upstream.
+    load: toPromise(
+      (context: CacheLoadContext) =>
+        // Keep the author's fetch and this read's token, as every other request in it does.
+        reader({ fetch: transport.fetch, signal: context.signal }).pipe(
+          Effect.flatMap((remote) =>
+            skillDirectories(
+              githubRequests(remote, options.repo, options.token),
+              commit,
+              options.path,
             ),
-            { signal: context.signal },
           ),
-      }),
-    catch: (error) =>
+        ),
+      // A cache may call the loader as a Promise; its own signal cancels that load.
+      (context) => context.signal,
+    ),
+  }).pipe(
+    Effect.mapError((error) =>
       loaderFailure(
         error,
         () =>
@@ -372,7 +377,8 @@ const cachedSkillDirectories = (
             message: "Executor could not read or update the app cache for skills.",
           }),
       ),
-  });
+    ),
+  );
 
 /**
  * What one request says about a source's current publication, and how to load its skills. Equal
@@ -385,6 +391,7 @@ interface Publication {
 }
 /** Hex SHA-256 of a value's JSON. */
 const digest = (value: unknown) =>
+  // oxlint-disable-next-line executor/authored-code-through-adapter -- Web Crypto
   Effect.promise(() =>
     crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(value))),
   ).pipe(Effect.map((bytes) => Hex.encode(new Uint8Array(bytes))));

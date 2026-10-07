@@ -30,6 +30,7 @@ export const cacheKey = (key: unknown) =>
     const bytes = new TextEncoder().encode(canonical(parsed));
     if (bytes.byteLength > cacheLimits.keyBytes)
       return yield* new CacheError({ reason: "capacity" });
+    // oxlint-disable-next-line executor/authored-code-through-adapter -- Web Crypto
     const hash = yield* Effect.tryPromise({
       try: () => crypto.subtle.digest("SHA-256", bytes),
       catch: () => new CacheError({ reason: "invalid" }),

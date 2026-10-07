@@ -129,16 +129,16 @@ export const dynamicRouter = (source: {
       ? {}
       : {
           meta: () =>
-            fromPromise(async () => meta())().pipe(
+            fromPromise(async () => meta(), "router")().pipe(
               Effect.flatMap((options) => Schema.decodeUnknownEffect(RouterMeta)(options)),
             ),
         }),
     list: () =>
-      fromPromise(async () => source.list())().pipe(
+      fromPromise(async () => source.list(), "router")().pipe(
         Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(HostedTool))),
       ),
     resolve: (name) =>
-      fromPromise(async () => source.resolve(name))().pipe(
+      fromPromise(async () => source.resolve(name), "router")().pipe(
         Effect.map((value) => {
           if (value === undefined) return undefined;
           const operation = nativeOperation(value);
