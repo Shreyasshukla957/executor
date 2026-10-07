@@ -18,7 +18,7 @@ import {
   type SqlValue,
 } from "../contracts/sql.ts";
 import type { SkillFile } from "../contracts/skills.ts";
-import type { MigrateResult } from "../contracts/protocols/10.ts";
+import type { MigrateResult } from "../contracts/protocols/current.ts";
 
 /** The receipt table of workflow step mutations. */
 const receipts = `${reservedTablePrefix}step_receipts`;

@@ -21,7 +21,7 @@ bun run e2e:self-host
 ```
 
 `e2e:prepare` builds the dashboards, app framework, bundled Motel and shared
-workerd runtime artifact. Run it again after changing these inputs. The server runs current TypeScript source. `bun run e2e:check` runs the
+workerd runtime artifact. Run it again after changing these inputs. The Node server runs current TypeScript source; the workerd host bundle is prebuilt, so a change to the SDK's app runner needs `bun run e2e:runtime` before a self-host run sees it. `bun run e2e:check` runs the
 boundary check and TypeScript check; the root `check` includes it.
 
 ```sh

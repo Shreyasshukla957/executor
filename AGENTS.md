@@ -82,7 +82,12 @@ email codes to `@agents.executor.engineering` inboxes. Keep session files
 private and out of tool output.
 
 Run `bun run format` before committing. `bun run check` runs the format check,
-`oxlint`, and the typecheck; CI-style verification should use it. Lint rules
+`oxlint`, and the typecheck; CI-style verification should use it.
+
+`packages/apps/protocols/*.json` are generated records of the app host
+protocols. Never read, grep or edit them; run `bun run apps:protocols` and read
+its output, and `--write` to record a boundary change. See
+[host protocols](notes/apps-publishing.md#host-protocols). Lint rules
 live in `.oxlintrc.jsonc`, formatter settings in `.oxfmtrc.json`.
 
 `bun run check` first runs `patches:check` (`scripts/check-patches.ts`): every

@@ -678,10 +678,13 @@ export const makeAppRunner = (host: AppRunnerHost) => {
         // A command this protocol's bundles would not run as asked fails without reaching them.
         const refused = protocol.refuse(invocation.command);
         if (refused !== undefined) return { ok: false, error: refused };
-        const accounts = yield* sealAccounts(invocation.accounts, {
-          app: invocation.app,
-          key: host.credentialKey,
-        });
+        // A bundle from before credential hosts reads every field as a real value.
+        const accounts = protocol.sealedCredentials
+          ? yield* sealAccounts(invocation.accounts, {
+              app: invocation.app,
+              key: host.credentialKey,
+            })
+          : invocation.accounts;
         const body = protocol.invocation({
           command: invocation.command,
           accounts,
@@ -753,7 +756,9 @@ export const makeAppRunner = (host: AppRunnerHost) => {
             ? {}
             : {
                 workflow: protocol.workflow(
-                  sealedWorkflow(capabilities.workflow, invocation.app, host.credentialKey),
+                  protocol.sealedCredentials
+                    ? sealedWorkflow(capabilities.workflow, invocation.app, host.credentialKey)
+                    : capabilities.workflow,
                 ),
               }),
           cache,

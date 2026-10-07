@@ -1358,6 +1358,62 @@ export const scenarios = {
       ),
     },
   },
+  appProtocol5: {
+    fixtures: "actors",
+    file: "app-router-protocols.spec.ts",
+    title: "Protocol-5 builds keep working on the current host",
+    targets: {
+      "self-host": scheduled,
+      cloud: na(
+        "This scenario serves archives and restarts the product on loopback; Cloud shares the protocol adapters.",
+      ),
+      local: na(
+        "This scenario uses hosted routes; Local shares the same workerd runtime and protocol adapters.",
+      ),
+    },
+  },
+  appProtocol7: {
+    fixtures: "actors",
+    file: "app-router-protocols.spec.ts",
+    title: "Protocol-7 builds keep working on the current host",
+    targets: {
+      "self-host": scheduled,
+      cloud: na(
+        "This scenario serves archives and restarts the product on loopback; Cloud shares the protocol adapters.",
+      ),
+      local: na(
+        "This scenario uses hosted routes; Local shares the same workerd runtime and protocol adapters.",
+      ),
+    },
+  },
+  appProtocol8: {
+    fixtures: "actors",
+    file: "app-router-protocols.spec.ts",
+    title: "Protocol-8 builds keep working on the current host",
+    targets: {
+      "self-host": scheduled,
+      cloud: na(
+        "This scenario serves archives and restarts the product on loopback; Cloud shares the protocol adapters.",
+      ),
+      local: na(
+        "This scenario uses hosted routes; Local shares the same workerd runtime and protocol adapters.",
+      ),
+    },
+  },
+  appProtocol5Credentials: {
+    fixtures: "actors",
+    file: "app-router-protocols.spec.ts",
+    title: "Protocol-5 builds read real credential values",
+    targets: {
+      "self-host": scheduled,
+      cloud: na(
+        "This scenario serves archives and restarts the product on loopback; Cloud shares the protocol adapters.",
+      ),
+      local: na(
+        "This scenario uses hosted routes; Local shares the same workerd runtime and protocol adapters.",
+      ),
+    },
+  },
   productAnalytics: {
     fixtures: "actors",
     file: "product-analytics.spec.ts",

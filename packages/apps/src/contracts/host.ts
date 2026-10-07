@@ -65,8 +65,8 @@ export {
 } from "./provider.ts";
 
 /**
- * The host protocol this framework speaks and its wire schemas. A later protocol replaces this
- * re-export; released protocol modules stay unchanged for host adapters.
+ * The host protocol this framework speaks and its wire schemas, from `protocols/current.ts`. The
+ * released protocol modules are frozen records that host adapters read.
  */
 export { frameworkProtocol } from "./protocol-version.ts";
 export { protocol1 } from "./protocols/1.ts";
@@ -75,11 +75,17 @@ export { protocol3 } from "./protocols/3.ts";
 export { protocol4 } from "./protocols/4.ts";
 export { protocol5 } from "./protocols/5.ts";
 export { protocol6 } from "./protocols/6.ts";
-export { protocol7, AccountCheckCommand, CredentialHost } from "./protocols/7.ts";
+export { protocol7 } from "./protocols/7.ts";
 export { protocol8 } from "./protocols/8.ts";
 export { protocol9 } from "./protocols/9.ts";
-export { protocol10, MigrateCommand, MigrateResult } from "./protocols/10.ts";
-export { protocol11 } from "./protocols/11.ts";
+export { protocol10 } from "./protocols/10.ts";
+export {
+  current as protocol11,
+  AccountCheckCommand,
+  CredentialHost,
+  MigrateCommand,
+  MigrateResult,
+} from "./protocols/current.ts";
 export { AccountCheckResult, AccountInfo } from "./provider.ts";
 import {
   HostAccountsInvalid,
@@ -102,13 +108,13 @@ import {
   ResolvedAccounts,
   type SkillCatalogResponse,
   type TrustedToolApproval,
-} from "./protocols/11.ts";
-export { DeclaredRequirements, HostRequest } from "./protocols/11.ts";
+} from "./protocols/current.ts";
+export { DeclaredRequirements, HostRequest } from "./protocols/current.ts";
 /**
  * The MCP and skill loader failures as they cross the host boundary. Apps throw the author-facing
  * classes from `apps/mcp` and `apps/skills`.
  */
-export { McpError, SkillLoadFailed } from "./protocols/11.ts";
+export { McpError, SkillLoadFailed } from "./protocols/current.ts";
 export {
   DeclaredAuthMethod,
   DeclaredProvider,
@@ -142,7 +148,7 @@ export {
   HostError,
   HostResponse,
   HostInvocation,
-} from "./protocols/11.ts";
+} from "./protocols/current.ts";
 /** Raw host inputs; the host boundary parses and redacts these immediately. */
 export type ResolvedAccountsInput = typeof ResolvedAccounts.Encoded;
 

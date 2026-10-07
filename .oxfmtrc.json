@@ -17,6 +17,7 @@
     "**/browser-scripts.gen.ts",
     "**/executor-intro.gen.ts",
     "**/executor-skill-digests.gen.ts",
-    "apps/docs/content"
+    "apps/docs/content",
+    "packages/apps/protocols/[0-9]*.json"
   ]
 }

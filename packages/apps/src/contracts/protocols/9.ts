@@ -9,17 +9,13 @@
  * is protocol 8's, re-exported unchanged.
  *
  * Once released this protocol is frozen like the earlier ones: `bun run check` compares `protocol9`
- * with `packages/apps/protocols/9.json`. Define the next protocol instead of editing this file.
- * See notes/apps-publishing.md.
+ * with `packages/apps/protocols/9.json`. The module imports only `effect` and earlier protocol
+ * modules, so no change elsewhere can alter it. Define the next protocol instead of editing this
+ * file. See notes/apps-publishing.md.
  */
 import { Schema } from "effect";
-import { DatabaseFieldReserved, DatabaseLimitExceeded } from "@executor-js/app-data/contracts";
-import { OpenapiResponseError } from "../api-response-error.ts";
-import { ElicitationFailed } from "../elicitation.ts";
-import { UpstreamError } from "../failure.ts";
-import { ProviderError } from "../provider-error.ts";
-import { JsonValue } from "../schema.ts";
-import { WorkflowFailure } from "../workflows.ts";
+import { ElicitationFailed, JsonValue, OpenapiResponseError } from "./1.ts";
+import { DatabaseFieldReserved, DatabaseLimitExceeded, WorkflowFailure } from "./3.ts";
 import {
   HostAccountsInvalid,
   HostDeclarationInvalid,
@@ -37,6 +33,8 @@ import {
   HostToolBlocked,
   HostToolNotFound,
   HostToolPolicyFailed,
+  ProviderError,
+  UpstreamError,
   protocol8,
 } from "./8.ts";
 

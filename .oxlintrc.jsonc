@@ -10,8 +10,8 @@
   },
   "overrides": [
     {
-      // Released host protocols reach these patterns. Their snapshots record each RegExp's
-      // flags, so they keep the original ones; see notes/apps-publishing.md.
+      // The live host protocol reaches these patterns, and its record is compared with every
+      // released protocol's, flags included; see notes/apps-publishing.md.
       "files": [
         "packages/apps/src/contracts/protocols/**",
         "packages/apps/src/contracts/provider.ts",

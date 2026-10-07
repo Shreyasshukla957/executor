@@ -47,6 +47,13 @@ export interface AppProtocol {
    * database transaction open for a whole call, so their facet runs one call at a time.
    */
   readonly concurrentData: boolean;
+  /**
+   * Whether this protocol's bundles read sealed credential handles for providers that declare
+   * hosts. Earlier frameworks know no hosts and read every field as a real value, so sealing
+   * would hand them handles as secrets: their accounts leave the runner unsealed, even when the
+   * account was connected through a later app that declared hosts.
+   */
+  readonly sealedCredentials: boolean;
 }
 
 /** Protocol 11 is the host's current protocol, so its messages need no conversion. */
@@ -60,6 +67,7 @@ const protocol11: AppProtocol = {
   response: (_command, body) => Effect.succeed(body),
   workflow: (execution) => execution,
   concurrentData: true,
+  sealedCredentials: true,
 };
 
 /**
@@ -98,11 +106,16 @@ const protocol8: AppProtocol = { ...protocol9, version: 8, nodeEntry: nodeAppEnt
 const protocol7: AppProtocol = { ...protocol8, version: 7, nodeEntry: nodeAppEntry(7) };
 
 /**
- * Protocol 6 is protocol 7 without credential hosts or field exposure. Its providers never declare
- * hosts, so the host sends them real values unless an account was connected with hosts, and every
- * message and reply is unchanged.
+ * Protocol 6 is protocol 7 without credential hosts or field exposure. Its bundles read every
+ * credential field as a real value, so the host never seals their accounts, whichever app the
+ * account was connected through. Every message and reply is unchanged.
  */
-const protocol6: AppProtocol = { ...protocol7, version: 6, nodeEntry: nodeAppEntry(6) };
+const protocol6: AppProtocol = {
+  ...protocol7,
+  version: 6,
+  nodeEntry: nodeAppEntry(6),
+  sealedCredentials: false,
+};
 
 /** Protocol 5 has the same commands; its OAuth declarations lack a metadata URL override. */
 const protocol5: AppProtocol = { ...protocol6, version: 5, nodeEntry: nodeAppEntry(5) };
@@ -174,6 +187,7 @@ const legacyProtocol = (version: LegacyVersion): AppProtocol => {
         }),
     }),
     concurrentData: false,
+    sealedCredentials: false,
   };
 };
 
