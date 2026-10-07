@@ -50,6 +50,8 @@ import {
 } from "@executor-js/hosted-server";
 import * as Cloudflare from "alchemy/Cloudflare";
 import { cloudSite } from "./infrastructure/site.ts";
+import { cloudSiteAssets } from "./infrastructure/site-assets.ts";
+import { retainedAssetFolders } from "./contracts/retained-assets.ts";
 import * as Output from "alchemy/Output";
 import { AlchemyContext } from "alchemy/AlchemyContext";
 import { Config, Effect, Layer, Path, Ref } from "effect";
@@ -166,7 +168,8 @@ export default Api.make(
           ? site.outdir.pipe(Output.map((directory) => path.resolve(directory)))
           : site.outdir,
         hash: site.hash.output,
-        // A miss reaches the Worker, which serves 404.html; see `not-found.ts`.
+        // A miss reaches the Worker: an earlier deploy's retained file, or 404.html; see
+        // `site-assets.ts` and `not-found.ts`.
         notFoundHandling: "none",
         // Preserve TanStack paths after an internal index.html rewrite.
         htmlHandling: "none",
@@ -273,6 +276,13 @@ export default Api.make(
       Effect.catch(() => Effect.logWarning("App repository recovery failed")),
     );
     const appDomains = yield* cloudAppDomains;
+    const siteAssets = yield* cloudSiteAssets;
+    // Keeps this build's browser files in R2 for pages still on it after the next deploy.
+    const siteAssetRetention = siteAssets.retainCurrent.pipe(
+      reportErrors,
+      Effect.scoped,
+      Effect.catch(() => Effect.logWarning("Site asset retention failed")),
+    );
     const dashboard = cloudDashboard(yield* Cloudflare.Workers.bindWorker(Dashboard));
     const appUi = hostedAppUi(
       appAddresses(auth.origin, yield* cloudAppUiBase.pipe(Effect.orDie)),
@@ -306,6 +316,7 @@ export default Api.make(
       "data-steps",
       "repository-recovery",
       "schedule-wake",
+      "site-assets",
     );
     yield* jobs.schedule(
       "*/5 * * * *",
@@ -320,6 +331,7 @@ export default Api.make(
       "data-steps": dataSteps,
       "repository-recovery": repositoryRecovery,
       "schedule-wake": schedules.wake,
+      "site-assets": siteAssetRetention,
       "app-domain-heartbeat": appDomains.heartbeat,
       "welcome-emails": welcomeEmails.deliver,
       "workflow-reconcile": workflowReconcile,
@@ -421,6 +433,10 @@ export default Api.make(
         HttpRouter.provideRequest(onboarding),
       ),
       apiRoutes,
+      // Only asset misses reach these paths: files of builds a page loaded before a deploy.
+      ...retainedAssetFolders.map((folder) =>
+        HttpRouter.add("GET", `/${folder}/*`, siteAssets.serve),
+      ),
       publishedSkillRoutes(authoring),
       HttpRouter.add("*", "/api/:channel/*", analytics.proxy),
       HttpRouter.add("POST", "/api/:channel/submit", errorTunnel),

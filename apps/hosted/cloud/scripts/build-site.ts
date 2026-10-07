@@ -1,11 +1,24 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
+import { createHash } from "node:crypto";
 import { Effect, FileSystem, Path, Schema } from "effect";
 import { siteRedirects } from "../src/implementation/site-redirects.ts";
+import {
+  RetainedAssetList,
+  retainedAssetFolders,
+  retainedAssetList,
+  retainedAssetPath,
+} from "../src/contracts/retained-assets.ts";
 
 export class SiteAssetCollision extends Schema.TaggedError<SiteAssetCollision>()(
   "SiteAssetCollision",
   { asset: Schema.String, sources: Schema.Array(Schema.String) },
+) {}
+
+/** A file in a retained folder has no content hash in its name, so an old copy could be stale. */
+export class SiteAssetNotHashed extends Schema.TaggedError<SiteAssetNotHashed>()(
+  "SiteAssetNotHashed",
+  { asset: Schema.String },
 ) {}
 
 export class SiteAssetNotPublishable extends Schema.TaggedError<SiteAssetNotPublishable>()(
@@ -108,6 +121,23 @@ const siteBuild = Effect.gen(function* () {
     yield* fs.makeDirectory(path.dirname(destination), { recursive: true });
     yield* fs.copyFile(asset.source, destination);
   }
+
+  // The Worker copies these files to R2 so pages on this build can still load them after the next
+  // deploy; see `src/infrastructure/site-assets.ts`.
+  const retained = [...assets.keys()]
+    .map((relative) => relative.split(path.sep).join("/"))
+    .filter((relative) => retainedAssetFolders.some((folder) => relative.startsWith(`${folder}/`)))
+    .sort();
+  const unhashed = retained.find((relative) => !retainedAssetPath.test(relative));
+  if (unhashed !== undefined)
+    return yield* Effect.fail(new SiteAssetNotHashed({ asset: unhashed }));
+  yield* fs.writeFileString(
+    path.join(output, retainedAssetList),
+    yield* Schema.encodeEffect(Schema.fromJsonString(RetainedAssetList))({
+      build: createHash("sha256").update(retained.join("\n")).digest("hex"),
+      files: retained,
+    }),
+  );
 
   // Asset serving uses htmlHandling "none", so every prerendered page needs an
   // explicit rewrite. The canonical route has no trailing slash; the slashed

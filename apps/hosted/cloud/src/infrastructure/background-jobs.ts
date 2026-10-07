@@ -20,6 +20,7 @@ export const BackgroundJob = Schema.Literals([
   "data-steps",
   "repository-recovery",
   "schedule-wake",
+  "site-assets",
   "app-domain-heartbeat",
   "welcome-emails",
   "workflow-reconcile",

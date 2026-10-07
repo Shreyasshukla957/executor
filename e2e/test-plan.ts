@@ -768,6 +768,21 @@ export const scenarios = {
       local: na("Cloud Sentry receiver"),
     },
   },
+  retainedAssets: {
+    fixtures: "actors",
+    file: "retained-assets.spec.ts",
+    title:
+      "Cloud copies each build's browser files for pages on a replaced build, and files no build kept or unhashed names still 404",
+    targets: {
+      cloud: managedCloud,
+      "self-host": na(
+        "Self-host serves one build from its image; only Cloud keeps earlier deploys' files.",
+      ),
+      local: na(
+        "Local serves one build from its install; only Cloud keeps earlier deploys' files.",
+      ),
+    },
+  },
   browserConnectionFailures: {
     fixtures: "actors",
     file: "browser-connection-failures.spec.ts",

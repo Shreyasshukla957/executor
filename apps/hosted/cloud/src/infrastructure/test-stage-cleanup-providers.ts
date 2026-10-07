@@ -76,6 +76,12 @@ export const TestStageBuildCleanup = () =>
     delete: () => Effect.void,
   });
 
+/** The buckets a test stage owns: retained app builds and retained site assets. */
+const testStageBuckets = [
+  "executor-next-hosted-appbuilds-test-",
+  "executor-next-hosted-siteassets-test-",
+];
+
 /** An authorized preview teardown includes its bucket contents, including older persisted props. */
 export const TestStageBucketCleanup = () =>
   Provider.effect(
@@ -89,7 +95,7 @@ export const TestStageBucketCleanup = () =>
             const stage = yield* Stage;
             if (
               !stage.startsWith("test-") ||
-              !input.output.bucketName.startsWith("executor-next-hosted-appbuilds-test-")
+              !testStageBuckets.some((prefix) => input.output.bucketName.startsWith(prefix))
             )
               return yield* Effect.die(
                 new Error("Refusing to empty a bucket outside a test preview."),

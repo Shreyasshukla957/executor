@@ -8,7 +8,7 @@ import { staticDocument } from "./homepage.ts";
  * still with a 404 status. The documentation build has its own, which keeps the docs
  * navigation. Other requests, such as API and MCP clients, keep an empty 404.
  */
-const notFoundDocument = Effect.gen(function* () {
+export const notFoundDocument = Effect.gen(function* () {
   const request = yield* HttpServerRequest.HttpServerRequest;
   const navigation =
     (request.method === "GET" || request.method === "HEAD") &&
