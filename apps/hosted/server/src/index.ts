@@ -24,7 +24,11 @@ export * from "./contracts/organization.ts";
 export { HostedExecutor } from "./contracts/executor.ts";
 export { OrganizationDefaults } from "./contracts/organization-defaults.ts";
 export { organizationDefaults } from "./implementation/organization-defaults.ts";
-export { lookupMembership, lookupOrganizationSlug } from "./implementation/organization.ts";
+export {
+  lookupMembership,
+  lookupOrganizationSlug,
+  noOrganizationRemovals,
+} from "./implementation/organization.ts";
 export { requireOrganizationAdmin, requireOrganizationOwner } from "./implementation/access.ts";
 export { hostedMiddlewareLive } from "./implementation/middleware.ts";
 export * from "./contracts/organization-removal.ts";

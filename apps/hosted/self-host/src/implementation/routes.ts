@@ -103,6 +103,8 @@ export const selfHostRouteMap = <DashboardE, DashboardR>(options: {
       HttpRouter.provideRequest(auth.appSessions),
       HttpRouter.provideRequest(catalogLive(document.document, egress, clientMetadata)),
       Layer.provide(hostedMiddlewareLive),
+      // Organization middleware reads the product's removal tombstones when it is built.
+      Layer.provide(executorServices),
       HttpRouter.provideRequest(executorServices),
       Layer.provide(auth.identity),
       Layer.provide(auth.apiIdentity),

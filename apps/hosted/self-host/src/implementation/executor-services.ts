@@ -25,6 +25,7 @@ import {
   makeOrganizationIcons,
   OrganizationDefaults,
   organizationDefaults,
+  noOrganizationRemovals,
   lazyHostedApiDocument,
   clientMetadataSetting,
   hostedOAuthClientName,
@@ -140,6 +141,8 @@ export const selfHostExecutorServices = <E, R>(
         Layer.succeed(HostedExecutor, Effect.succeed(withExecutorAnalytics(executor))),
         Layer.succeed(OrganizationDefaults, initialize),
         Layer.succeed(HostedAppRuntime, toEffectRuntime(runtime, blobs)),
+        // Self-host cannot remove an organization.
+        noOrganizationRemovals,
       );
     }),
   );

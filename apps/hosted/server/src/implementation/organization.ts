@@ -183,6 +183,7 @@ export const requireOrganizationLive = Layer.effect(
   Effect.gen(function* () {
     const auth = yield* Authentication;
     const api = yield* ApiAuthentication;
+    const tombstones = yield* OrganizationTombstones;
     return (response, { endpoint, group }) =>
       withOrganizationRequest(
         () => {
@@ -203,8 +204,14 @@ export const requireOrganizationLive = Layer.effect(
       ).pipe(
         Effect.provideService(Authentication, auth),
         Effect.provideService(ApiAuthentication, api),
+        Effect.provideService(OrganizationTombstones, tombstones),
       );
   }),
+);
+
+/** A host that cannot remove organizations, such as self-host: every organization it serves is live. */
+export const noOrganizationRemovals = Layer.succeed(OrganizationTombstones, () =>
+  Effect.succeed(false),
 );
 
 /** List organization metadata through the SDK without evaluating app code. */

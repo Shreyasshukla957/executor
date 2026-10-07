@@ -7,15 +7,14 @@ import * as Cloudflare from "alchemy/Cloudflare";
 import { Effect, Layer } from "effect";
 import { Api } from "./infrastructure/api-worker.ts";
 import { appDataSupervisors } from "./infrastructure/app-data.ts";
-import { cloudArtifactsTokensLive } from "./infrastructure/artifacts-tokens.ts";
 import { cloudAuthDatabase } from "./infrastructure/auth-database.ts";
-import { cloudProduct } from "./infrastructure/product.ts";
 import { McpSession } from "./infrastructure/mcp.ts";
 import { cloudMcpIdentity } from "./infrastructure/mcp-auth.ts";
 import { McpServer } from "./infrastructure/mcp-server-worker.ts";
 import { makeMcpSession } from "./infrastructure/mcp-session.ts";
 import { postHogBindings } from "./infrastructure/posthog.ts";
 import { sentryBindings } from "./infrastructure/sentry.ts";
+import { cloudServingProduct } from "./infrastructure/serving-product.ts";
 import {
   cloudObservability,
   cloudTelemetry,
@@ -25,7 +24,7 @@ import { workerBuild } from "./infrastructure/worker-build.ts";
 
 /** The executor and MCP identity are built once per isolate and shared by its objects. */
 const mcpSession = Effect.gen(function* () {
-  const executor = yield* cloudProduct(yield* appDataSupervisors, yield* cloudArtifactsTokensLive);
+  const executor = yield* cloudServingProduct(yield* appDataSupervisors);
   return yield* makeMcpSession({ executor, identity: yield* cloudMcpIdentity });
 }).pipe(Effect.orDie);
 

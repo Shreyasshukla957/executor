@@ -358,6 +358,8 @@ export default Api.make(
       Layer.provide(removals),
       Layer.provide(onboarding),
       Layer.provide(hostedMiddlewareLive),
+      // Organization middleware reads the product's removal tombstones when it is built.
+      Layer.provide(executor),
       HttpRouter.provideRequest(executor),
       Layer.provide(auth.identity),
       Layer.provide(auth.apiIdentity),
