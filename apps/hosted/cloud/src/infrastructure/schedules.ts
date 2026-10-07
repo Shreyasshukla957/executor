@@ -148,14 +148,15 @@ const makePlacedScheduleCoordinator = Effect.gen(function* () {
         Effect.gen(function* () {
           const executor = yield* Effect.flatten(HostedExecutor);
           const next = yield* executor.scheduler.nextWake;
-          // Requested profile setup keeps its wake: deleting it would leave the change to the
-          // cron heartbeat, up to a minute later.
+          // Requested profile setup keeps its wake: deleting it, or moving it to a later
+          // schedule, would leave the change to that schedule or the minute heartbeat.
           const soonest =
             (yield* Clock.currentTimeMillis) + defaultScheduleWorkerOptions.pollMilliseconds;
-          const planned =
-            next === null && !(yield* dispatch.requested)
+          const planned = (yield* dispatch.requested)
+            ? soonest
+            : next === null
               ? undefined
-              : Math.max(next?.getTime() ?? 0, soonest);
+              : Math.max(next.getTime(), soonest);
           // A pending re-arm of the retired heartbeat keeps an alarm for its retry.
           const stored = yield* state.storage.get<number>(restoreKey);
           const retry = stored === undefined ? undefined : Math.max(stored, soonest);
@@ -242,9 +243,13 @@ const makePlacedScheduleCoordinator = Effect.gen(function* () {
             Effect.gen(function* () {
               // Profile changes wake the coordinator; the request outlives a pass already running.
               yield* dispatch.request;
-              yield* state.storage.setAlarm(
-                (yield* Clock.currentTimeMillis) + defaultScheduleWorkerOptions.pollMilliseconds,
-              );
+              // A wake only brings the alarm in. Wakes arrive from every write in every
+              // organization; when each one moved the alarm a second out, wakes under a second
+              // apart kept it from ever firing, and due runs waited up to a minute for a lull.
+              const due =
+                (yield* Clock.currentTimeMillis) + defaultScheduleWorkerOptions.pollMilliseconds;
+              const pending = yield* state.storage.getAlarm();
+              if (pending === null || pending > due) yield* state.storage.setAlarm(due);
             }),
           );
         }),

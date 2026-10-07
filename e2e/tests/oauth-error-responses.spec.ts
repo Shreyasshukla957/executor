@@ -110,6 +110,8 @@ layer(HostedLive, { excludeTestServices: true })("OAuth error responses", (it) =
           scopes: ["read"],
           includeIdToken: false,
           idTokenAlgorithms: ["ES256"],
+          openidAlgorithms: null,
+          openidMetadata: "served",
           idTokenAlgorithm: "ES256",
           tokenError: null,
           authorizeError: null,
@@ -552,6 +554,117 @@ layer(HostedLive, { excludeTestServices: true })("OAuth error responses", (it) =
             reason: "incompatible_response",
           });
           expect(result.failure.recovery?.instructions).toContain("response field jwt_alg");
+        }
+
+        // OAuth metadata need not list ID token algorithms. Miro lists HS256 only in its OpenID
+        // metadata, whose client authentication methods differ; only the algorithms are adopted.
+        {
+          const [files, name] = mcp("ID token algorithms from OpenID metadata");
+          const requests = (yield* issuer.metrics).discoveryRequests.length;
+          const result = yield* signIn(files, name, {
+            scopes: ["openid", "read"],
+            includeIdToken: true,
+            idTokenAlgorithms: null,
+            openidAlgorithms: ["HS256"],
+            idTokenAlgorithm: "HS256",
+          });
+          expect(result.completed.status, JSON.stringify(result.failure)).toBe(200);
+          const metrics = yield* issuer.metrics;
+          expect(metrics.discoveryRequests.slice(requests)).toContain(
+            "/.well-known/openid-configuration",
+          );
+          expect(metrics.lastExchangeAuth).toBe("client_secret_basic");
+          expect(metrics.nonceRequested).toBe(true);
+        }
+
+        // OpenID metadata that is missing, redirected, unavailable or names another issuer adds
+        // nothing and never fails the OAuth metadata already found. The RS256 default then still
+        // rejects another algorithm at the exchange. The redirect's target lists HS256, so only a
+        // client that followed it would accept the token. An issuer that differs only by a
+        // trailing slash or letter case is another issuer: the strings must match exactly.
+        // Adopted algorithms never widen what the service declares: `none` is still refused, an
+        // algorithm the OpenID metadata does not list is refused, and a list in the OAuth metadata
+        // wins without reading the OpenID metadata.
+        for (const openid of [
+          { label: "missing", openidAlgorithms: null, read: true },
+          {
+            label: "redirect",
+            openidAlgorithms: ["HS256"],
+            openidMetadata: "redirect",
+            read: true,
+          },
+          {
+            label: "unavailable",
+            openidAlgorithms: ["HS256"],
+            openidMetadata: "unavailable",
+            read: true,
+          },
+          {
+            label: "another-issuer",
+            openidAlgorithms: ["HS256"],
+            openidMetadata: "another-issuer",
+            read: true,
+          },
+          {
+            label: "issuer with a trailing slash",
+            openidAlgorithms: ["HS256"],
+            openidMetadata: "issuer-trailing-slash",
+            read: true,
+          },
+          {
+            label: "issuer with an uppercase scheme",
+            openidAlgorithms: ["HS256"],
+            openidMetadata: "issuer-uppercase-scheme",
+            read: true,
+          },
+          {
+            label: "unsigned",
+            openidAlgorithms: ["HS256", "none"],
+            idTokenAlgorithm: "none",
+            read: true,
+          },
+          { label: "undeclared", openidAlgorithms: ["RS256"], read: true },
+          {
+            label: "OAuth metadata lists its own",
+            idTokenAlgorithms: ["ES256"],
+            openidAlgorithms: ["HS256"],
+            read: false,
+          },
+        ] as const) {
+          const [files, name] = mcp(`ID token algorithm, OpenID metadata ${openid.label}`);
+          const requests = (yield* issuer.metrics).discoveryRequests.length;
+          const result = yield* signIn(files, name, {
+            scopes: ["openid", "read"],
+            includeIdToken: true,
+            idTokenAlgorithms: "idTokenAlgorithms" in openid ? openid.idTokenAlgorithms : null,
+            openidAlgorithms: openid.openidAlgorithms,
+            openidMetadata: "openidMetadata" in openid ? openid.openidMetadata : "served",
+            idTokenAlgorithm: "idTokenAlgorithm" in openid ? openid.idTokenAlgorithm : "HS256",
+          });
+          expect(result.completed.status, openid.label).toBe(400);
+          expect(result.failure.recovery?.instructions, openid.label).toContain(
+            "response field jwt_alg",
+          );
+          const requested = (yield* issuer.metrics).discoveryRequests.slice(requests);
+          expect(requested.includes("/.well-known/openid-configuration"), openid.label).toBe(
+            openid.read,
+          );
+          expect(requested, openid.label).not.toContain("/redirected/openid-configuration");
+        }
+
+        // Without `openid`, no ID token is expected, so the OpenID metadata is never read.
+        {
+          const [files, name] = mcp("ID token algorithms without openid");
+          const requests = (yield* issuer.metrics).discoveryRequests.length;
+          const result = yield* signIn(files, name, {
+            scopes: ["read"],
+            idTokenAlgorithms: null,
+            openidAlgorithms: ["HS256"],
+          });
+          expect(result.completed.status, JSON.stringify(result.failure)).toBe(200);
+          expect((yield* issuer.metrics).discoveryRequests.slice(requests)).not.toContain(
+            "/.well-known/openid-configuration",
+          );
         }
 
         // A refreshed ID token must keep the subject the first one identified.

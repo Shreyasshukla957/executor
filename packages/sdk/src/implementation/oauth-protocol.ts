@@ -1154,9 +1154,21 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
    *
    * Missing metadata is an answer, not a failed request: a caller may fall back to another
    * issuer location, so the request span records only the status that said so.
+   *
+   * RFC 8414 metadata need not list ID token algorithms; OpenID Connect Discovery requires them.
+   * Miro lists HS256 only in its OpenID metadata. When an `openid` flow finds OAuth metadata
+   * without them, they are read from the same issuer's OpenID locations under the same rules.
+   * Only the algorithm list is adopted: the documents can differ elsewhere, such as in client
+   * authentication methods. Its `issuer` must equal the accepted OAuth metadata's exactly, without
+   * the URL normalization that issuer validation allows. A location that answers with anything but
+   * a valid 200 document for this issuer contributes nothing; OIDC Registration's RS256 default
+   * then applies. A request that fails in transport (a connection failure, timeout or unreadable
+   * body) fails discovery, as at every discovery location, even though OAuth metadata was already
+   * found. An explicit `metadataUrl` is the exact document and is never completed from another.
    */
   const discoverIssuer = (
     issuer: URL,
+    openid: boolean,
     metadataUrl?: URL,
   ): Effect.Effect<IssuerDiscovery, OAuthProtocolFailed> =>
     request(async (settings): Promise<IssuerAnswer> => {
@@ -1170,6 +1182,24 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
         });
       if (metadataUrl !== undefined)
         return { server: await issuerMetadata(issuer, discoveryResponse(await get(metadataUrl))) };
+      // The first valid OpenID document decides, as in discovery.
+      const openidAlgorithms = async (accepted: string) => {
+        for (const location of metadataLocations(issuer)) {
+          if (location.document !== "openid") continue;
+          const response = await get(location.url);
+          if (response.status !== 200) continue;
+          let server: oauth.AuthorizationServer;
+          try {
+            server = await issuerMetadata(issuer, response);
+          } catch {
+            continue;
+          }
+          if (server.issuer !== accepted) continue;
+          const algorithms: unknown = server.id_token_signing_alg_values_supported;
+          return Schema.is(Schema.Array(Schema.String))(algorithms) ? [...algorithms] : undefined;
+        }
+        return undefined;
+      };
       let unusable: unknown;
       let unavailable: number | undefined;
       let last: { status: number; contentType: OAuthMediaType | undefined } | undefined;
@@ -1181,11 +1211,26 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
         };
         if (response.status === 429 || response.status >= 500) unavailable ??= response.status;
         if (response.status !== 200) continue;
+        let server: oauth.AuthorizationServer;
         try {
-          return { server: await issuerMetadata(issuer, response), document: location.document };
+          server = await issuerMetadata(issuer, response);
         } catch (error) {
           unusable ??= withStatus(failure(error), 200);
+          continue;
         }
+        const algorithms =
+          openid &&
+          location.document === "oauth" &&
+          server.id_token_signing_alg_values_supported === undefined
+            ? await openidAlgorithms(server.issuer)
+            : undefined;
+        return {
+          server:
+            algorithms === undefined
+              ? server
+              : { ...server, id_token_signing_alg_values_supported: algorithms },
+          document: location.document,
+        };
       }
       if (unusable !== undefined) throw unusable;
       if (unavailable !== undefined)
@@ -1336,18 +1381,23 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
    * base; Atlassian publishes metadata only at the origin. Only missing metadata falls back:
    * served metadata that is invalid or names another issuer never selects a different issuer.
    */
-  const resolveIssuer = (issuerUrl: URL, fromResourceMetadata: boolean, metadataUrl?: URL) =>
+  const resolveIssuer = (
+    issuerUrl: URL,
+    fromResourceMetadata: boolean,
+    openid: boolean,
+    metadataUrl?: URL,
+  ) =>
     metadataUrl === undefined && !fromResourceMetadata && issuerUrl.pathname !== "/"
-      ? discoverIssuer(issuerUrl).pipe(
+      ? discoverIssuer(issuerUrl, openid).pipe(
           Effect.flatMap((path) =>
             "missing" in path
               ? Effect.annotateCurrentSpan("oauth.discovery.fallback", "origin").pipe(
-                  Effect.andThen(discoverIssuer(new URL(issuerUrl.origin))),
+                  Effect.andThen(discoverIssuer(new URL(issuerUrl.origin), openid)),
                 )
               : Effect.succeed(path),
           ),
         )
-      : discoverIssuer(issuerUrl, metadataUrl);
+      : discoverIssuer(issuerUrl, openid, metadataUrl);
 
   const discoverResource = (endpoint: URL) =>
     Effect.gen(function* () {
@@ -1399,14 +1449,15 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
       if (issuer === undefined)
         return yield* new OAuthProtocolFailed({ reason: "invalid_response" });
       const issuerUrl = yield* secureUrl(issuer);
-      const { server, audienceFromScopes, document } = yield* resolveIssuer(
-        issuerUrl,
-        found !== undefined,
-        metadataUrl,
-      ).pipe(Effect.flatMap(requireIssuer));
       // Authored scopes win. MCP challenges name the operations' required scopes; the
       // resource metadata's scope list is the default only when the challenge omits it.
       const scopes = new Set(method.scopes ?? read.scopes ?? resourceScopes(found) ?? []);
+      const { server, audienceFromScopes, document } = yield* resolveIssuer(
+        issuerUrl,
+        found !== undefined,
+        scopes.has("openid"),
+        metadataUrl,
+      ).pipe(Effect.flatMap(requireIssuer));
       if (
         method.grant !== "client_credentials" &&
         method.scopes === undefined &&

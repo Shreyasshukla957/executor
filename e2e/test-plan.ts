@@ -1104,6 +1104,17 @@ export const scenarios = {
       local: na("Local runs schedules in its own server process."),
     },
   },
+  cloudScheduleWakeStream: {
+    fixtures: "actors",
+    file: "cloud-schedule-wakes.spec.ts",
+    title:
+      "Cloud runs a due schedule and requested profile setup while coordinator wakes keep arriving less than a second apart",
+    targets: {
+      cloud: managedCloud,
+      "self-host": na("Self-host checks for due work every second; it has no coordinator alarm."),
+      local: na("Local checks for due work every second; it has no coordinator alarm."),
+    },
+  },
   cloudMcpObjectConnections: {
     fixtures: "actors",
     file: "cloud-database-placement.spec.ts",
@@ -1637,7 +1648,7 @@ export const scenarios = {
     fixtures: "actors",
     file: "oauth-error-responses.spec.ts",
     title:
-      "OAuth classifies token and callback error responses and rejects unsigned and mismatched ID tokens",
+      "OAuth classifies token and callback error responses, accepts ID token algorithms advertised only in OpenID metadata, and rejects unsigned and mismatched ID tokens",
     targets: {
       "self-host": scheduled,
       cloud: na("Uses a scoped loopback issuer with controlled wire responses."),
