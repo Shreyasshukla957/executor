@@ -18,6 +18,7 @@ const jobs = [
   "cloud-workers",
   "cloud-locks",
   "cloud-isolate",
+  "cloud-rate-limit",
 ];
 
 const block = (...lines: ReadonlyArray<string>) =>

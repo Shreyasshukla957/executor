@@ -20,7 +20,8 @@ export const cloudAuthSetup = Effect.gen(function* () {
     }),
     (pool) => Effect.promise(() => pool.end()),
   );
-  const base = cloudAuthOptions(settings, [], unavailableAuthEmail);
+  // Setup serves no requests; the limit stays at its default.
+  const base = cloudAuthOptions({ ...settings, rateLimitEnabled: true }, [], unavailableAuthEmail);
   const options = {
     ...base,
     database,

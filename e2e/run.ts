@@ -19,6 +19,8 @@ const command = Command.make(
     ),
     name: Flag.String("test-name").pipe(Flag.withDefault("")),
     workers: Flag.Int("workers").pipe(Flag.withDefault(defaultWorkers)),
+    // Start managed Cloud with the per-address auth limit on and run only the scenarios proving it.
+    authRateLimit: Flag.Boolean("auth-rate-limit").pipe(Flag.withDefault(false)),
   },
   runSuite,
 );

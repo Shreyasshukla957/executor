@@ -6,7 +6,7 @@ import type { Target } from "./report-model.ts";
 export const TargetPlan = Schema.Union([
   Schema.Struct({
     status: Schema.Literal("scheduled"),
-    runtime: Schema.optional(Schema.Literals(["managed", "attached"])),
+    runtime: Schema.optional(Schema.Literals(["managed", "attached", "rate-limited"])),
   }),
   Schema.Struct({
     status: Schema.Literal("not-applicable"),
@@ -38,6 +38,8 @@ export const TestPlan = Schema.Struct({
 });
 const scheduled = { status: "scheduled" } as const;
 const managedCloud = { status: "scheduled", runtime: "managed" } as const;
+/** Runs alone on a managed local Cloud started with Better Auth's per-address limit on. */
+const rateLimitedCloud = { status: "scheduled", runtime: "rate-limited" } as const;
 const na = (reason: string) => ({ status: "not-applicable", reason }) as const;
 const cloudOnboarding = {
   cloud: scheduled,
@@ -3063,6 +3065,15 @@ export const scenarios = {
       local: na("Local has no auth rate limit."),
     },
   },
+  cloudAuthRateLimit: {
+    file: "cloud-auth-rate-limit.spec.ts",
+    title: "Cloud limits sign-in and OAuth client registration per address and says when to retry",
+    targets: {
+      cloud: rateLimitedCloud,
+      "self-host": na("The self-host auth limit is covered by the document rate limit scenario."),
+      local: na("Local has no auth rate limit."),
+    },
+  },
   serverRenderedDashboard: {
     fixtures: "actors",
     file: "server-rendered-dashboard.spec.ts",
@@ -5467,11 +5478,22 @@ export const scenarios = {
 
 const allScenarios: ReadonlyArray<typeof TestPlan.Type> = Object.values(scenarios);
 
+/**
+ * How the run reaches Cloud. Managed Cloud is local and turns the per-address auth limit off, as
+ * deployed test stages do; a rate-limited run starts it with the limit on for the scenarios that
+ * prove it, and runs only those.
+ */
+export type CloudMode = "managed" | "attached" | "rate-limited";
+
+const cloudRuntimeReasons = {
+  managed: "Requires the managed local Cloud target and its local collectors.",
+  attached: "Requires a deployed Cloud target with Cloudflare's memory limit.",
+  "rate-limited":
+    "Requires a managed local Cloud with the per-address auth limit on: e2e:cloud --auth-rate-limit.",
+} as const;
+
 /** Hosted parity includes every scenario scheduled on both hosted products. */
-export const scenariosForSuite = (
-  suite: "all" | "hosted",
-  cloudMode: "managed" | "attached" = "managed",
-) =>
+export const scenariosForSuite = (suite: "all" | "hosted", cloudMode: CloudMode = "managed") =>
   // Widened to the plan type: a union over every scenario literal is too large to check.
   allScenarios
     .filter(
@@ -5480,27 +5502,31 @@ export const scenariosForSuite = (
         (scenario.targets["self-host"].status === "scheduled" &&
           scenario.targets.cloud.status === "scheduled"),
     )
-    .map((scenario) =>
-      "runtime" in scenario.targets.cloud && scenario.targets.cloud.runtime !== cloudMode
-        ? {
+    .map((scenario): typeof TestPlan.Type => {
+      const cloud = scenario.targets.cloud;
+      if (cloud.status !== "scheduled") return scenario;
+      const runs =
+        cloud.runtime === undefined ? cloudMode !== "rate-limited" : cloud.runtime === cloudMode;
+      return runs
+        ? scenario
+        : {
             ...scenario,
             targets: {
               ...scenario.targets,
               cloud: na(
-                scenario.targets.cloud.runtime === "managed"
-                  ? "Requires the managed local Cloud target and its local collectors."
-                  : "Requires a deployed Cloud target with Cloudflare's memory limit.",
+                cloud.runtime === undefined
+                  ? "Runs on Cloud without the per-address auth limit."
+                  : cloudRuntimeReasons[cloud.runtime],
               ),
             },
-          }
-        : scenario,
-    );
+          };
+    });
 
 /** Select only explicitly scheduled files for a target; cloud scale stays disabled. */
 export const filesForTarget = (
   target: typeof Target.Type,
   suite: "all" | "hosted",
-  cloudMode: "managed" | "attached" = "managed",
+  cloudMode: CloudMode = "managed",
   filter = "",
 ) => [
   ...new Set(
@@ -5519,7 +5545,7 @@ export const patternForTarget = (
   target: typeof Target.Type,
   suite: "all" | "hosted",
   filter: string,
-  cloudMode: "managed" | "attached" = "managed",
+  cloudMode: CloudMode = "managed",
 ): string => {
   const selected = new RegExp(filter);
   const titles = scenariosForSuite(suite, cloudMode)

@@ -199,28 +199,15 @@ const captureSignInThemes = (name: string) =>
 const submitSso = (buttonName: string, expectedStatus = 200) =>
   Effect.gen(function* () {
     const browser = yield* Browser;
-    const submit = browser.use("Start SSO", (page) =>
+    const status = yield* browser.use("Start SSO", (page) =>
       Promise.all([
         page
           .waitForResponse((response) => response.url().endsWith("/api/auth/sign-in/sso"))
-          .then((response) => ({
-            status: response.status(),
-            retryAfter: response.headers()["x-retry-after"],
-          })),
+          .then((response) => response.status()),
         page.getByRole("button", { name: buttonName, exact: true }).click(),
-      ]).then(([response]) => response),
+      ]).then(([status]) => status),
     );
-    let response = yield* submit;
-    if (response.status === 429) {
-      // The scenario makes several real sign-ins. Honor the server's bounded
-      // X-Retry-After without changing the product's authentication rate limit.
-      const seconds = yield* Schema.decodeUnknownEffect(
-        Schema.Number.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(60)),
-      )(Number(response.retryAfter));
-      yield* Effect.sleep(seconds * 1000);
-      response = yield* submit;
-    }
-    expect(response.status).toBe(expectedStatus);
+    expect(status).toBe(expectedStatus);
   });
 const start = (email: string, destination: string, capture = false) =>
   Effect.gen(function* () {

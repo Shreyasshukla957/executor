@@ -44,7 +44,7 @@ import {
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { createHash } from "node:crypto";
 import type { Target } from "./report-model.ts";
-import { scenariosForSuite } from "./test-plan.ts";
+import { scenariosForSuite, type CloudMode } from "./test-plan.ts";
 
 class SelectionFailed extends Schema.TaggedError<SelectionFailed>()("SelectionFailed", {
   message: Schema.String,
@@ -90,22 +90,35 @@ const jobs = {
   // This counts every request in local Cloud's single session object isolate, so another
   // scenario's MCP request in flight would change its count.
   "cloud-isolate": { target: "cloud", pattern: "Cloud MCP session objects report" },
-} as const satisfies Record<string, { target: typeof Target.Type; pattern: string }>;
+  // Managed Cloud turns the per-address auth limit off; this job starts one with it on.
+  "cloud-rate-limit": {
+    target: "cloud",
+    cloudMode: "rate-limited",
+    pattern: "Cloud limits sign-in and OAuth client registration per address",
+  },
+} as const satisfies Record<
+  string,
+  { target: typeof Target.Type; cloudMode?: CloudMode; pattern: string }
+>;
 
-const plan = scenariosForSuite("all", "managed");
-const specFiles: ReadonlySet<string> = new Set(plan.map((scenario) => scenario.file));
+/** The plan a job's run sees: its Cloud mode decides which Cloud scenarios are scheduled. */
+const planFor = (job: (typeof jobs)[keyof typeof jobs]) =>
+  scenariosForSuite("all", "cloudMode" in job ? job.cloudMode : "managed");
+const specFiles: ReadonlySet<string> = new Set(
+  scenariosForSuite("all").map((scenario) => scenario.file),
+);
 const escape = (title: string) => title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 /** Spec files with a scenario that one of these jobs runs on a full run. */
 const jobFiles: ReadonlySet<string> = new Set(
-  plan
-    .filter((scenario) =>
-      Object.values(jobs).some(
-        ({ target, pattern }) =>
-          scenario.targets[target].status === "scheduled" &&
-          new RegExp(pattern).test(scenario.title),
-      ),
-    )
-    .map((scenario) => scenario.file),
+  Object.values(jobs).flatMap((job) =>
+    planFor(job)
+      .filter(
+        (scenario) =>
+          scenario.targets[job.target].status === "scheduled" &&
+          new RegExp(job.pattern).test(scenario.title),
+      )
+      .map((scenario) => scenario.file),
+  ),
 );
 
 /**
@@ -616,9 +629,10 @@ NodeRuntime.runMain(
             ...changedSpecs.filter((file) => jobFiles.has(file)),
           ]);
 
-    const selections = Object.entries(jobs).map(([job, { target, pattern }]) => {
+    const selections = Object.entries(jobs).map(([job, definition]) => {
+      const { target, pattern } = definition;
       const base = new RegExp(pattern);
-      const titles = plan
+      const titles = planFor(definition)
         .filter(
           (scenario) =>
             scenario.targets[target].status === "scheduled" &&

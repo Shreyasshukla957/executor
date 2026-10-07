@@ -106,7 +106,7 @@ import { reportCloudFailure } from "./implementation/error-reporting.ts";
 import { sentryBindings } from "./infrastructure/sentry.ts";
 import { cloudErrorTunnel } from "./implementation/error-tunnel.ts";
 import { cloudSentry } from "./implementation/error-reporting.ts";
-import { cloudOrigin, customDomain } from "./infrastructure/stage.ts";
+import { authRateLimitSwitchBindings, cloudOrigin, customDomain } from "./infrastructure/stage.ts";
 import { clientMetadataBinding } from "./infrastructure/client-metadata.ts";
 import { appDataSupervisors } from "./infrastructure/app-data.ts";
 import { cloudDevelopment } from "./contracts/development.ts";
@@ -147,6 +147,8 @@ export default Api.make(
         ...(yield* billingBindings),
         // Local tests stall chosen removal starts; deployed Workers never install the hook.
         ...(yield* removalStallBindings),
+        // Only local e2e Clouds may turn the auth rate limit off; deployed Workers get `false`.
+        ...(yield* authRateLimitSwitchBindings),
         // A deployed stage identifies Executor to authorization servers by its own document.
         ...(origin === undefined ? {} : yield* clientMetadataBinding(origin)),
       },

@@ -239,6 +239,9 @@ scenarios on Linux instead of moving them to a Mac.
   server's own statements get a second local Cloud, so their locks cannot stall other scenarios.
   The MCP session timing scenario also gets its own: it counts every request in the isolate that
   runs all session objects, and another scenario's request would change that count.
+  Every scenario's request comes from one address, so these local Clouds turn Better Auth's
+  per-address limit off, as deployed test stages do; the scenario that proves the limit gets
+  its own local Cloud with it on (`e2e:cloud --auth-rate-limit`).
   The job builds the apps package and Motel once before its runs; runs only serve that Motel
   bundle, because every target in a run shares it.
 

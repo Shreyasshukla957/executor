@@ -2,7 +2,12 @@
 import { Config, Console, Effect, FileSystem, Option, Path, Redacted, Schema } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { randomBytes } from "node:crypto";
-import { patternForTarget, scenariosForSuite, type TestPlan } from "../test-plan.ts";
+import {
+  patternForTarget,
+  scenariosForSuite,
+  type CloudMode,
+  type TestPlan,
+} from "../test-plan.ts";
 import { readEvidence, combineEvidenceReports } from "../evidence-results.ts";
 import { type EvidenceReport, type RunMetadata } from "../report-model.ts";
 import { startCloudEnvironment } from "../support/cloud-environment.ts";
@@ -32,11 +37,14 @@ export const runSuite = ({
   target: selected,
   name = "",
   workers = 16,
+  authRateLimit = false,
   attachment,
 }: {
   readonly target: "self-host" | "local" | "cloud" | "all" | "hosted";
   readonly name?: string;
   readonly workers?: number;
+  /** Start managed Cloud with the per-address auth limit on, for the scenarios that prove it. */
+  readonly authRateLimit?: boolean;
   readonly attachment?: {
     readonly origin: string;
     readonly fixtures: typeof FixtureControl.Type;
@@ -82,6 +90,11 @@ export const runSuite = ({
                 ),
               )
             : Option.none<string>();
+      if (authRateLimit && (selected !== "cloud" || Option.isSome(cloud)))
+        return yield* new RunFailed({
+          message:
+            "The auth rate limit can be turned on only for managed Cloud. Use --target cloud without E2E_CLOUD_URL.",
+        });
       const interactive = yield* Config.Boolean("E2E_INTERACTIVE").pipe(Config.withDefault(false));
       const observeUI = yield* Config.Boolean("E2E_UI_OBSERVE").pipe(Config.withDefault(false));
       if (observeUI && (selected !== "cloud" || Option.isSome(cloud)))
@@ -114,7 +127,11 @@ export const runSuite = ({
         (yield* processes.string(ChildProcess.make("git", ["status", "--porcelain"]))).trim()
           .length > 0;
       const startedAt = new Date().toISOString();
-      const cloudMode = Option.isSome(cloud) ? "attached" : "managed";
+      const cloudMode: CloudMode = Option.isSome(cloud)
+        ? "attached"
+        : authRateLimit
+          ? "rate-limited"
+          : "managed";
       const plan = scenariosForSuite(selected === "hosted" ? "hosted" : "all", cloudMode);
       const filter = yield* Effect.try({
         try: () => new RegExp(name),
@@ -153,7 +170,7 @@ export const runSuite = ({
                 runtime:
                   target === "cloud"
                     ? managedCloud
-                      ? "Local Cloud Worker + Postgres · no saved credentials"
+                      ? `Local Cloud Worker + Postgres · no saved credentials · auth rate limit ${authRateLimit ? "on" : "off"}`
                       : "Cloud endpoint"
                     : target === "local" && Option.isSome(packagedEntry)
                       ? "Installed npm CLI + PGlite per scenario"
@@ -183,6 +200,7 @@ export const runSuite = ({
                         databasePort: yield* freePort,
                         commit,
                         observeUI,
+                        authRateLimit,
                       })
                     : undefined;
                   const preparedScenarios =

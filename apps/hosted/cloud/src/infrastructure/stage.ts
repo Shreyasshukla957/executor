@@ -1,5 +1,7 @@
 /** Test stages are named `test-<slug>`. Each one derives its origin and owns generated secrets. */
+import { AlchemyContext } from "alchemy/AlchemyContext";
 import { Stage } from "alchemy/Stage";
+import { isLoopbackHostname } from "@executor-js/utils/url-policy";
 import { Config, Effect, Option, Schema } from "effect";
 
 export const testStagePrefix = "test-";
@@ -45,13 +47,6 @@ export const testStage = Effect.gen(function* () {
     Config.withDefault("executor.engineering"),
   );
   return Option.some<TestStage>({ name: name.value, slug, origin: `https://${slug}.${domain}` });
-});
-
-/** Automated stages isolate product scenarios from shared-IP throttling; all other stages enforce it. */
-export const cloudAuthRateLimit = Effect.gen(function* () {
-  const stage = yield* testStage;
-  if (Option.isNone(stage) || !stage.value.slug.startsWith("e2e-")) return true;
-  return yield* Config.Boolean("TEST_STAGE_AUTH_RATE_LIMIT").pipe(Config.withDefault(false));
 });
 
 const Origin = Schema.String.check(
@@ -102,3 +97,39 @@ export const cloudOrigin = testStage.pipe(
     }),
   ),
 );
+
+/**
+ * API Worker props: `AUTH_RATE_LIMIT_SWITCH` is true only under `alchemy dev`, from
+ * `AlchemyContext.dev`, so every deployed Worker gets `false`. Read it from the Worker
+ * environment, never through `Config`: Alchemy binds each `Config` read during initialization
+ * from the deploy's own environment, over these props.
+ */
+export const authRateLimitSwitchBindings = Effect.gen(function* () {
+  return { AUTH_RATE_LIMIT_SWITCH: (yield* AlchemyContext).dev };
+});
+
+/**
+ * Whether Better Auth's per-address limit applies. Every request a test runner sends comes from
+ * one address, so automated environments may turn it off; no deployed stage outside them can:
+ *
+ * - Production (`v2`) always enforces it, whatever its configuration says.
+ * - A deployed `test-e2e-*` stage turns it off unless `TEST_STAGE_AUTH_RATE_LIMIT=true`.
+ * - Cloud dev turns it off for `TEST_STAGE_AUTH_RATE_LIMIT=false` on a loopback origin, as the
+ *   e2e harness asks. `localRuntime` is the Worker's `AUTH_RATE_LIMIT_SWITCH`, which only
+ *   `alchemy dev` sets, so no deploy configuration reaches this branch, a loopback
+ *   `BETTER_AUTH_URL` included.
+ * - Every other stage enforces it.
+ *
+ * `scripts/check-auth-rate-limit.ts` checks these rules over every combination.
+ */
+export const cloudAuthRateLimit = (localRuntime: boolean) =>
+  Effect.gen(function* () {
+    // Read on every stage, so Alchemy binds it into the local Worker; only the rules use it.
+    const configured = yield* Config.Boolean("TEST_STAGE_AUTH_RATE_LIMIT").pipe(Config.option);
+    if (Option.getOrUndefined(yield* stageName) === productionStage) return true;
+    const stage = yield* testStage;
+    if (Option.isSome(stage))
+      return stage.value.slug.startsWith("e2e-") ? Option.getOrElse(configured, () => false) : true;
+    if (!localRuntime || !isLoopbackHostname(new URL(yield* cloudOrigin).hostname)) return true;
+    return Option.getOrElse(configured, () => true);
+  });

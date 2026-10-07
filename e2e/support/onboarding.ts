@@ -50,23 +50,10 @@ const make = Effect.gen(function* () {
           response.headers()["content-type"]?.includes("application/json")
             ? response.json()
             : Promise.resolve(undefined)
-          ).then((failure: unknown) => ({
-            status: response.status(),
-            failure,
-            retryAfter: response.headers()["x-retry-after"],
-          })),
+          ).then((failure: unknown) => ({ status: response.status(), failure })),
         ),
       );
-      let response = yield* submit;
-      if (response.status === 429) {
-        // Managed Cloud scenarios share an IP. Respect the real auth rate limit
-        // when another scenario has used the current sign-in allowance.
-        const seconds = yield* Schema.decodeUnknownEffect(
-          Schema.Number.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(60)),
-        )(Number(response.retryAfter));
-        yield* Effect.sleep(seconds * 1000);
-        response = yield* submit;
-      }
+      const response = yield* submit;
       if (response.status !== 200) {
         const failure = Schema.decodeUnknownOption(AuthFailure)(response.failure);
         return yield* new OnboardingFailed({

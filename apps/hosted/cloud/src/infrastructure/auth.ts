@@ -30,10 +30,12 @@ import { betterAuth } from "better-auth";
 import { BetterAuthApiError, isAPIErrorLike } from "@alchemy.run/better-auth";
 import { cloudSessionCookiePrefix } from "../contracts/browser.ts";
 import { RuntimeContext } from "alchemy";
+import * as Cloudflare from "alchemy/Cloudflare";
 import { Context, Effect, Layer, Option, Redacted, Schema, type Scope } from "effect";
 import { HttpBody, HttpServerRequest, HttpServerResponse } from "effect/http";
 import type { SendAuthEmail } from "../contracts/email.ts";
 import { cloudSecrets } from "./secrets.ts";
+import { cloudAuthRateLimit } from "./stage.ts";
 import { AuthDatabase, appSessionsPerCall, boundAuthAdapter } from "./auth-database.ts";
 import { invocationSql } from "./invocation-database.ts";
 import { mcpAuthentication } from "./mcp-auth.ts";
@@ -41,7 +43,14 @@ import { mcpAuthentication } from "./mcp-auth.ts";
 /** Bind during initialization; database calls capture the current invocation only. */
 export const cloudAuth = (send: SendAuthEmail) =>
   Effect.gen(function* () {
-    const settings = yield* cloudAuthSettings.pipe(Effect.orDie);
+    // Only `alchemy dev` binds the switch; see `authRateLimitSwitchBindings`.
+    const environment = yield* Cloudflare.WorkerEnvironment;
+    const settings = {
+      ...(yield* cloudAuthSettings.pipe(Effect.orDie)),
+      rateLimitEnabled: yield* cloudAuthRateLimit(environment.AUTH_RATE_LIMIT_SWITCH === true).pipe(
+        Effect.orDie,
+      ),
+    };
     const secrets = yield* cloudSecrets.pipe(Effect.orDie);
     const meter = yield* BillingMeter.pipe(Effect.provide(yield* billingLive));
     // Better Auth invokes Promise callbacks. Carry the calling request's scope,

@@ -24,6 +24,12 @@ export const startCloudEnvironment = (input: {
   readonly databasePort: number;
   readonly commit: string;
   readonly observeUI: boolean;
+  /**
+   * Every scenario's request comes from this machine's one address, so they would share Better
+   * Auth's per-address allowance. As on deployed test stages, the limit is on only for the
+   * scenarios that prove it.
+   */
+  readonly authRateLimit: boolean;
   /** Registry the local Cloud compiler resolves app packages from. */
   readonly npmRegistry?: string;
 }) =>
@@ -83,6 +89,7 @@ export const startCloudEnvironment = (input: {
       OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: `${collector}/v1/traces`,
       OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: `${collector}/v1/logs`,
       EXECUTOR_ENVIRONMENT: "test-local",
+      TEST_STAGE_AUTH_RATE_LIMIT: String(input.authRateLimit),
       VITE_POSTHOG_KEY: "synthetic-ingestion-key",
       VITE_POSTHOG_PATH: "/api/0123456789abcdef",
       VITE_POSTHOG_HOST: `http://127.0.0.1:${analyticsPort}`,

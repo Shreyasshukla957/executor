@@ -738,7 +738,14 @@ for the release checks, or `--test-name '<scenario>'` for focused verification.
 Alchemy disables Better Auth rate limits on automated `test-e2e-*` stages so
 parallel scenarios do not share the runner IP's request allowance. Set
 `TEST_STAGE_AUTH_RATE_LIMIT=true` when deploying a stage for focused rate-limit
-checks. Production and ordinary previews always retain rate limits. Local and
+checks. Managed local Cloud does the same: the runner starts it with
+`TEST_STAGE_AUTH_RATE_LIMIT=false`, which Cloud honors only under `alchemy dev`
+on a loopback origin. `bun run e2e:cloud --auth-rate-limit` starts it with the
+limit on and runs only the scenarios whose Cloud plan declares
+`runtime: "rate-limited"`; CI runs them in their own step. Production (`v2`),
+ordinary previews and every other deployed stage always retain rate limits,
+whatever their configuration; `bun run auth:rate-limit` (part of `check`)
+proves it. Local and
 Cloud CI jobs use 16-vCPU runners. Self-host functional tests use a 12-vCPU Mac;
 the 1,000-account test runs independently on a 6-vCPU Mac.
 The same tests run on both providers. Add new Cloud scenarios normally in
@@ -752,7 +759,7 @@ limit, and is reported separately from test time. Per-scenario setup, assertions
 and cleanup retain their separate 60-second deadlines. The suite owns all
 prepared organizations, including those whose tests never start after a failure.
 
-Only scenarios declaring `runtime: "managed"` require the local Cloud target
+Only scenarios declaring `runtime: "managed"` or `runtime: "rate-limited"` require the local Cloud target
 (for example, local telemetry collectors). Their deployed report says N/A with
 the reason. They remain in local CI. Claude Code's model-dependent scenario is
 excluded by the deployed runner's default filter. A filter that executes no
