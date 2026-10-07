@@ -240,7 +240,8 @@ export const organizationDefaults = (
                           owner,
                           provider: requirement.provider,
                           method: "apiKey",
-                          label: user.name,
+                          // Email sign-ups have no name; say whose access this is instead.
+                          label: "Your Executor access",
                           fields: Redacted.make({ token: Redacted.value(token), organization }),
                         })
                         .pipe(personalAccountCreation(user.userId))

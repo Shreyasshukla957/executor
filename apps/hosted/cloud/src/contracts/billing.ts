@@ -21,6 +21,12 @@ export const BillingPlan = Schema.Struct({
       unit: Schema.NullOr(Schema.Literal("member")),
     }),
   ),
+  /** Members the plan allows: a fixed number, or any number (unlimited or billed per member). */
+  members: Schema.NullOr(Schema.Int.check(Schema.isGreaterThan(0))),
+  /** Whether the plan includes verified domains, which let people join by email domain. */
+  domainVerification: Schema.Boolean,
+  /** A free trial new subscribers start with, if the plan offers one. */
+  trial: Schema.NullOr(Schema.Struct({ days: Schema.Int, cardRequired: Schema.Boolean })),
 });
 /** Current subscription state, never inferred from a checkout redirect. */
 export const BillingOverview = Schema.Struct({

@@ -9,6 +9,8 @@ import { useOrganizationRoute } from "@executor-js/hosted-web/organization";
 import { Button } from "@executor-js/ui/components/button";
 import { Duration, Exit, Option } from "effect";
 import { useEffect, useState } from "react";
+import { HugeiconsIcon } from "@hugeicons/react";
+import { Tick02Icon } from "@hugeicons/core-free-icons";
 import {
   billingAtom,
   checkoutAtom,
@@ -16,6 +18,24 @@ import {
   planActive,
   portalAtom,
 } from "../../contracts/billing.ts";
+import type { BillingPlan } from "../../../../src/contracts/billing.ts";
+
+const members = (count: number) =>
+  `${count.toLocaleString("en-US")} member${count === 1 ? "" : "s"}`;
+
+/** What a plan includes, stated from the billing catalog's own items. */
+const planFeatures = (plan: typeof BillingPlan.Type) => [
+  ...(plan.trial === null
+    ? []
+    : [`${plan.trial.days}-day free trial${plan.trial.cardRequired ? ", card required" : ""}`]),
+  plan.members === null
+    ? plan.price?.unit === "member"
+      ? "Any number of members, billed per member"
+      : "Unlimited members"
+    : `Up to ${members(plan.members)}`,
+  ...(plan.domainVerification ? ["Verified domains: teammates join with their work email"] : []),
+  ...(plan.purchase === "contact" ? ["Custom contract and dedicated support"] : []),
+];
 
 /**
  * The checkout and portal answers are navigation targets, so the browser checks one thing at the
@@ -96,7 +116,6 @@ function BillingDetails({ returned, onCheckoutSettled }: BillingProps) {
           Manage billing
         </Button>
       </div>
-      <p className="muted text-muted-foreground">{organization.name}</p>
       {returned.organization && returned.organization !== organization.id && (
         <Alert className="notice border border-border rounded-[8px] py-[12px] px-[16px] my-[20px] mx-0 text-[13px]">
           <AlertDescription>
@@ -170,7 +189,9 @@ function BillingDetails({ returned, onCheckoutSettled }: BillingProps) {
                         {plan.purchase === "contact" ? (
                           "Custom"
                         ) : plan.price === null ? (
-                          "Free"
+                          <>
+                            $0<span> / month</span>
+                          </>
                         ) : (
                           <>
                             {new Intl.NumberFormat("en-US", {
@@ -186,6 +207,18 @@ function BillingDetails({ returned, onCheckoutSettled }: BillingProps) {
                           </>
                         )}
                       </p>
+                      <ul className="flex flex-col gap-1.5 text-[13px] text-muted-foreground">
+                        {planFeatures(plan).map((feature) => (
+                          <li key={feature} className="flex gap-2">
+                            <HugeiconsIcon
+                              icon={Tick02Icon}
+                              size={14}
+                              className="mt-0.5 shrink-0 text-foreground"
+                            />
+                            {feature}
+                          </li>
+                        ))}
+                      </ul>
                       {plan.purchase === "contact" && !subscription ? (
                         <Button asChild variant="outline">
                           <a href="mailto:rhys@executor.sh?subject=Executor%20Enterprise%20inquiry">
@@ -218,8 +251,12 @@ function BillingDetails({ returned, onCheckoutSettled }: BillingProps) {
                           {subscription
                             ? subscription.status === "scheduled"
                               ? "Scheduled"
-                              : "Current plan"
-                            : `Choose ${plan.name}`}
+                              : subscription.status === "trialing"
+                                ? "Current plan · Trial"
+                                : "Current plan"
+                            : plan.trial !== null
+                              ? `Start ${plan.trial.days}-day trial`
+                              : `Choose ${plan.name}`}
                         </Button>
                       )}
                     </article>

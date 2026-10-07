@@ -76,12 +76,15 @@ function NavigationItem({
 export function DashboardNavigation({
   organization,
   pendingPage = "apps",
+  children,
 }: {
   readonly organization?: {
     readonly slug: string;
     readonly role: OrganizationAccess["role"] | undefined;
   };
   readonly pendingPage?: string;
+  /** The host's own organization pages, after the common ones. */
+  readonly children?: ReactNode;
 }) {
   return (
     <>
@@ -93,6 +96,7 @@ export function DashboardNavigation({
           pendingPage={pendingPage}
         />
       ))}
+      {children}
     </>
   );
 }

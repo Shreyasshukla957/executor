@@ -3,7 +3,12 @@ import { reportBrowserUsage } from "@executor-js/hosted-web/contracts/product-an
 import { AsyncResult } from "effect/reactivity";
 import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react";
 import { LoginLegalFooter, LoginPage, type LoginProps } from "@executor-js/hosted-web/pages/login";
-import { AuthFailed, sessionAtom } from "@executor-js/hosted-web/contracts/auth";
+import {
+  AuthFailed,
+  invalidEmailMessage,
+  plausibleEmail,
+  sessionAtom,
+} from "@executor-js/hosted-web/contracts/auth";
 import { Button } from "@executor-js/ui/components/button";
 import { Input } from "@executor-js/ui/components/input";
 import { Cause, Exit, Option } from "effect";
@@ -108,7 +113,13 @@ function CloudSignInForm(props: LoginProps & { readonly mode?: "signin" | "signu
   const failure = (cause: Cause.Cause<AuthFailed>) => {
     reportBrowserUsage({ area: "auth", action: "sign_in", outcome: "failure" });
     const value = Cause.squash(cause);
-    setError(value instanceof AuthFailed ? value.message : "Sign-in failed. Try again.");
+    setError(
+      value instanceof AuthFailed
+        ? value.message
+        : signingUp
+          ? "Sign-up failed. Try again."
+          : "Sign-in failed. Try again.",
+    );
   };
   return (
     <LoginPage
@@ -156,6 +167,11 @@ function CloudSignInForm(props: LoginProps & { readonly mode?: "signin" | "signu
           event.preventDefault();
           setError(null);
           if (!sent) {
+            // The browser accepts addresses without a domain such as name@example; catch them here.
+            if (!plausibleEmail(email.trim())) {
+              setError(invalidEmailMessage);
+              return;
+            }
             reportBrowserUsage({ area: "auth", action: "email_sign_in", outcome: "started" });
             const result = await begin({ email: email.trim(), redirect: props.redirect });
             reportBrowserUsage({
@@ -194,7 +210,7 @@ function CloudSignInForm(props: LoginProps & { readonly mode?: "signin" | "signu
           <>
             <p>Enter the code sent to {email}. It expires in five minutes.</p>
             <label>
-              Sign-in code
+              {signingUp ? "Sign-up code" : "Sign-in code"}
               <Input
                 name="otp"
                 inputMode="numeric"
@@ -209,12 +225,12 @@ function CloudSignInForm(props: LoginProps & { readonly mode?: "signin" | "signu
           </>
         )}
         <Button
-          aria-label={sent ? "Sign in" : "Continue"}
+          aria-label={sent ? (signingUp ? "Sign up" : "Sign in") : "Continue"}
           className="text-base font-medium"
           loading={beginning.waiting || verifying.waiting || redirecting}
           disabled={pending}
         >
-          {sent ? "Sign in" : "Continue"}
+          {sent ? (signingUp ? "Sign up" : "Sign in") : "Continue"}
         </Button>
         {sent && (
           <Button

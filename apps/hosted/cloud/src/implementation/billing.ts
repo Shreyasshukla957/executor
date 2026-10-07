@@ -92,7 +92,8 @@ export const billingLive = Effect.gen(function* () {
               !plan.archived && [catalog.free, catalog.team, catalog.enterprise].includes(plan.id),
           )
           .map((plan) => {
-            const seats = plan.items.find((item) => item.featureId === catalog.members)?.price;
+            const memberItem = plan.items.find((item) => item.featureId === catalog.members);
+            const seats = memberItem?.price;
             const price = plan.price ?? seats;
             return {
               id: plan.id,
@@ -106,6 +107,22 @@ export const billingLive = Effect.gen(function* () {
               price: price
                 ? { amount: price.amount, interval: price.interval, unit: seats ? "member" : null }
                 : null,
+              // A per-member price or an unlimited balance has no cap on members.
+              members:
+                memberItem === undefined || memberItem.unlimited || seats
+                  ? null
+                  : memberItem.included,
+              domainVerification: plan.items.some(
+                (item) => item.featureId === catalog.domainVerification,
+              ),
+              // The catalog declares trials in days; another unit is not one this page can state.
+              trial:
+                plan.freeTrial?.durationType === "day"
+                  ? {
+                      days: plan.freeTrial.durationLength,
+                      cardRequired: plan.freeTrial.cardRequired,
+                    }
+                  : null,
             };
           }),
         subscriptions: customer.subscriptions

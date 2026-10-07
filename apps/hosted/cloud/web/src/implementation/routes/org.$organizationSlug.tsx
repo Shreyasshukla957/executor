@@ -7,6 +7,7 @@ import { OrganizationBoundary, OrganizationContent } from "@executor-js/hosted-w
 import { NameAccountDialog } from "@executor-js/hosted-web/pages/name-account-dialog";
 import { HostedNavigation } from "@executor-js/hosted-web/navigation";
 import { CloudSupport } from "../components/support.tsx";
+import { CloudNavigation } from "../components/navigation.tsx";
 
 /** The URL owns this tab's organization; all product pages inherit this boundary. Cloud records
  * product failures in PostHog, so its error cards can say a failure was tracked. */
@@ -20,7 +21,14 @@ function OrganizationLayout() {
   return (
     <OrganizationBoundary slug={organizationSlug}>
       <ErrorTrackingProvider>
-        <DashboardShell navigation={<HostedNavigation />} support={<CloudSupport />}>
+        <DashboardShell
+          navigation={
+            <HostedNavigation>
+              <CloudNavigation organizationSlug={organizationSlug} />
+            </HostedNavigation>
+          }
+          support={<CloudSupport />}
+        >
           <OrganizationContent pending={<CloudPagePending />}>
             <Outlet />
             <NameAccountDialog />
@@ -34,7 +42,11 @@ function OrganizationLayout() {
 function OrganizationPending() {
   const { pathname } = useLocation();
   return (
-    <DashboardEntryPending pathname={pathname} support={<CloudSupport />}>
+    <DashboardEntryPending
+      pathname={pathname}
+      support={<CloudSupport />}
+      navigation={<CloudNavigation pendingPage={pathname.split("/")[3] ?? "apps"} />}
+    >
       <CloudPagePending />
     </DashboardEntryPending>
   );

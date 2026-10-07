@@ -198,6 +198,7 @@ const make = Effect.gen(function* () {
               Schema.Struct({
                 id: Schema.String,
                 to: Schema.Array(Schema.String),
+                subject: Schema.String,
                 text: Schema.NullOr(Schema.String),
               }),
             ),
@@ -262,14 +263,15 @@ const make = Effect.gen(function* () {
       }).pipe(Effect.asVoid),
     received: (email: string) =>
       messages(email).pipe(Effect.map((rows) => rows.map((row) => row.id))),
+    /** The newest new code and its email subject. */
     mail: (email: string, previouslyReceived: ReadonlyArray<string>) =>
       messages(email).pipe(
         Effect.flatMap((data) => {
-          const code = data
-            .filter((message) => !previouslyReceived.includes(message.id))
-            .at(-1)
-            ?.text?.match(/\b\d{6}\b/)?.[0];
-          return code ? Effect.succeed(Redacted.make(code)) : Effect.fail(new MailPending());
+          const message = data.filter((item) => !previouslyReceived.includes(item.id)).at(-1);
+          const code = message?.text?.match(/\b\d{6}\b/)?.[0];
+          return message !== undefined && code
+            ? Effect.succeed({ code: Redacted.make(code), subject: message.subject })
+            : Effect.fail(new MailPending());
         }),
         Effect.retry({
           while: (error) => error instanceof MailPending,

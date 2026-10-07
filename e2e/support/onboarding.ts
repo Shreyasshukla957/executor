@@ -1,4 +1,5 @@
 import { Context, Deferred, Effect, Layer, Redacted, Schema } from "effect";
+import { expect } from "@effect/vitest";
 import { randomUUID } from "node:crypto";
 import { Browser } from "./browser.ts";
 import { holdOrganizationEntry } from "./organization-entry.ts";
@@ -86,16 +87,32 @@ const make = Effect.gen(function* () {
     .pipe(Effect.flatMap(Schema.decodeUnknownEffect(Organizations)));
   const emailSignIn = (email: string, mode: "signin" | "signup" = "signin") =>
     Effect.gen(function* () {
-      yield* openLogin;
+      const flow = mode === "signup" ? "Sign up" : "Sign in";
       if (mode === "signup") {
-        yield* browser.use("Choose account creation", (page) =>
-          page.getByRole("link", { name: "Sign up", exact: true }).click(),
+        // New visitors start from the site's primary call to action, which opens sign-up.
+        yield* browser.omitNetworkTrace;
+        yield* browser.use("Open the homepage", (page) => page.goto("/home"));
+        yield* browser.use("Choose Get started", (page) =>
+          page.getByRole("link", { name: "Get started", exact: true }).click(),
         );
         yield* browser.use("The sign-up view is ready", (page) =>
           page.getByRole("heading", { name: "Sign up", exact: true }).waitFor(),
         );
         yield* browser.checkpoint("Sign up with email or a social account");
-      }
+        // The address has an @ but no domain the server accepts; the error names the address.
+        yield* browser.use("Enter an email without a domain", (page) =>
+          page.getByLabel("Email", { exact: true }).fill("new-user@example"),
+        );
+        yield* browser.use("Submit the incomplete email", (page) =>
+          page.getByRole("button", { name: "Continue", exact: true }).click(),
+        );
+        expect(
+          yield* browser.use("Read the email error", (page) =>
+            page.getByRole("alert").filter({ hasText: "email" }).innerText(),
+          ),
+        ).toBe("Enter a valid email address, such as name@example.com.");
+        yield* browser.checkpoint("Sign-up rejects an incomplete email");
+      } else yield* openLogin;
       yield* browser.use("Enter the synthetic email", (page) =>
         page.getByLabel("Email", { exact: true }).fill(email),
       );
@@ -103,15 +120,19 @@ const make = Effect.gen(function* () {
       yield* browser.use("Request a real sign-in code", (page) =>
         page.getByRole("button", { name: "Continue", exact: true }).click(),
       );
-      const code = yield* evidence.step(
+      const delivered = yield* evidence.step(
         "Read the delivered code from the mail emulator",
         emulators.mail(email, received),
       );
-      yield* browser.use("Enter the delivered sign-in code", (page) =>
-        page.getByLabel("Sign-in code", { exact: true }).fill(Redacted.value(code)),
+      // A first code creates the account, so its email says sign-up whichever view sent it.
+      if (mode === "signup") expect(delivered.subject).toBe("Your Executor sign-up code");
+      yield* browser.use("Enter the delivered code", (page) =>
+        page
+          .getByLabel(mode === "signup" ? "Sign-up code" : "Sign-in code", { exact: true })
+          .fill(Redacted.value(delivered.code)),
       );
-      yield* browser.use("Verify the sign-in code", (page) =>
-        page.getByRole("button", { name: "Sign in", exact: true }).click(),
+      yield* browser.use("Verify the code", (page) =>
+        page.getByRole("button", { name: flow, exact: true }).click(),
       );
       yield* browser.use("Sign-in advances to enrollment or the destination", (page) =>
         page.waitForFunction(

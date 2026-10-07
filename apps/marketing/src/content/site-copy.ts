@@ -113,7 +113,7 @@ export const pricingTiers = (siteOrigin: string): ReadonlyArray<PricingTier> => 
     price: "$0 / month",
     audience: "For small teams getting started",
     features: ["Up to 3 members", "Unlimited integrations"],
-    cta: `Start free: ${siteOrigin}/login`,
+    cta: `Start free: ${siteOrigin}/login?mode=signup`,
   },
   {
     name: "Team",
@@ -123,7 +123,7 @@ export const pricingTiers = (siteOrigin: string): ReadonlyArray<PricingTier> => 
       "14-day free trial, then $15 / member / month",
       "Verified domains & join by team domain",
     ],
-    cta: `Start free trial: ${siteOrigin}/login`,
+    cta: `Start free trial: ${siteOrigin}/login?mode=signup`,
   },
   {
     name: "Enterprise",

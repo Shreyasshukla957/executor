@@ -2395,16 +2395,6 @@ export const scenarios = {
     title: "Hero experiments render stable HTML and isolate previews",
     targets: cloudOnboarding,
   },
-  betaNotice: {
-    fixtures: "actors",
-    file: "beta-notice.spec.ts",
-    title: "Marketing preview opens once and beta banners reopen it across homepage and dashboard",
-    targets: {
-      cloud: scheduled,
-      "self-host": na("The cloud beta notice is not shown on self-host."),
-      local: na("The cloud beta notice is not shown in the local dashboard."),
-    },
-  },
   deploymentLinks: {
     fixtures: "actors",
     file: "deployment-links.spec.ts",
@@ -4741,7 +4731,8 @@ export const scenarios = {
   },
   onboardingEmail: {
     file: "cloud-onboarding.spec.ts",
-    title: "Cloud onboarding with email registers a passkey and uses it for returning sign-in",
+    title:
+      "Cloud onboarding from Get started signs up by email, registers a passkey and uses it for returning sign-in",
     targets: cloudOnboarding,
   },
   onboardingSkip: {
@@ -5101,6 +5092,16 @@ export const scenarios = {
       local: scheduled,
       "self-host": na("Hosted consent is covered by the organization Claude Code scenario."),
       cloud: na("Hosted consent is covered by the organization Claude Code scenario."),
+    },
+  },
+  connectedAgents: {
+    fixtures: "actors",
+    file: "connected-agents.spec.ts",
+    title: "Members see the agents they connected over OAuth and revoking one ends its MCP access",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("Local has no organization members or hosted OAuth consent."),
     },
   },
   mcpStaleRefresh: {

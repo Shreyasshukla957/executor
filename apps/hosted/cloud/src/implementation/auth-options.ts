@@ -321,7 +321,16 @@ export const cloudAuthOptions = (
         storeOTP: "hashed",
         expiresIn: emailCodeExpiresIn,
         allowedAttempts: 3,
-        sendVerificationOTP: (data) => Effect.runPromise(send(emailCodeMessage(data))),
+        // Better Auth sends sign-in codes to new emails too; their first code creates the account.
+        sendVerificationOTP: async (data, ctx) => {
+          const signUp =
+            data.type === "sign-in" &&
+            ctx !== undefined &&
+            (await ctx.context.internalAdapter.findUserByEmail(data.email)) === null;
+          await Effect.runPromise(
+            send(emailCodeMessage({ ...data, type: signUp ? "sign-up" : data.type })),
+          );
+        },
       }),
       passkey({ rpID: new URL(settings.url).hostname, rpName: "Executor", origin: settings.url }),
     ],

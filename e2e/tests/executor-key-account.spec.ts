@@ -313,7 +313,9 @@ layer(HostedLive, { excludeTestServices: true })("Executor API-key account", (it
           }),
           yield* api.request(actors.owner, "GET", "/api/auth/api-key/list"),
         );
-        expect(nativeKeys.apiKeys.filter((key) => key.name === "Executor app")).toHaveLength(1);
+        expect(
+          nativeKeys.apiKeys.filter((key) => key.name === "Executor app (created automatically)"),
+        ).toHaveLength(1);
         expect(
           (yield* api.request(actors.owner, "PATCH", `${prefix}/accounts/${account}`, {
             label: "My Executor key",

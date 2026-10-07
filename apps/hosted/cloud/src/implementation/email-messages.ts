@@ -9,6 +9,11 @@ const purposes = {
     heading: "Your sign-in code",
     instruction: "Copy and paste this code into Executor to sign in.",
   },
+  /** A sign-in code for an email with no account yet; verifying it creates the account. */
+  "sign-up": {
+    heading: "Your sign-up code",
+    instruction: "Copy and paste this code into Executor to create your account.",
+  },
   "email-verification": {
     heading: "Verify your email address",
     instruction: "Copy and paste this code into Executor to verify your email address.",
@@ -147,7 +152,10 @@ export const emailCodeMessage = ({
   const unsolicited = "If you didn't request this, you can safely ignore this email.";
   return {
     to: email,
-    subject: type === "sign-in" ? "Your Executor sign-in code" : `Executor: ${heading}`,
+    subject:
+      type === "sign-in" || type === "sign-up"
+        ? `Your Executor ${type} code`
+        : `Executor: ${heading}`,
     text: Redacted.make(
       `Executor\n\n${heading}\n\n${instruction}\n\n${otp}\n\n${expiry}\n\n${unsolicited}`,
     ),
