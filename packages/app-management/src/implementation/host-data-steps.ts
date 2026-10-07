@@ -10,11 +10,16 @@ import {
   idleAgentGrantsStepName,
   type AgentGrantHost,
 } from "./idle-agent-grants.ts";
+import { executorAppRedeployStep, type ExecutorAppRedeployHost } from "./executor-app-redeploy.ts";
+import { executorAppRedeployStepName } from "../contracts/executor-app-redeploy.ts";
 import type { SqlClient } from "effect/sql";
 import type { DataStep } from "../contracts/data-steps.ts";
 
 /** The host services every step together reads and writes through. */
-export type DataStepHost = FrameworkPinHost & BuildFrameworkHost & AgentGrantHost;
+export type DataStepHost = FrameworkPinHost &
+  BuildFrameworkHost &
+  AgentGrantHost &
+  ExecutorAppRedeployHost;
 
 /** Append new steps; never rename, reorder or change one that has shipped. */
 export const hostDataSteps = (host: DataStepHost): ReadonlyArray<DataStep<SqlClient.SqlClient>> => [
@@ -26,6 +31,9 @@ export const hostDataSteps = (host: DataStepHost): ReadonlyArray<DataStep<SqlCli
   buildFrameworkOnceStep(host, "3_build_framework_once"),
   // Revoke OAuth grants that can never be used again and have been idle for 30 days.
   idleAgentGrantsStep(host, idleAgentGrantsStepName),
+  // One-off: redeploy Executor apps built on an apps release before beta.10, whose background
+  // cache refreshes aborted with the invocation, with only their apps pin moved to this host's.
+  executorAppRedeployStep(host, executorAppRedeployStepName),
 ];
 
 /**

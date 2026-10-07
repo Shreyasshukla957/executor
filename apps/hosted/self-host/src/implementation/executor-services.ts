@@ -32,6 +32,7 @@ import {
   clientMetadataSetting,
   hostedOAuthClientName,
   withExecutorAnalytics,
+  executorDefaultRedeployed,
 } from "@executor-js/hosted-server";
 import { hostedResourceLifecycle } from "@executor-js/hosted-server/resource-lifecycle";
 import { hostedEventAuthority } from "@executor-js/hosted-server/events";
@@ -111,7 +112,12 @@ export const selfHostExecutorServices = <E, R>(
       // The schema is current and nothing serves or builds yet; the caller holds the data lock.
       const auth = yield* selfHostAuth;
       yield* runStartupDataSteps(
-        { executor, blobs, agentGrants: auth.agentGrants },
+        {
+          executor,
+          blobs,
+          agentGrants: auth.agentGrants,
+          executorAppRedeployed: executorDefaultRedeployed,
+        },
         "private_hosted",
       );
       // Once the idle grant step has applied, revoke grants that became idle since, daily.

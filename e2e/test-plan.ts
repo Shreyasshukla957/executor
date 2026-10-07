@@ -3435,6 +3435,24 @@ export const scenarios = {
       ),
     },
   },
+  executorAppRedeploy: {
+    fixtures: "actors",
+    legacyStorage: true,
+    managementProfiles: ["owner"],
+    serverEnvironment: { EXECUTOR_DATA_STEPS: "report" },
+    file: "executor-app-redeploy.spec.ts",
+    title:
+      "Executor apps built on an apps release before beta.10 are redeployed once with only their pin changed",
+    targets: {
+      "self-host": scheduled,
+      cloud: na(
+        "Cloud runs the same step from its Worker's cron; the local Worker never reaches it because the earlier framework pin step keeps retrying there without Cloudflare Artifacts.",
+      ),
+      local: na(
+        "Local regenerates its own Executor app from the template at every start whose template changed.",
+      ),
+    },
+  },
   buildFrameworkMigration: {
     fixtures: "actors",
     serverEnvironment: { EXECUTOR_DATA_STEPS: "report" },

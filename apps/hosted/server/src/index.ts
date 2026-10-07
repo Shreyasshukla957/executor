@@ -24,6 +24,7 @@ export * from "./contracts/organization.ts";
 export { HostedExecutor } from "./contracts/executor.ts";
 export { OrganizationDefaults } from "./contracts/organization-defaults.ts";
 export { organizationDefaults } from "./implementation/organization-defaults.ts";
+export { executorDefaultRedeployed } from "./implementation/executor-app-upgrades.ts";
 export {
   lookupMembership,
   lookupOrganizationSlug,

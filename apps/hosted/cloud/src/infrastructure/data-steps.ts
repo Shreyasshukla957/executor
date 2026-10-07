@@ -13,6 +13,7 @@ import {
   type AgentGrantExpiry,
 } from "@executor-js/app-management/data-steps";
 import { GroupDatabase } from "@executor-js/hosted-server/groups";
+import { executorDefaultRedeployed } from "@executor-js/hosted-server";
 import { Clock, Config, Effect } from "effect";
 import { SqlClient } from "effect/sql";
 import { cloudBlobs } from "./blobs.ts";
@@ -55,7 +56,12 @@ export const cloudDataSteps = (agentGrants: AgentGrantExpiry) =>
       const { executor } = yield* Effect.flatten(AppManagementHost);
       const sql = yield* Effect.flatten(GroupDatabase);
       const deadline = (yield* Clock.currentTimeMillis) + tickBudgetMs;
-      const steps = hostDataSteps({ executor, blobs, agentGrants });
+      const steps = hostDataSteps({
+        executor,
+        blobs,
+        agentGrants,
+        executorAppRedeployed: executorDefaultRedeployed,
+      });
       const run = (selected: typeof steps, selectedMode: typeof mode) =>
         runDataSteps(selected, {
           journal: "private_hosted",
