@@ -24,7 +24,8 @@
  * a few minutes for an e2e block, and for a pull request above a `skip` layer, before it fails.
  *
  * A scenario that guards a dependency patch also runs whenever the pull request's tree pins that
- * dependency or its patch differently from main, whatever the block says.
+ * dependency or its patch differently from main, whatever the block says. So does a scenario that
+ * guards a file stating a whole contract, such as the host's app protocols, when that file differs.
  */
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -140,6 +141,10 @@ const pinned = (
       .map(([selector, path]) => [selector, blob(path)]),
   ]);
 
+/** A file's Git blob ID, as the contents API reports it. */
+const blobId = (bytes: Uint8Array) =>
+  createHash("sha1").update(`blob ${bytes.byteLength}\0`).update(bytes).digest("hex");
+
 /** Guard spec files for every dependency this tree pins differently from main. */
 const guardedPatches = (mainManifest: string, mainPatches: string) =>
   Effect.gen(function* () {
@@ -158,19 +163,48 @@ const guardedPatches = (mainManifest: string, mainPatches: string) =>
     );
     const headBlobs = new Map<string, string>();
     for (const path of Object.values(head.patchedDependencies ?? {}))
-      if (yield* fs.exists(path)) {
-        const bytes = yield* fs.readFile(path);
-        headBlobs.set(
-          path,
-          createHash("sha1").update(`blob ${bytes.byteLength}\0`).update(bytes).digest("hex"),
-        );
-      }
+      if (yield* fs.exists(path)) headBlobs.set(path, blobId(yield* fs.readFile(path)));
     return Object.entries(patchGuards).flatMap(([dependency, specs]) =>
       pinned(main, dependency, (path) => mainBlobs.get(path)) ===
       pinned(head, dependency, (path) => headBlobs.get(path))
         ? []
         : specs,
     );
+  });
+
+/**
+ * Scenarios that assert a contract one file states in full. app-package.spec.ts reads back every
+ * protocol the host supports when it rejects an unsupported framework, so a new protocol changes
+ * its expected message. These run whenever the file differs from main's, so the top of a stack
+ * runs them when a lower layer changes it.
+ */
+const fileGuards: Readonly<Record<string, ReadonlyArray<string>>> = {
+  "packages/sdk/src/implementation/app-protocols.ts": [
+    "app-package.spec.ts",
+    "app-older-protocols.spec.ts",
+  ],
+};
+
+/**
+ * Guard spec files for every guarded file whose contents differ from main's. `mainListing` reads
+ * one of main's directories as `<blob ID> <path>` lines; a file missing from it counts as changed.
+ */
+const guardedFiles = <E, R>(mainListing: (directory: string) => Effect.Effect<string, E, R>) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const mainBlobs = new Map<string, string>();
+    for (const directory of new Set(Object.keys(fileGuards).map((file) => path.dirname(file))))
+      for (const line of (yield* mainListing(directory)).split("\n")) {
+        const [id, file] = line.trim().split(" ");
+        if (id !== undefined && file !== undefined) mainBlobs.set(file, id);
+      }
+    const guards: Array<string> = [];
+    for (const [file, specs] of Object.entries(fileGuards)) {
+      const head = (yield* fs.exists(file)) ? blobId(yield* fs.readFile(file)) : undefined;
+      if (head !== mainBlobs.get(file)) guards.push(...specs);
+    }
+    return guards;
   });
 
 const example = "```e2e\ngroups.spec.ts\ninvitation-roles.spec.ts\n```";
@@ -561,10 +595,26 @@ NodeRuntime.runMain(
               '.[] | "\\(.sha) \\(.name)"',
             ]),
           );
+    const guardedByFile =
+      read === undefined || defaultBranch === ""
+        ? []
+        : yield* guardedFiles((directory) =>
+            gh([
+              "api",
+              `repos/${repository}/contents/${directory}?ref=${defaultBranch}`,
+              "--jq",
+              '.[] | "\\(.sha) \\(.path)"',
+            ]),
+          );
     const files =
       named === undefined || "all" in named
         ? undefined
-        : new Set([...named, ...guarded, ...changedSpecs.filter((file) => jobFiles.has(file))]);
+        : new Set([
+            ...named,
+            ...guarded,
+            ...guardedByFile,
+            ...changedSpecs.filter((file) => jobFiles.has(file)),
+          ]);
 
     const selections = Object.entries(jobs).map(([job, { target, pattern }]) => {
       const base = new RegExp(pattern);
@@ -606,6 +656,9 @@ NodeRuntime.runMain(
       ...(guarded.length === 0
         ? []
         : ["", `A dependency patch differs from main, so its guards run: ${guarded.join(", ")}`]),
+      ...(guardedByFile.length === 0
+        ? []
+        : ["", `A guarded file differs from main, so its guards run: ${guardedByFile.join(", ")}`]),
       "",
       "| Job | Scenarios |",
       "| --- | --- |",

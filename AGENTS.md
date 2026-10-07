@@ -131,8 +131,10 @@ invitation-roles.spec.ts
 Spec files the PR adds or changes are always included, as are the scenarios that
 guard a dependency patch when the PR's tree pins that dependency or its patch
 differently from main (`patchGuards` in `e2e/ci-selection.ts`): Bun skips a stale
-patch without an error. Write `none` for a change
-no scenario exercises, such as documentation. Write each name as it appears in
+patch without an error. So are the scenarios that assert a contract one file states in
+full when the tree's copy differs from main's (`fileGuards`): a new host protocol in
+`app-protocols.ts` runs `app-package.spec.ts`, which reads back the supported list.
+Write `none` for a change no scenario exercises, such as documentation. Write each name as it appears in
 `e2e/tests/`, optionally prefixed with `e2e/tests/`. The `select` job fails when the
 description has no block, a name is not a spec file there, or a named file is one these
 jobs never run: the release, desktop, billing and PGlite suites have their own

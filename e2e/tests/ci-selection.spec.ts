@@ -24,8 +24,9 @@ const block = (...lines: ReadonlyArray<string>) =>
   ["Description.", "", "```e2e", ...lines, "```", ""].join("\n");
 
 /**
- * A `gh` that answers the select job's three reads from files beside it: the description
- * (`body.<n>`), the open pull requests based on the branch (`above.<n>`) and the changed files.
+ * A `gh` that answers the select job's reads from files beside it: the description (`body.<n>`),
+ * the open pull requests based on the branch (`above.<n>`), the changed files and main's contents
+ * (`main/<path with / as _>`).
  * The nth read of a kind returns its nth answer, and the last answer once they run out, so a case
  * can edit the description while the job waits.
  */
@@ -34,6 +35,7 @@ dir=$(dirname "$0")
 case "$*" in
   "pr list "*) kind=above ;;
   *"/files "*) cat "$dir/files"; exit ;;
+  *"/contents/"*) exec cat "$dir/main/$(echo "$*" | sed 's|.*/contents/||; s|[?].*||' | tr / _)" ;;
   *) kind=body ;;
 esac
 read=$(cat "$dir/$kind.reads" 2>/dev/null || echo 0)
@@ -46,11 +48,13 @@ cat "$dir/$kind.$read"
  * One select run: a pull request run when `body` is given, otherwise a push to main. A list of
  * bodies, or of `stackedAbove` answers, is what successive reads return. The job waits `wait`
  * seconds, none by default, for an incomplete description. It runs the checkout's selector unless
- * `root` names a fixture tree.
+ * `root` names a fixture tree. `main` answers the reads of main's contents by repository path;
+ * without it the job has no default branch and compares nothing with main.
  */
 const select = (input: {
   readonly body?: string | ReadonlyArray<string>;
   readonly changed?: ReadonlyArray<string>;
+  readonly main?: Readonly<Record<string, string>>;
   readonly stackedAbove?: string | ReadonlyArray<string>;
   readonly wait?: number;
   readonly root?: string;
@@ -77,6 +81,9 @@ const select = (input: {
     yield* answers("body", input.body ?? "");
     yield* answers("above", input.stackedAbove ?? "");
     yield* fs.writeFileString(path.join(bin, "files"), (input.changed ?? []).join("\n"));
+    yield* fs.makeDirectory(path.join(bin, "main"));
+    for (const [file, text] of Object.entries(input.main ?? {}))
+      yield* fs.writeFileString(path.join(bin, "main", file.replaceAll("/", "_")), text);
     const child = yield* processes.spawn(
       ChildProcess.make("node", ["e2e/ci-selection.ts"], {
         cwd: input.root,
@@ -84,6 +91,7 @@ const select = (input: {
           PATH: `${bin}:${process.env.PATH ?? ""}`,
           E2E_PULL_REQUEST: input.body === undefined ? "" : "1",
           E2E_HEAD_REF: "layer",
+          E2E_DEFAULT_BRANCH: input.main === undefined ? "" : "main",
           E2E_DESCRIPTION_WAIT_SECONDS: String(input.wait ?? 0),
           E2E_DESCRIPTION_POLL_SECONDS: "0.05",
           GITHUB_REPOSITORY: "owner/repository",
@@ -243,6 +251,55 @@ layer(NodeServices.layer)("CI E2E selection", (it) => {
         "- billing.spec.ts runs only by hand, with e2e/billing.config.ts",
       );
     }),
+  );
+
+  it.effect(
+    "a guarded file that differs from main runs its scenarios, whatever the block says",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const processes = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const protocols = "packages/sdk/src/implementation/app-protocols.ts";
+        const names = yield* fs.readDirectory("patches");
+        // Git's own blob IDs for the working tree, as the contents API lists main's.
+        const [current = "", ...patchBlobs] = (yield* processes.string(
+          ChildProcess.make("git", [
+            "hash-object",
+            protocols,
+            ...names.map((name) => `patches/${name}`),
+          ]),
+        ))
+          .trim()
+          .split("\n");
+        const patches = names.map((name, index) => `${patchBlobs[index]} ${name}`);
+        const manifest = yield* fs.readFileString("package.json");
+        // Main as this checkout, except for the blob ID it lists for the host's protocols.
+        const main = (protocolsBlob: string) => ({
+          "package.json": manifest,
+          patches: patches.join("\n"),
+          "packages/sdk/src/implementation": `${protocolsBlob} ${protocols}\n`,
+        });
+        const [same, changed] = yield* Effect.all(
+          [
+            select({ body: block("none"), main: main(current) }),
+            select({ body: block("none"), main: main("0".repeat(40)) }),
+          ],
+          { concurrency: "unbounded" },
+        );
+        expect(same.exitCode, same.log).toBe(0);
+        expect(same.summary).toContain("No E2E scenarios");
+        expect(same.summary).not.toContain("guards run");
+        expect(changed.exitCode, changed.log).toBe(0);
+        expect(changed.summary).toContain(
+          "Spec files: app-older-protocols.spec.ts, app-package.spec.ts\n",
+        );
+        expect(changed.summary).toContain(
+          "A guarded file differs from main, so its guards run: app-package.spec.ts, app-older-protocols.spec.ts",
+        );
+        expect(changed.outputs["self-host"]).toContain(
+          "App builds retain their selected npm framework across rebuilds",
+        );
+      }),
   );
 
   it.effect("a changed spec file that no plan or config includes fails", () =>
