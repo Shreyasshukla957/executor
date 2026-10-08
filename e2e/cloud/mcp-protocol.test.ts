@@ -20,6 +20,10 @@ import { Mcp, Target } from "../src/services";
 import type { Identity } from "../src/target";
 
 const JSON_AND_SSE = "application/json, text/event-stream";
+// Plain `/mcp` challenges name this v1-only alias of the bare discovery
+// document: once Executor v2 serves `executor.sh/mcp`'s root discovery, the
+// path-derived `/.well-known/oauth-protected-resource/mcp` is v2's.
+const V1_RESOURCE_METADATA_PATH = "/.well-known/oauth-protected-resource/_v1/mcp";
 const PROTOCOL_VERSION = "2025-03-26";
 const INITIALIZE_REQUEST = {
   jsonrpc: "2.0" as const,
@@ -202,6 +206,34 @@ scenario(
 );
 
 scenario(
+  "MCP protocol · the v1 alias serves the same discovery document as the bare path",
+  {},
+  Effect.gen(function* () {
+    const target = yield* Target;
+    const [bare, alias] = yield* Effect.promise(() =>
+      Promise.all([
+        fetch(new URL("/.well-known/oauth-protected-resource/mcp", target.baseUrl)),
+        fetch(new URL(V1_RESOURCE_METADATA_PATH, target.baseUrl), {
+          headers: { origin: "https://claude.ai" },
+        }),
+      ]),
+    );
+    expect(alias.status, "the alias is public").toBe(200);
+    expect(
+      alias.headers.get("access-control-allow-origin"),
+      "the alias is readable cross-origin",
+    ).toBe("*");
+    const aliasBody = (yield* Effect.promise(() => alias.json())) as Record<string, unknown>;
+    expect(aliasBody["resource"], "the alias names the plain MCP resource").toBe(
+      new URL("/mcp", target.baseUrl).toString(),
+    );
+    expect(aliasBody, "the alias is the bare document").toEqual(
+      yield* Effect.promise(() => bare.json()),
+    );
+  }),
+);
+
+scenario(
   "MCP protocol · a request without a bearer is challenged with the resource metadata",
   {},
   Effect.gen(function* () {
@@ -212,8 +244,8 @@ scenario(
     expect(response.status, "anonymous requests are rejected").toBe(401);
     const wwwAuth = response.headers.get("www-authenticate") ?? "";
     expect(wwwAuth, "the challenge is a Bearer challenge").toContain('Bearer resource_metadata="');
-    expect(wwwAuth, "the challenge points at the discovery document").toContain(
-      new URL("/.well-known/oauth-protected-resource/mcp", target.baseUrl).toString(),
+    expect(wwwAuth, "the challenge points at v1's alias of the discovery document").toContain(
+      `resource_metadata="${new URL(V1_RESOURCE_METADATA_PATH, target.baseUrl).toString()}"`,
     );
     expect(wwwAuth, "a missing token carries no error code (per RFC 6750)").not.toContain("error=");
     expect(
@@ -241,8 +273,8 @@ scenario(
     expect(wwwAuth, "the challenge names the invalid_token error").toContain(
       'error="invalid_token"',
     );
-    expect(wwwAuth, "the challenge still points at the discovery document").toContain(
-      new URL("/.well-known/oauth-protected-resource/mcp", target.baseUrl).toString(),
+    expect(wwwAuth, "the challenge still points at v1's alias of the discovery document").toContain(
+      `resource_metadata="${new URL(V1_RESOURCE_METADATA_PATH, target.baseUrl).toString()}"`,
     );
     expect(yield* Effect.promise(() => response.json()), "the body is a JSON-RPC error").toEqual({
       jsonrpc: "2.0",

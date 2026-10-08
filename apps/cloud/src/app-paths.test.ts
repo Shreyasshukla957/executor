@@ -20,6 +20,7 @@ describe("isAppOwnedPath", () => {
     "/mcp",
     "/mcp/toolkits/deploy-kit",
     "/.well-known/oauth-protected-resource/mcp",
+    "/.well-known/oauth-protected-resource/_v1/mcp",
     "/.well-known/oauth-protected-resource/mcp/toolkits/deploy-kit",
     "/.well-known/oauth-authorization-server",
     // Org-pinned MCP: the org's URL slug (what the install card prints) and
