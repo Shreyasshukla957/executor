@@ -6,6 +6,7 @@ import { Atom } from "effect/reactivity";
 import { OnboardingReady } from "../../../src/contracts/onboarding.ts";
 import type { CloudDocumentContext } from "../contracts/document.ts";
 import { entryTeamAtom } from "../contracts/onboarding.ts";
+import { documentPasskeyEnrollmentAtom } from "../contracts/passkey-enrollment.ts";
 
 /** Server only: the context the Worker passed with this document request. */
 export const serverDocument = (): CloudDocumentContext => {
@@ -19,9 +20,16 @@ export const serverDocument = (): CloudDocumentContext => {
 export const cloudServerValues = (document: CloudDocumentContext) => {
   const entry = document.entry;
   const shared = hostedServerValues(document);
-  if (entry === null || entry.session === null || entry.onboarding === null) return shared;
+  if (entry === null || entry.session === null) return shared;
+  // The Worker read the browser's enrollment cookie; the page cannot read it on the server.
+  const enrollment = Atom.initialValue(
+    documentPasskeyEnrollmentAtom(entry.session.user.id),
+    Option.some(entry.passkeyEnrollment),
+  );
+  if (entry.onboarding === null) return [...shared, enrollment];
   return [
     ...shared,
+    enrollment,
     Atom.initialValue(
       entryOrganizationsAtom,
       Option.some(

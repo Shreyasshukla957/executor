@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { Actors } from "../support/actors.ts";
 import { Api, body } from "../support/api.ts";
 import { Browser } from "../support/browser.ts";
+import { Evidence } from "../support/evidence.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { App } from "../support/contracts.ts";
 import { Workspace } from "../support/app-authoring.ts";
@@ -59,7 +60,8 @@ layer(HostedLive, { excludeTestServices: true })("Skill editor", (it) => {
       Effect.gen(function* () {
         const api = yield* Api,
           actors = yield* Actors,
-          browser = yield* Browser;
+          browser = yield* Browser,
+          evidence = yield* Evidence;
         const prefix = `/api/organizations/${actors.organization.id}/apps`;
         const deployed = yield* api.request(actors.owner, "POST", `${prefix}/deploy`, {
           name: `Skill editor ${randomUUID().slice(0, 8)}`,
@@ -156,10 +158,78 @@ layer(HostedLive, { excludeTestServices: true })("Skill editor", (it) => {
         yield* Effect.addFinalizer(() => Effect.ignore(release));
 
         yield* browser.login(actors.owner);
-        yield* page("Open the skill", (page) => page.goto(skillUrl));
+        // The server sends the skill as the reader, and the editor replaces it once the page has
+        // hydrated. Hold the page's scripts to see the server's page, then let it hydrate: the
+        // skill's text, from its first heading to its last block, must stay where it was. One
+        // step, since each step waits for hydration.
+        const positions = (page: Page) =>
+          Promise.all(
+            [
+              page.getByRole("heading", { name: "Search messages", exact: true }),
+              page.getByRole("cell", { name: "Full-text search", exact: true }),
+            ].map((element) => element.boundingBox().then((box) => [box?.x, box?.y])),
+          );
+        const transition = yield* browser.use("Open the skill, then let it hydrate", (page) => {
+          let scriptHeld = () => {};
+          const held = new Promise<void>((resolve) => {
+            scriptHeld = resolve;
+          });
+          let releaseScripts = () => {};
+          const scripts = new Promise<void>((resolve) => {
+            releaseScripts = resolve;
+          });
+          const assets = /\/assets\/[^/]+\.js$/;
+          return (
+            page
+              .route(assets, (route) => {
+                scriptHeld();
+                return scripts.then(() => route.fallback());
+              })
+              .then(() => page.goto(skillUrl, { waitUntil: "commit" }))
+              .then(() =>
+                Promise.all([
+                  held,
+                  page.getByRole("cell", { name: "Full-text search", exact: true }).waitFor(),
+                ]),
+              )
+              // Measure with the final fonts; a late font load shifts the text by a pixel.
+              .then(() => page.evaluate(() => document.fonts.ready.then(() => undefined)))
+              .then(() =>
+                Promise.all([
+                  positions(page),
+                  instructions(page).count(),
+                  page.evaluate(() => document.documentElement.hasAttribute("data-hydrated")),
+                  page.screenshot(),
+                ]),
+              )
+              .then(([server, editors, hydrated, screenshot]) => {
+                releaseScripts();
+                // The page marks itself once hydrated; the editor's text box appears after that.
+                return page
+                  .waitForFunction(() => document.documentElement.hasAttribute("data-hydrated"))
+                  .then(() => instructions(page).waitFor())
+                  .then(() => positions(page))
+                  .then((editor) => ({ server, editors, hydrated, screenshot, editor }));
+              })
+              .finally(() => {
+                releaseScripts();
+                return page.unroute(assets);
+              })
+          );
+        });
+        yield* evidence.attach(
+          "server-rendered-skill-reader.png",
+          "image/png",
+          transition.screenshot,
+        );
         // Editors never enter a separate mode: the page itself becomes editable.
-        yield* page("Wait for the editor", (page) => instructions(page).waitFor());
         yield* browser.checkpoint("Visual skill editor");
+        expect(transition.hydrated, "the server's page was measured before hydration").toBe(false);
+        expect(transition.editors).toBe(0);
+        expect(transition.server.flat()).not.toContain(undefined);
+        expect(transition.editor, "the skill's text moved while the page hydrated").toEqual(
+          transition.server,
+        );
         yield* page("Place the cursor after the first paragraph", (page) =>
           caretAtEnd(page, "then summarize them."),
         );
