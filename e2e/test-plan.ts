@@ -647,6 +647,19 @@ export const scenarios = plan({
       "self-host": na("Desktop process supervision"),
     },
   },
+  desktopClipboard: {
+    file: "desktop-recovery.spec.ts",
+    title: "desktop copy buttons write to the system clipboard",
+    targets: {
+      local: {
+        status: "not-run",
+        reason:
+          "Runs against the packaged desktop in the release workflow with desktop-recovery.config.ts.",
+      },
+      cloud: na("Desktop clipboard permission"),
+      "self-host": na("Desktop clipboard permission"),
+    },
+  },
   desktopReset: {
     file: "desktop-recovery.spec.ts",
     title:

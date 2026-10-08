@@ -155,10 +155,6 @@ const desktop = Effect.gen(function* () {
           catch: () => new DesktopFailed({ stage: "window" }),
         });
         const browserSession = session.fromPartition("executor-desktop");
-        browserSession.setPermissionRequestHandler((_contents, _permission, callback) =>
-          callback(false),
-        );
-        browserSession.setPermissionCheckHandler(() => false);
         const windowOptions = {
           width: 1180,
           height: 800,
@@ -181,6 +177,14 @@ const desktop = Effect.gen(function* () {
         let window: BrowserWindow | undefined;
         let pendingOAuthState: string | undefined;
         const origin = () => (view.kind === "ready" ? view.origin : undefined);
+        // The dashboard's copy buttons need clipboard writes; every other permission stays denied.
+        browserSession.setPermissionRequestHandler((_contents, permission, callback, details) =>
+          callback(
+            permission === "clipboard-sanitized-write" &&
+              new URL(details.requestingUrl).origin === origin(),
+          ),
+        );
+        browserSession.setPermissionCheckHandler(() => false);
         const viewUrl = () => {
           switch (view.kind) {
             case "starting":
