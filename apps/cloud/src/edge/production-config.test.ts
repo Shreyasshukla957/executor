@@ -5,6 +5,7 @@ import { describe, expect, it } from "@effect/vitest";
 import { Schema } from "effect";
 import { unstable_readConfig } from "wrangler";
 
+import { frontResponse } from "./front";
 import { parseV2Edge, v2EdgeResponse, type V2EdgeEnv, type V2Service } from "./marketing";
 
 // The deployed edge reads its v2 settings from wrangler.jsonc. These tests read
@@ -16,6 +17,23 @@ const WranglerConfig = Schema.Struct({
 });
 const config = Schema.decodeUnknownSync(WranglerConfig)(
   unstable_readConfig({ config: fileURLToPath(new URL("../../wrangler.jsonc", import.meta.url)) }),
+);
+
+// The front Worker (wrangler.edge.jsonc) runs the same edge on executor.sh
+// before `executor-cloud`, with its own copy of the settings.
+const EdgeWranglerConfig = Schema.Struct({
+  main: Schema.String,
+  vars: Schema.Record(Schema.String, Schema.Unknown),
+  services: Schema.Array(Schema.Struct({ binding: Schema.String, service: Schema.String })),
+  routes: Schema.Array(
+    Schema.Struct({ pattern: Schema.String, zone_name: Schema.optional(Schema.String) }),
+  ),
+  placement: Schema.optional(Schema.Unknown),
+});
+const edgeConfig = Schema.decodeUnknownSync(EdgeWranglerConfig)(
+  unstable_readConfig({
+    config: fileURLToPath(new URL("../../wrangler.edge.jsonc", import.meta.url)),
+  }),
 );
 
 const stringVar = (name: string): string | undefined => {
@@ -32,6 +50,20 @@ const shipped: V2EdgeEnv = {
   V2_OAUTH_STATE_PREFIX: stringVar("V2_OAUTH_STATE_PREFIX"),
   V2_ANALYTICS_PROXY_PATH: stringVar("V2_ANALYTICS_PROXY_PATH"),
   V2_ERROR_TUNNEL_PATH: stringVar("V2_ERROR_TUNNEL_PATH"),
+};
+
+const edgeStringVar = (name: string): string | undefined => {
+  const value = edgeConfig.vars[name];
+  return typeof value === "string" ? value : undefined;
+};
+
+/** The front Worker's shipped settings, with the same stand-in. */
+const frontShipped: V2EdgeEnv = {
+  V2: standIn,
+  V2_SIGN_UP_URL: edgeStringVar("V2_SIGN_UP_URL"),
+  V2_OAUTH_STATE_PREFIX: edgeStringVar("V2_OAUTH_STATE_PREFIX"),
+  V2_ANALYTICS_PROXY_PATH: edgeStringVar("V2_ANALYTICS_PROXY_PATH"),
+  V2_ERROR_TUNNEL_PATH: edgeStringVar("V2_ERROR_TUNNEL_PATH"),
 };
 
 describe("production v2 edge settings", () => {
@@ -63,6 +95,40 @@ describe("production v2 edge settings", () => {
 
   it("keeps the MARKETING binding for v1's terms", () => {
     expect(config.services.filter((service) => service.binding === "MARKETING")).toHaveLength(1);
+  });
+});
+
+describe("the executor.sh front Worker's settings", () => {
+  it("runs the front entry on a zone route for every executor.sh path", () => {
+    expect(edgeConfig.main).toMatch(/src\/edge\/front\.ts$/);
+    expect(edgeConfig.routes).toEqual([{ pattern: "executor.sh/*", zone_name: "executor.sh" }]);
+  });
+
+  // Placement would send every request it answers to the placed region,
+  // which is the trip this Worker exists to avoid.
+  it("is not placed", () => {
+    expect(edgeConfig.placement).toBeUndefined();
+  });
+
+  it("ships the same v2 settings as executor-cloud", () => {
+    const v2Vars = (vars: Readonly<Record<string, unknown>>) =>
+      Object.fromEntries(Object.entries(vars).filter(([name]) => name.startsWith("V2_")));
+    expect(Object.keys(v2Vars(edgeConfig.vars)).toSorted()).toEqual([
+      "V2_ANALYTICS_PROXY_PATH",
+      "V2_ERROR_TUNNEL_PATH",
+      "V2_OAUTH_STATE_PREFIX",
+      "V2_SIGN_UP_URL",
+    ]);
+    expect(v2Vars(edgeConfig.vars)).toEqual(v2Vars(config.vars));
+  });
+
+  it("binds the same v2 and marketing Workers as executor-cloud", () => {
+    const bound = (services: typeof config.services) =>
+      services
+        .filter((service) => service.binding === "V2" || service.binding === "MARKETING")
+        .toSorted((a, b) => a.binding.localeCompare(b.binding));
+    expect(bound(edgeConfig.services)).toEqual(bound(config.services));
+    expect(bound(edgeConfig.services)).toHaveLength(2);
   });
 });
 
@@ -130,6 +196,38 @@ describe("v2's edge contract", () => {
       const { calls, response } = await runCase(method, target);
       expect(calls).toHaveLength(0);
       expect(response).toBeNull();
+    });
+  }
+
+  // The front Worker answers the same requests the same way: everything the
+  // contract forwards reaches v2 once, and nothing else reaches it.
+  const runFrontCase = async (method: string, target: string) => {
+    const calls: Request[] = [];
+    const v2: V2Service = {
+      fetch: (request) => {
+        calls.push(request);
+        return Promise.resolve(new Response("v2"));
+      },
+    };
+    const request = new Request(`${contract.origin}${target}`, { method });
+    const response = await frontResponse(request, { ...frontShipped, V2: v2 });
+    return { request, calls, response };
+  };
+
+  for (const { method, target } of forwarded) {
+    it(`front Worker forwards ${method} ${target} to v2`, async () => {
+      const { request, calls, response } = await runFrontCase(method, target);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.url).toBe(request.url);
+      expect(calls[0]?.method).toBe(method);
+      expect(await response?.text()).toBe("v2");
+    });
+  }
+
+  for (const { method, target } of contract.cases.filter((c) => !c.forwards)) {
+    it(`front Worker does not forward ${method} ${target} to v2`, async () => {
+      const { calls } = await runFrontCase(method, target);
+      expect(calls).toHaveLength(0);
     });
   }
 
