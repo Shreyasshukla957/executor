@@ -110,15 +110,13 @@ describe("marketingProxyRequest", () => {
   });
 });
 
-// v2 on executor.sh: sign-up redirects to v2, and a fixed list of exact paths
-// is forwarded to v2's Worker. Everything else stays with v1.
+// v2 on executor.sh: sign-up redirects to v2, and a fixed list of paths is
+// forwarded to v2's Worker. Everything else stays with v1.
 describe("isV2Path", () => {
   const forwarded = [
     "/.well-known/oauth-authorization-server/api/auth",
-    "/api/auth/.well-known/openid-configuration",
     "/api/auth/callback/google",
     "/api/auth/callback/github",
-    "/oauth/client-metadata.json",
     "/git/acme/tools/info/refs",
     "/git/acme/tools/git-upload-pack",
     "/git/acme/tools/git-receive-pack",
@@ -142,9 +140,11 @@ describe("isV2Path", () => {
     "/.well-known/oauth-authorization-server",
     "/.well-known/oauth-authorization-server/api/auth/extra",
     "/.well-known/oauth-protected-resource/mcp",
-    "/api/auth/.well-known/openid-configuration/extra",
     "/oauth/client-id-metadata.json",
-    "/oauth/client-metadata.json/extra",
+    // v2 does not serve OpenID configuration on executor.sh, and its client
+    // metadata document's move to executor.sh is pending.
+    "/api/auth/.well-known/openid-configuration",
+    "/oauth/client-metadata.json",
     // Git remotes need a path under /git/.
     "/git",
     "/gitlab/acme/tools/info/refs",

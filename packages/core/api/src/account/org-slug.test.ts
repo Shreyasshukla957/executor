@@ -94,6 +94,8 @@ describe("isValidOrgSlug", () => {
     // otherwise read as an org's console URL (`/<org>/...`).
     for (const claimed of [
       "git",
+      "apps",
+      "experiments",
       "oauth",
       "api",
       "app",
@@ -107,7 +109,15 @@ describe("isValidOrgSlug", () => {
       expect(isValidOrgSlug(claimed), claimed).toBe(false);
     }
     // Look-alikes stay claimable.
-    for (const lookalike of ["gitlab", "git-team", "github", "apps", "oauth-co", "blogs"]) {
+    for (const lookalike of [
+      "gitlab",
+      "git-team",
+      "github",
+      "app-team",
+      "experiment",
+      "oauth-co",
+      "blogs",
+    ]) {
       expect(isValidOrgSlug(lookalike), lookalike).toBe(true);
     }
   });
