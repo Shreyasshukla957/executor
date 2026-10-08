@@ -17,6 +17,7 @@ const read = (url: string) =>
           status: response.status,
           placement: response.headers.get("cf-placement"),
           cacheControl: response.headers.get("cache-control"),
+          cookies: response.headers.getSetCookie(),
           text,
         })),
       ),
@@ -35,7 +36,11 @@ layer(TestLive, { excludeTestServices: true })("Marketing isolation", (it) => {
           home.placement === null || home.placement.startsWith("local-"),
           `Homepage placement: ${home.placement}`,
         ).toBe(true);
-        expect(home.cacheControl).toContain("no-store");
+        // The homepage is a plain static page: no cookies, cached like the site's other pages.
+        expect(home.cookies).toEqual([]);
+        const pricing = yield* read(`${edge}/pricing`);
+        expect(pricing.status).toBe(200);
+        expect(home.cacheControl).toBe(pricing.cacheControl);
         expect(home.text).toContain(`<link rel="canonical" href="${edge}/"`);
         const stylesheet = home.text.match(/href="(\/_astro\/[^"]+\.css)"/)?.[1];
         expect(stylesheet).toBeDefined();
@@ -57,7 +62,7 @@ layer(TestLive, { excludeTestServices: true })("Marketing isolation", (it) => {
         const browser = yield* Browser;
         yield* browser.use("Open the isolated marketing homepage", (page) => page.goto(edge));
         yield* browser.use("Homepage renders its headline", (page) =>
-          page.locator("[data-hero-variant] h1").waitFor({ state: "visible" }),
+          page.getByRole("heading", { level: 1 }).waitFor({ state: "visible" }),
         );
         yield* browser.checkpoint("Marketing served at the edge");
       }),

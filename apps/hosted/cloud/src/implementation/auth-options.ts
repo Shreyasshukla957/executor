@@ -1,9 +1,4 @@
 /** Cloud sign-in policy; self-hosted deployments do not need these OAuth credentials. */
-import {
-  heroCookieName,
-  heroPreviewCookie,
-  heroVisitorCookie,
-} from "@executor-js/marketing/experiments";
 import type { BetterAuthOptions } from "better-auth";
 import { APIError } from "better-auth/api";
 import { authOptions } from "@executor-js/hosted-server";
@@ -277,22 +272,8 @@ export const cloudAuthOptions = (
       },
       session: {
         create: {
-          // Consume anonymous attribution on every successful sign-in, including
-          // returning users. It must never be linked to a second account later.
-          after: async (session, context) => {
+          after: async (session) => {
             if (onLogin !== undefined) await onLogin(session.userId);
-            if (!context) return;
-            for (const name of [heroVisitorCookie, heroCookieName, heroPreviewCookie])
-              context.setCookie(name, "", {
-                path: "/",
-                maxAge: 0,
-                sameSite: "lax",
-                secure: new URL(settings.url).protocol === "https:",
-                ...Option.match(settings.hosts.sharedCookieDomain, {
-                  onNone: () => ({}),
-                  onSome: (domain) => ({ domain }),
-                }),
-              });
           },
           before: async (session, context) => {
             if (!context) throw new APIError("UNAUTHORIZED");

@@ -51,6 +51,7 @@ export const rawRequest = (url: string, init: RequestInit = {}) => {
           cacheControl: response.headers.get("cache-control"),
           contentType: response.headers.get("content-type"),
           challenge: response.headers.get("www-authenticate"),
+          setCookies: response.headers.getSetCookie(),
           text,
         })),
       ),

@@ -6,7 +6,6 @@ import { APIError } from "better-auth/api";
 import { OrganizationId } from "@executor-js/hosted-server";
 import { BillingMeter } from "../contracts/billing-meter.ts";
 import { billingLive } from "../implementation/billing.ts";
-import { clearHeroIdentityOnSignOut } from "../implementation/hero-experiment.ts";
 import { recordCloudSignup, recordCloudLogin } from "../implementation/product-analytics.ts";
 import { cloudAuthOptions, cloudAuthSettings } from "../implementation/auth-options.ts";
 import { Onboarding } from "../contracts/onboarding.ts";
@@ -283,12 +282,7 @@ export const cloudAuth = (send: SendAuthEmail, onboarding: typeof Onboarding.Ser
     });
     const handler = observation
       .observe(requestHandler)
-      .pipe(
-        Effect.flatMap(
-          clearHeroIdentityOnSignOut(Option.getOrUndefined(settings.hosts.sharedCookieDomain)),
-        ),
-        Effect.map(HttpServerResponse.setHeader("cache-control", "no-store")),
-      );
+      .pipe(Effect.map(HttpServerResponse.setHeader("cache-control", "no-store")));
     return {
       browserSession: (headers: Headers) =>
         nativeCall((instance) =>

@@ -2697,11 +2697,6 @@ export const scenarios = plan({
     title: "Linking Google adds its photo to the account menu and members list",
     targets: cloudOnboarding,
   },
-  heroExperiments: {
-    file: "hero-experiments.spec.ts",
-    title: "Hero experiments render stable HTML and isolate previews",
-    targets: cloudOnboarding,
-  },
   deploymentLinks: {
     fixtures: "actors",
     file: "deployment-links.spec.ts",

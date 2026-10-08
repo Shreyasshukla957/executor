@@ -1,6 +1,4 @@
 /** Request-owned analytics and explicitly submitted feedback sent to PostHog. */
-import { heroPreviewCookie, readHeroVisitor } from "@executor-js/marketing/experiments";
-import { evaluateHeroFlag } from "./hero-experiment.ts";
 import { FeedbackUnavailable } from "@executor-js/telemetry/product-analytics";
 import {
   ProductAnalytics,
@@ -33,8 +31,7 @@ type EventName =
   | "feedback_submitted"
   | "cloud_signup_completed"
   | "cloud_login_completed"
-  | "analytics_events_dropped"
-  | "$identify";
+  | "analytics_events_dropped";
 type Properties = Readonly<Record<string, string | number | boolean>>;
 interface Event {
   readonly event: EventName;
@@ -50,26 +47,16 @@ const Analytics = Context.Reference<{
 
 /** Called only after Better Auth creates a new verified user, never on returning sign-in. */
 export const recordCloudSignup = (userId: string) =>
-  Effect.gen(function* () {
-    const request = yield* HttpServerRequest.HttpServerRequest;
-    const cookies = request.headers.cookie ?? "";
-    const preview = cookies.split(";").some((part) => part.trim() === `${heroPreviewCookie}=1`);
-    const visitor = preview ? undefined : readHeroVisitor(cookies);
-    const analytics = yield* Analytics;
-    if (visitor !== undefined)
+  Effect.flatMap(Analytics, (analytics) =>
+    Effect.sync(() =>
       analytics.add({
-        event: "$identify",
+        event: "cloud_signup_completed",
         distinct_id: userId,
         timestamp: new Date().toISOString(),
-        properties: { $anon_distinct_id: visitor },
-      });
-    analytics.add({
-      event: "cloud_signup_completed",
-      distinct_id: userId,
-      timestamp: new Date().toISOString(),
-      properties: {},
-    });
-  });
+        properties: {},
+      }),
+    ),
+  );
 
 /** Count successful session creation without recording login credentials or callback URLs. */
 export const recordCloudLogin = (userId: string) =>
@@ -282,18 +269,6 @@ const postHogProxy = (settings: Effect.Effect<Settings | undefined>) =>
   });
 
 /** Capture the Alchemy runtime accessor during initialization, then read bindings per request. */
-export const cloudHeroFlag = Effect.gen(function* () {
-  const context = yield* CurrentRuntimeContext;
-  const settings = readSettings(
-    context ? context.get<unknown>("EXECUTOR_POSTHOG") : Effect.succeed(undefined),
-  );
-  return (visitor: string) =>
-    Effect.flatMap(settings, (config) =>
-      config === undefined ? Effect.succeed(undefined) : evaluateHeroFlag(config, visitor),
-    );
-});
-
-/** Capture the Alchemy runtime accessor during initialization, then read bindings per request. */
 export const cloudAnalytics = Effect.gen(function* () {
   const context = yield* CurrentRuntimeContext;
   const settings = readSettings(
@@ -301,10 +276,6 @@ export const cloudAnalytics = Effect.gen(function* () {
   );
   return {
     proxy: postHogProxy(settings),
-    hero: (visitor: string) =>
-      Effect.flatMap(settings, (config) =>
-        config === undefined ? Effect.succeed(undefined) : evaluateHeroFlag(config, visitor),
-      ),
     wrap: <A, E, R>(handler: Effect.Effect<A, E, R>) => withProductAnalytics(handler, settings),
   };
 });

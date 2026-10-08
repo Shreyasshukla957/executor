@@ -23,7 +23,8 @@ layer(TestLive, { excludeTestServices: true })("Cloud site on the edge", (it) =>
         // The edge serves the homepage itself, never a redirect, with its canonical URL there.
         const home = yield* rawRequest(`${edge}/`, html);
         expect(home.status).toBe(200);
-        expect(home.cacheControl).toContain("no-store");
+        // A static page: it sets no cookies.
+        expect(home.setCookies).toEqual([]);
         expect(home.text).toContain(`<link rel="canonical" href="${edge}/"`);
         // Sign-in and sign-up open the browser origin.
         expect(home.text).toContain(`href="${app}/login?mode=signup"`);
@@ -36,6 +37,8 @@ layer(TestLive, { excludeTestServices: true })("Cloud site on the edge", (it) =>
         }
         const pricing = yield* rawRequest(`${edge}/pricing`, html);
         expect(pricing.text).toContain(`<link rel="canonical" href="${edge}/pricing`);
+        // The homepage is cached like every other site page.
+        expect(home.cacheControl).toBe(pricing.cacheControl);
         expect(pricing.text).toContain(`href="${app}/login?mode=signup"`);
         const markdown = yield* rawRequest(`${edge}/docs/mcp.md`);
         expect(markdown.status).toBe(200);
