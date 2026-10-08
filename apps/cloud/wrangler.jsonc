@@ -95,6 +95,13 @@
       "binding": "MARKETING",
       "service": "executor-marketing",
     },
+    // v2's API Worker (the executor-next `v2` stage, same account). The edge
+    // (src/edge/marketing.ts) forwards a fixed list of executor.sh paths to
+    // it with the URL unchanged, so v2 sees host `executor.sh`.
+    {
+      "binding": "V2",
+      "service": "executor-next-hosted-api-v2-qs32brgjwvt7ytx4",
+    },
   ],
   "hyperdrive": [
     {
@@ -133,6 +140,8 @@
   },
   "vars": {
     "VITE_PUBLIC_SITE_URL": "https://executor.sh",
+    // Where /sign-up and /signup redirect: v2's sign-up page.
+    "V2_SIGN_UP_URL": "https://v2.executor.sh/login?mode=signup",
     // Keeps the /__sentry-otel-verify probe live in production: Sentry
     // delivery failed silently for weeks (zero events after ~Jul 30 with an
     // active DSN), and without this there is no way to test the pipeline

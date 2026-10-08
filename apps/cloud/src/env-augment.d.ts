@@ -137,6 +137,13 @@ declare global {
       MCP_RESIDENT_RUNTIME_SOFT_CAP?: string;
       NODE_ENV?: string;
 
+      // v2 on executor.sh (wrangler.jsonc `services` + `vars`). Optional so
+      // local dev and test workers without them serve everything from v1.
+      /** Service binding to v2's API Worker; `edge/marketing.ts` forwards to it. */
+      V2?: Fetcher;
+      /** Absolute URL `/sign-up` and `/signup` redirect to. */
+      V2_SIGN_UP_URL?: string;
+
       // Shared with frontend
       VITE_PUBLIC_SITE_URL?: string;
       VITE_PUBLIC_OTLP_TRACES_URL?: string;
