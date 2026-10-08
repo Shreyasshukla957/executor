@@ -3140,6 +3140,25 @@ export const scenarios = {
       local: na("Local has no auth rate limit."),
     },
   },
+  cloudAuthRateLimitRace: {
+    file: "cloud-auth-rate-limit.spec.ts",
+    title:
+      "Cloud counts two first requests from one address that race, and reports no database fault",
+    targets: {
+      cloud: rateLimitedCloud,
+      "self-host": na("Self-host's Better Auth does not run on Cloud's auth database driver."),
+      local: na("Local has no auth rate limit."),
+    },
+  },
+  cloudAuthDatabaseFailureCode: {
+    file: "cloud-auth-rate-limit.spec.ts",
+    title: "Cloud reports a Better Auth query the database failed with its failure code",
+    targets: {
+      cloud: rateLimitedCloud,
+      "self-host": na("Self-host's Better Auth does not run on Cloud's auth database driver."),
+      local: na("Local has no hosted sign-in."),
+    },
+  },
   serverRenderedDashboard: {
     fixtures: "actors",
     file: "server-rendered-dashboard.spec.ts",

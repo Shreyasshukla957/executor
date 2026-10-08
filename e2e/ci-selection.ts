@@ -90,11 +90,13 @@ const jobs = {
   // This counts every request in local Cloud's single session object isolate, so another
   // scenario's MCP request in flight would change its count.
   "cloud-isolate": { target: "cloud", pattern: "Cloud MCP session objects report" },
-  // Managed Cloud turns the per-address auth limit off; this job starts one with it on.
+  // Managed Cloud turns the per-address auth limit off; this job starts one with it on. Its
+  // database scenarios lock the limit's table, which every request of this Cloud uses.
   "cloud-rate-limit": {
     target: "cloud",
     cloudMode: "rate-limited",
-    pattern: "Cloud limits sign-in and OAuth client registration per address",
+    pattern:
+      "Cloud limits sign-in and OAuth client registration per address|Cloud counts two first requests from one address|Cloud reports a Better Auth query the database failed",
   },
 } as const satisfies Record<
   string,
