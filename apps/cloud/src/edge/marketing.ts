@@ -131,6 +131,27 @@ const V2_MARKETING_PATHS: ReadonlyArray<string> = [
 export const isV2MarketingPath = (pathname: string): boolean =>
   V2_MARKETING_PATHS.some((pattern) => matchesPathPattern(pathname, pattern));
 
+/** v2's pages that match only themselves (`/pricing`, `/home`,
+ *  `/about-executor`, `/google-workspace`): exact patterns that are not
+ *  files and have no `/x/*` beside them. Their slashed form (`/pricing/`)
+ *  matches no pattern, so v1's sign-in gate would answer it. */
+const V2_EXACT_PAGES: ReadonlySet<string> = new Set(
+  V2_MARKETING_PATHS.filter(
+    (pattern) =>
+      !pattern.endsWith("/*") &&
+      !pattern.includes(".") &&
+      !V2_MARKETING_PATHS.includes(`${pattern}/*`),
+  ),
+);
+
+/** The page a slashed v2 page (`/pricing/`) canonicalizes to (`/pricing`),
+ *  or `null`. Deeper paths (`/pricing/extra`) stay with v1. */
+export const v2PageForSlashedPath = (pathname: string): string | null => {
+  if (!pathname.endsWith("/")) return null;
+  const page = pathname.slice(0, -1);
+  return V2_EXACT_PAGES.has(page) ? page : null;
+};
+
 /** The landing page without a v1 session is v2's marketing homepage. */
 const isV2Homepage = (url: URL, request: Request): boolean =>
   url.pathname === "/" && parseCookie(request.headers.get("cookie"), SESSION_COOKIE) === null;
@@ -291,6 +312,8 @@ const isV2TelemetryPath = (pathname: string, edge: V2Edge): boolean =>
  * Answer a production request that belongs to v2 and return `null` when v1
  * owns it:
  *  - sign-up (`GET`, any query) redirects to v2's sign-up page;
+ *  - a `GET` or `HEAD` for a slashed v2 page (`/pricing/`) redirects (308)
+ *    to the page, query kept, as v2's site does on its own hosts;
  *  - a {@link isV2Path} request, a connected-account callback whose `state`
  *    starts with v2's prefix, or a request for v2's analytics proxy or error
  *    tunnel is forwarded to v2's Worker without cookies;
@@ -307,8 +330,12 @@ export const v2EdgeResponse = (request: Request, env: V2EdgeEnv): Promise<Respon
   if (url.hostname !== PRODUCTION_HOST) return null;
 
   const signUp = isSignUpPath(url.pathname) && request.method === "GET";
+  const slashedPage =
+    request.method === "GET" || request.method === "HEAD"
+      ? v2PageForSlashedPath(url.pathname)
+      : null;
   const marketing = isV2MarketingPath(url.pathname) || isV2Homepage(url, request);
-  const owned = signUp || marketing || isV2Path(url.pathname);
+  const owned = signUp || slashedPage !== null || marketing || isV2Path(url.pathname);
   const callback = url.pathname === OAUTH_CALLBACK_PATH;
   const telemetry = TELEMETRY_PATH_SHAPE.test(url.pathname);
   if (!owned && !callback && !telemetry) return null;
@@ -320,6 +347,11 @@ export const v2EdgeResponse = (request: Request, env: V2EdgeEnv): Promise<Respon
     return Promise.resolve(new Response("Service misconfigured", { status: 500 }));
   }
   if (signUp) return Promise.resolve(Response.redirect(edge.signUpUrl.href, 302));
+  if (slashedPage !== null) {
+    const page = new URL(url);
+    page.pathname = slashedPage;
+    return Promise.resolve(Response.redirect(page.href, 308));
+  }
   if (marketing) return edge.service.fetch(v2ForwardRequest(request, V2_MARKETING_COOKIES));
   if (callback && !isV2OAuthCallback(url, edge.oauthStatePrefix)) return null;
   if (telemetry && !isV2TelemetryPath(url.pathname, edge)) return null;
