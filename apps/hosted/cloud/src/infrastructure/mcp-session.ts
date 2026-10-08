@@ -9,12 +9,13 @@ import {
   makeHostedMcp,
 } from "@executor-js/hosted-server";
 import * as Cloudflare from "alchemy/Cloudflare";
-import { Effect, type Layer } from "effect";
-import { HttpServer, HttpServerRequest } from "effect/unstable/http";
+import { Effect, type Layer, type Scope } from "effect";
+import { HttpServer, HttpServerRequest, type HttpServerResponse } from "effect/http";
 import { cloudSentry } from "../implementation/error-reporting.ts";
+import { makeAnswer } from "../implementation/mcp-session-timing.ts";
 import { observeMcpStream } from "../implementation/mcp-stream-observability.ts";
 import { cloudAnalytics } from "../implementation/product-analytics.ts";
-import type { cloudProduct } from "./product.ts";
+import type { cloudServingProduct } from "./serving-product.ts";
 import { cloudObjectDatabase, ObjectDatabase } from "./object-database.ts";
 
 /**
@@ -22,7 +23,7 @@ import { cloudObjectDatabase, ObjectDatabase } from "./object-database.ts";
  * it. Both use the calling object's held database connections.
  */
 export interface McpSessionServices {
-  readonly executor: Effect.Success<ReturnType<typeof cloudProduct>>;
+  readonly executor: Effect.Success<ReturnType<typeof cloudServingProduct>>;
   readonly identity: Layer.Layer<McpAuthentication>;
 }
 
@@ -37,6 +38,7 @@ export const makeMcpSession = Effect.fn(function* ({ executor, identity }: McpSe
     // Opaque object identity is stable across activations; the random activation
     // identifies a fresh in-memory MCP registry without recording session tokens.
     const activation = yield* Effect.sync(() => crypto.randomUUID());
+    const answer = makeAnswer();
     const handler = yield* makeHostedMcp().pipe(Effect.provide(HttpServer.layerServices));
     const browser = browserMcpRequest((access, address) =>
       hostedMcpApproval(handler.approvals, access, address).pipe(
@@ -66,6 +68,7 @@ export const makeMcpSession = Effect.fn(function* ({ executor, identity }: McpSe
         Effect.tap((response) =>
           Effect.annotateCurrentSpan("http.response.status_code", response.status),
         ),
+        answer,
         Effect.withSpan("mcp.session.request", {
           attributes: {
             "executor.mcp.object_id": state.id.toString(),
@@ -76,9 +79,21 @@ export const makeMcpSession = Effect.fn(function* ({ executor, identity }: McpSe
         reportErrors,
         Effect.provideService(ObjectDatabase, database),
       ),
-    };
+    } satisfies McpSessionHandler;
   });
 });
+
+/**
+ * The object supplies only the request and its scope. Everything else a session reads must come
+ * from {@link McpSessionServices}, or this fails to typecheck rather than at the first request.
+ */
+interface McpSessionHandler {
+  readonly fetch: Effect.Effect<
+    HttpServerResponse.HttpServerResponse,
+    unknown,
+    HttpServerRequest.HttpServerRequest | Scope.Scope
+  >;
+}
 
 /** What the gateway binds on a session object. */
 export type McpSessionObject = Effect.Success<Effect.Success<ReturnType<typeof makeMcpSession>>>;

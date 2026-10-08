@@ -20,8 +20,8 @@ import {
   type Executor,
 } from "@executor-js/sdk/core";
 import { Effect, Layer, Redacted, Result, Stream } from "effect";
-import { HttpServerResponse } from "effect/unstable/http";
-import { HttpApiBuilder } from "effect/unstable/httpapi";
+import { HttpServerResponse } from "effect/http";
+import { HttpApiBuilder } from "effect/http-api";
 import { localRequest, requestOrigin, sessionCookie, type LocalAuth } from "./auth.ts";
 import { createCatalog, type CatalogSource } from "@executor-js/catalog";
 import type { HostEgress } from "@executor-js/utils/url-policy";
@@ -39,6 +39,7 @@ import {
   AppRenameBlocked,
   AccountManagementBlocked,
   ToolCatalogChanged,
+  type AppAccountTarget,
 } from "../contracts/dashboard.ts";
 
 /** Authenticate local browser and bearer requests using the same session boundary. */
@@ -89,6 +90,24 @@ export const dashboard = (
     );
   const manage = <A, E, R>(account: AccountId, operation: Effect.Effect<A, E, R>) =>
     account === managedAccount ? Effect.fail(new AccountManagementBlocked({ account })) : operation;
+  /**
+   * Every dashboard sign-in fills an app requirement; completing it selects the account there. A
+   * reconnect names the account, which the local server's own account cannot be.
+   */
+  const appConnection = (app: AppId, target: typeof AppAccountTarget.Type) =>
+    target.account === undefined
+      ? executor.accountConnections.create({
+          owner,
+          target: { app, profile: target.profile, requirement: target.requirement },
+        })
+      : manage(
+          target.account,
+          executor.accountConnections.create({
+            owner,
+            account: target.account,
+            target: { app, profile: target.profile, requirement: target.requirement },
+          }),
+        );
   const access = dashboardAccess(config, auth);
   // Database reads infer dependencies in the shared storage service, including reads in SDK calls.
   const overview = Effect.gen(function* () {
@@ -369,7 +388,6 @@ export const dashboard = (
           return app;
         }),
       )
-      .handle("addAccount", ({ payload }) => executor.accounts.add({ owner, ...payload }))
       .handle("account", ({ params }) => accountDetail(params.account))
       .handle("checkAccount", ({ params }) => executor.accounts.check(params))
       .handle("checkCredentials", ({ params, payload }) =>
@@ -378,35 +396,8 @@ export const dashboard = (
       .handle("updateAccount", ({ params, payload }) =>
         manage(params.account, executor.accounts.update({ ...params, ...payload })),
       )
-      .handle("replaceAccountCredentials", ({ params, payload }) =>
-        manage(params.account, executor.accounts.replaceCredentials({ ...params, ...payload })),
-      )
       .handle("disconnectAccount", ({ params }) =>
         manage(params.account, executor.accounts.remove(params)),
-      )
-      .handle("reconnectAccount", ({ params, payload }) =>
-        manage(
-          params.account,
-          Effect.gen(function* () {
-            const request = yield* localRequest(config.port, config.browserOrigin).pipe(
-              Effect.mapError(() => new DashboardForbidden()),
-            );
-            const account = yield* executor.accounts.get(params);
-            const connection = yield* executor.accountConnections.create({
-              account: account.id,
-              owner: account.owner,
-              provider: account.provider,
-            });
-            const signIn = yield* executor.accountConnections.startOAuth({
-              connection: connection.id,
-              method: account.method,
-              label: account.label,
-              ...payload,
-              redirectUri: new URL(OAuthCallbackPath, requestOrigin(config, request)).href,
-            });
-            return { ...signIn, connection: connection.id };
-          }),
-        ),
       )
       .handle("importCustomApp", ({ payload }) =>
         Effect.gen(function* () {
@@ -434,18 +425,28 @@ export const dashboard = (
           });
         }),
       )
-      .handle("startOAuth", ({ payload }) =>
+      .handle("connectAccount", ({ params, payload: { method, label, fields, ...target } }) =>
+        Effect.gen(function* () {
+          const connection = yield* appConnection(params.app, target);
+          return yield* executor.accountConnections.submit({
+            connection: connection.id,
+            method,
+            ...(label === undefined ? {} : { label }),
+            fields,
+          });
+        }),
+      )
+      .handle("startOAuth", ({ params, payload: { method, label, client, ...target } }) =>
         Effect.gen(function* () {
           const request = yield* localRequest(config.port, config.browserOrigin).pipe(
             Effect.mapError(() => new DashboardForbidden()),
           );
-          const connection = yield* executor.accountConnections.create({
-            provider: payload.provider,
-            owner,
-          });
+          const connection = yield* appConnection(params.app, target);
           const signIn = yield* executor.accountConnections.startOAuth({
-            ...payload,
             connection: connection.id,
+            method,
+            ...(label === undefined ? {} : { label }),
+            ...(client === undefined ? {} : { client }),
             redirectUri: new URL(OAuthCallbackPath, requestOrigin(config, request)).href,
           });
           return { ...signIn, connection: connection.id };

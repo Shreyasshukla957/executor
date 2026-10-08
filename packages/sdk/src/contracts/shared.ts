@@ -22,10 +22,10 @@ export type JsonObject = typeof JsonObject.Type;
  * Brands are only obtainable by parsing through these schemas (or from
  * returned rows), never by casting.
  */
-const Id = <const P extends string>(prefix: P) =>
+const Id = <const P extends string>(prefix: Parameters<typeof Schema.brand<P>>[0]) =>
   Schema.String.pipe(
-    Schema.check(Schema.isPattern(new RegExp(`^${prefix}_[\\s\\S]+$`))),
-    Schema.brand(prefix),
+    Schema.check(Schema.isPattern(new RegExp(`^${prefix}_[\\s\\S]+$`, "u"))),
+    Schema.brand<P>(prefix),
   );
 
 /** Content-derived reference to a normalized provider definition, prefix `prv_`. */

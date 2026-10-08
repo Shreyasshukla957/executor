@@ -17,8 +17,13 @@ import {
   Semaphore,
   Tracer,
 } from "effect";
-import type { SqlClient } from "effect/unstable/sql";
-import { ConnectionReservations, cloudDatabaseConnection, cloudDatabasePool } from "./database.ts";
+import type { SqlClient } from "effect/sql";
+import {
+  ConnectionReservations,
+  type OpenedConnections,
+  cloudDatabaseConnection,
+  cloudDatabasePool,
+} from "./database.ts";
 
 /**
  * An object closes its connections this long after its last call ends. PgBouncer pools in
@@ -34,7 +39,11 @@ const idleWindow = Duration.seconds(30);
 export const objectConnectionLimit = 4;
 
 /** A database client and what its consumers need beside it. */
-export type SqlServices = PgClient.PgClient | SqlClient.SqlClient | ConnectionReservations;
+export type SqlServices =
+  | PgClient.PgClient
+  | SqlClient.SqlClient
+  | ConnectionReservations
+  | OpenedConnections;
 
 /** A call holding the object's connections: where the connections it opens are reported. */
 interface Caller {

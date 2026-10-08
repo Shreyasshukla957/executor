@@ -34,6 +34,7 @@ const privateSkillsApp = (options: {
   readonly provider: string;
   readonly hosts: readonly string[];
   readonly upstream: string;
+  readonly repo: string;
 }) => `import { defineApp, defineProvider, dynamicSkills, secrets, object, string } from "apps";
 import { githubSkills } from "apps/skills";
 const github = defineProvider({
@@ -43,7 +44,7 @@ const github = defineProvider({
 });
 export default defineApp({ accounts: { github } }, async (ctx) => ({
   dynamicSkills: dynamicSkills({ list: () => githubSkills({
-    repo: "synthetic/skills", path: "skills", cache: ctx.cache, signal: ctx.signal,
+    repo: ${JSON.stringify(options.repo)}, path: "skills", cache: ctx.cache, signal: ctx.signal,
     account: ctx.accounts.github, token: ctx.accounts.github.fields.token,
     fetch: (input, init) => {
       const url = new URL(input instanceof Request ? input.url : input);
@@ -248,14 +249,14 @@ export default defineApp({ accounts: {} }, async (ctx) => ({
         const provider = `GitHub ${randomUUID().slice(0, 8)}`;
         const token = `synthetic-github-token-${randomUUID()}`;
         yield* upstream.requireToken(token);
-        const deploy = (hosts: readonly string[]) =>
+        const deploy = (hosts: readonly string[], repo = "synthetic/skills") =>
           Effect.gen(function* () {
             const response = yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
               name: `Private skills ${randomUUID().slice(0, 8)}`,
               files: [
                 {
                   path: "index.ts",
-                  content: privateSkillsApp({ provider, hosts, upstream: upstream.url }),
+                  content: privateSkillsApp({ provider, hosts, upstream: upstream.url, repo }),
                 },
                 appsManifest,
               ],
@@ -345,6 +346,26 @@ export default defineApp({ accounts: {} }, async (ctx) => ({
           account: { id: outsider.account, label: "Outsider" },
         });
 
+        // GitHub answers 404 with a token for a repository the token cannot read, as for one that
+        // does not exist: the copy says it is not available with the token, and claims neither.
+        const absentPath = yield* deploy([host], "synthetic/absent-skills");
+        const absentReader = yield* connect(absentPath, "Reader", token);
+        const absent = yield* read(absentPath, absentReader.profile);
+        expect(absent.status, JSON.stringify(absent.body)).toBe(502);
+        expect(absent.body).toMatchObject({
+          _tag: "AppEvaluationFailed",
+          skills: {
+            reason: "request",
+            status: 404,
+            message:
+              "GitHub repository synthetic/absent-skills is not available with the account's token (HTTP 404). Check the repository name and that the token can read it.",
+          },
+          recovery: {
+            action:
+              "Check the address or repository the app’s skill source names, and that any account it reads with can access it.",
+          },
+        });
+
         // An app whose provider allows only GitHub's own hosts cannot send this account's token
         // elsewhere, and says which hosts the read needs.
         const before = (yield* upstream.credentials).length;
@@ -364,8 +385,11 @@ export default defineApp({ accounts: {} }, async (ctx) => ({
             status: 421,
             // The loader names the host it requested, before the app's fetch redirected it here.
             message: expect.stringContaining(
-              "did not send the GitHub token to github.com. The account's provider must declare hosts github.com and raw.githubusercontent.com",
+              "A request with the GitHub token to github.com was refused because the account's provider does not declare that host. The provider must declare hosts github.com and raw.githubusercontent.com",
             ),
+          },
+          recovery: {
+            action: "Check the hosts the provider of the skill loader’s account declares.",
           },
         });
         expect((yield* upstream.credentials).length).toBe(before);

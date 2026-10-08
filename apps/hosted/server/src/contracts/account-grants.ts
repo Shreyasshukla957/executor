@@ -11,8 +11,8 @@
  */
 import { AccountId, type OwnerId } from "@executor-js/sdk/core";
 import { Context, type Schema } from "effect";
-import type { HttpMethod } from "effect/unstable/http";
-import { type HttpApiEndpoint, HttpApiMiddleware } from "effect/unstable/httpapi";
+import type { HttpMethod } from "effect/http";
+import { type HttpApiEndpoint, HttpApiMiddleware } from "effect/http-api";
 import type { Action } from "@executor-js/authorization";
 import { RequiredAction } from "./authorization.ts";
 import { OrganizationForbidden } from "./organization.ts";

@@ -1,6 +1,6 @@
 import { WorkerEnvironment } from "alchemy/Cloudflare";
 import { Effect, Predicate, Schema } from "effect";
-import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
+import { HttpServerRequest, HttpServerResponse } from "effect/http";
 
 import { experimentHomepage, type HeroFlagEvaluator } from "./hero-experiment.ts";
 import { homepageResponse } from "./homepage-response.ts";

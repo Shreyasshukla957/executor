@@ -1,10 +1,11 @@
+import { owned } from "@executor-js/telemetry";
 import { httpProviderError, graphqlProviderError, accountProviderError } from "./provider-error.ts";
 import { ProviderError } from "../contracts/provider-error.ts";
 import { NetworkRefused } from "../contracts/network.ts";
 import { failOnNetworkRefusal } from "./network.ts";
 /** Discover GraphQL tools live; transport, decoding and cancellation stay in Effect. */
 import { Effect, Redacted, Schema } from "effect";
-import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
+import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 import {
   getIntrospectionQuery,
   Kind,
@@ -180,7 +181,7 @@ export const graphqlClientEffect = (input: GraphqlToolsOptions) =>
                 new GraphqlError({ phase, reason: "request", status: response.status })
             );
           const result = yield* response.json.pipe(
-            Effect.withSpan("provider.http.response.read"),
+            owned("upstream", "provider.http.response.read"),
             Effect.flatMap(Schema.decodeUnknownEffect(GraphqlResponse)),
             Effect.mapError(() => new GraphqlError({ phase, reason: "invalid_response" })),
           );
@@ -194,7 +195,7 @@ export const graphqlClientEffect = (input: GraphqlToolsOptions) =>
           return result.data;
         }),
       ).pipe(
-        Effect.withSpan("provider.graphql.request", {
+        owned("upstream", "provider.graphql.request", {
           attributes: {
             "executor.operation": phase,
             "server.address": url.hostname,
@@ -348,7 +349,7 @@ export const adaptGraphqlTool = (
             return yield* new GraphqlError({ phase: "call", reason: "invalid_response" });
           return value;
         }).pipe(
-          Effect.withSpan("provider.graphql.call", {
+          owned("upstream", "provider.graphql.call", {
             attributes: {
               "graphql.operation.type": kind,
               "executor.tool.name": name,

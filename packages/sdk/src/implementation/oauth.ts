@@ -7,7 +7,6 @@ import {
   Clock,
   type Crypto,
   Effect,
-  Encoding,
   Fiber,
   JsonSchema,
   Match,
@@ -16,6 +15,7 @@ import {
   SchemaRepresentation,
   Struct,
 } from "effect";
+import { Base64, Hex } from "effect/encoding";
 import {
   StartConnectionOAuth,
   CompleteConnectionOAuth,
@@ -350,6 +350,18 @@ const exchangeFailed = (error: OAuthProtocolFailed) => {
 };
 
 /**
+ * Slack's `user_scope` authorization parameter lists, comma-separated, the permissions for the
+ * signed-in user's own token. A declared parameter replaces the endpoint's own, as authorization does.
+ */
+const userScopes = (endpoint: string, params: Readonly<Record<string, string>> | undefined) => [
+  ...new Set(
+    (params?.["user_scope"] ?? new URL(endpoint).searchParams.get("user_scope") ?? "")
+      .split(/[\s,]+/u)
+      .filter((scope) => scope !== ""),
+  ),
+];
+
+/**
  * A client entered with a secret uses Basic, which RFC 6749 section 2.3.1 requires servers to
  * support, unless the server advertises only the body form. A server accepting both says nothing
  * about how this client was registered (RFC 7591 section 2). Declared endpoints advertise
@@ -403,7 +415,7 @@ export const makeOAuth = (
 ) => {
   const hash = (value: string) =>
     crypto.digest("SHA-256", new TextEncoder().encode(value)).pipe(
-      Effect.map(Encoding.encodeHex),
+      Effect.map(Hex.encode),
       Effect.mapError(() => new StorageError()),
     );
   const nextId = crypto.randomUUIDv4.pipe(Effect.mapError(() => new StorageError()));
@@ -540,21 +552,26 @@ export const makeOAuth = (
           : registration === "manual"
             ? "client-required"
             : "automatic";
-        return method.grant === "client_credentials"
-          ? {
-              mode,
-              scopes: discovered.scopes,
-              grant: method.grant,
-              tokenEndpointAuthMethod: method.tokenEndpointAuthMethod,
-            }
-          : {
-              mode,
-              scopes: discovered.scopes,
-              grant: "authorization_code",
-              ...(discovered.tokenEndpointAuthMethod === undefined
-                ? {}
-                : { tokenEndpointAuthMethod: discovered.tokenEndpointAuthMethod }),
-            };
+        if (method.grant === "client_credentials")
+          return {
+            mode,
+            scopes: discovered.scopes,
+            grant: method.grant,
+            tokenEndpointAuthMethod: method.tokenEndpointAuthMethod,
+          };
+        const user =
+          discovered.grant === "authorization_code"
+            ? userScopes(discovered.server.authorization_endpoint, discovered.authorizationParams)
+            : [];
+        return {
+          mode,
+          scopes: discovered.scopes,
+          grant: "authorization_code",
+          ...(discovered.tokenEndpointAuthMethod === undefined
+            ? {}
+            : { tokenEndpointAuthMethod: discovered.tokenEndpointAuthMethod }),
+          ...(user.length === 0 ? {} : { userScopes: user }),
+        };
       }),
       Effect.withSpan("oauth.setup"),
     );
@@ -751,7 +768,7 @@ export const makeOAuth = (
             : {
                 savedClient: {
                   key: clientId,
-                  version: Encoding.encodeBase64(reused?.version ?? encryptedClient),
+                  version: Base64.encode(reused?.version ?? encryptedClient),
                   ...(source === undefined ? {} : { source }),
                   fresh: reused === undefined,
                 },
@@ -971,7 +988,7 @@ export const makeOAuth = (
             Effect.gen(function* () {
               const saved = attempt.savedClient;
               if (saved === undefined) return yield* error;
-              const version = yield* Effect.fromResult(Encoding.decodeBase64(saved.version)).pipe(
+              const version = yield* Effect.fromResult(Base64.decode(saved.version)).pipe(
                 Effect.mapError(() => new StorageError()),
               );
               // Only the version this attempt used: a client saved since then stays.
@@ -1442,17 +1459,20 @@ export const makeOAuth = (
     );
   /**
    * Resolve each selected account's credentials in order. Product authority for all of them is
-   * checked in one read first, and refused in selection order. Once one account has waited for
-   * or performed a renewal, that read can be seconds old, so each later account is checked
-   * again immediately before it resolves.
+   * checked in one read first, and refused in selection order; a caller that checks it with the
+   * profile supplies that read. Once one account has waited for or performed a renewal, that read
+   * can be seconds old, so each later account is checked again immediately before it resolves.
    */
   const resolveSelected = (
     selected: ReadonlyArray<{
       readonly account: StoredAccount;
       readonly provider: ProviderDefinition;
     }>,
+    authority: Effect.Effect<ReadonlySet<AccountId> | undefined, StorageError> = authorized(
+      selected.map(({ account }) => account),
+    ),
   ) =>
-    Effect.flatMap(authorized(selected.map(({ account }) => account)), (checked) => {
+    Effect.flatMap(authority, (checked) => {
       const batch: Resolution = { contested: false };
       return Effect.forEach(selected, ({ account, provider }) =>
         Effect.gen(function* () {

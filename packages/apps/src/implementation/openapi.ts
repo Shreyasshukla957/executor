@@ -1,6 +1,6 @@
 /** Evaluate normalized metadata into ordinary tools, with account-specific security filtering. */
 import { Effect, JsonPointer, Schema } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient } from "effect/http";
 import {
   OpenapiError,
   OpenapiToolsOptions,

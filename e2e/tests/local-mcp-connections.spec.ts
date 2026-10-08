@@ -421,4 +421,102 @@ layer(TestLive, { excludeTestServices: true })("Local scoped MCP connections", (
       }).pipe(Effect.provide(McpClient.layer)),
     ),
   );
+  it.effect(scenarios.localMcpResumeAcrossSessions.title, (context) =>
+    withCase(
+      context,
+      Effect.gen(function* () {
+        const target = yield* Target,
+          mcp = yield* McpClient;
+        const operator = yield* pairLocalOperator;
+        const headers = { authorization: `Bearer ${Redacted.value(target.apiKey)}` };
+        const deployed = yield* operator.send(
+          "POST",
+          "/v1/apps/deploy",
+          {
+            owner: "local",
+            name: `Resumed app ${randomUUID().slice(0, 8)}`,
+            files: reviewAppFiles,
+          },
+          headers,
+        );
+        expect(deployed.status, JSON.stringify(deployed.body)).toBe(200);
+        const { app } = yield* body(Schema.Struct({ app: App }), deployed);
+        yield* Effect.addFinalizer(() =>
+          operator.send("DELETE", `/v1/apps/${app.id}`, undefined, headers).pipe(Effect.orDie),
+        );
+        const clients: string[] = [];
+        yield* revokeClientGrants(operator, () => clients);
+        const grant = Effect.gen(function* () {
+          const consent = yield* consentTo(operator, undefined);
+          clients.push(consent.clientId);
+          expect(consent.status).toBe(200);
+          return yield* consent.tokens;
+        });
+        const [owner, other] = yield* Effect.all([grant, grant]);
+        const paused = yield* (yield* mcp.connect(owner, "local-resume-first")).use(
+          "Pause an approval-gated tool in the first MCP session",
+          (client, signal) =>
+            client.callTool(
+              {
+                name: "execute",
+                arguments: { code: `return await tools[${JSON.stringify(app.slug)}].review({})` },
+              },
+              undefined,
+              { signal },
+            ),
+        );
+        const pending = yield* Schema.decodeUnknownEffect(Pending)(paused.structuredContent);
+        // Some clients open a new MCP session for every tool call, so each resume below uses one.
+        const resume = (label: string, token: typeof owner, name: string) =>
+          Effect.gen(function* () {
+            const session = yield* mcp.connect(token, name);
+            const result = yield* session.use(label, (client, signal) =>
+              client.callTool(
+                {
+                  name: "resume",
+                  arguments: { requestId: pending.requestId, response: { action: "accept" } },
+                },
+                undefined,
+                { signal },
+              ),
+            );
+            return result.structuredContent;
+          });
+        const Status = Schema.Struct({ status: Schema.String });
+        const status = (content: unknown) =>
+          Schema.decodeUnknownEffect(Status)(content).pipe(Effect.map(({ status }) => status));
+        expect(
+          yield* status(yield* resume("Another grant cannot resume", other, "local-resume-other")),
+        ).toBe("unavailable");
+        expect(
+          yield* status(
+            yield* resume(
+              "The administrative key cannot resume a grant's program",
+              Redacted.make(Redacted.value(target.apiKey)),
+              "local-resume-admin",
+            ),
+          ),
+        ).toBe("unavailable");
+        const resumed = yield* resume(
+          "The same grant resumes from a new MCP session",
+          owner,
+          "local-resume-next",
+        );
+        expect(yield* status(resumed)).toBe("completed");
+        expect((yield* Schema.decodeUnknownEffect(Execution)(resumed)).execution).toEqual({
+          ok: true,
+          value: { reviewed: true },
+        });
+        expect(
+          yield* status(
+            yield* resume(
+              "A replayed resume from yet another session is unavailable",
+              owner,
+              "local-resume-replay",
+            ),
+          ),
+        ).toBe("unavailable");
+      }).pipe(Effect.provide(McpClient.layer)),
+    ),
+  );
 });

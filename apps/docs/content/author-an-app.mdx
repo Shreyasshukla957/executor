@@ -113,8 +113,9 @@ export default defineApp(requirements, { tools: router({ listProjects }) });
 ```
 
 `accounts.vercel.fields` holds exactly the fields the method declared. The token
-arrives per call, from whichever account the app has selected. Nothing in the
-source names an account, so the same code serves a work app and a personal one.
+arrives per call, from the account the calling
+[profile](/concepts/apps-and-deployments#profile) selected. Nothing in the source
+names an account, so the same code serves a work profile and a personal one.
 
 `decodeJson(response, schema)` checks the HTTP status and parses the body. Use
 `oauth2({ discover: "..." })` instead of `secrets` for a browser sign-in; the
@@ -218,13 +219,27 @@ GraphQL and OpenAPI, without writing any source.
 
 ## Storing data
 
-Declare a database and the app gets tables.
+Add SQL files to `migrations/` and the app gets its own SQLite database. The
+host applies new ones in number order when you deploy. A failing migration fails
+the deploy with SQLite's error, and applied migrations cannot be edited: add a
+new one instead.
+
+```sql
+-- migrations/0001_messages.sql
+CREATE TABLE messages (
+  id TEXT PRIMARY KEY NOT NULL,
+  mailbox TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX messages_mailbox ON messages (mailbox, created_at);
+```
+
+Handlers read and write through `ctx.sql`, with `?` for values:
 
 ```ts
 import {
   defineApp,
-  defineDatabase,
-  json,
   mutation,
   type MutationContext,
   object,
@@ -232,45 +247,43 @@ import {
   type QueryContext,
   router,
   string,
-  table,
 } from "apps";
 
-const database = defineDatabase({
-  messages: table({ mailbox: string(), subject: string() }).index("by_mailbox", ["mailbox"]),
-});
-
-const requirements = { accounts: {}, database };
+const requirements = { accounts: {} };
+type Message = { id: string; subject: string };
 
 const list = query(
-  { description: "Recent messages", input: object({ mailbox: string() }), output: json() },
-  async ({ db }: QueryContext<typeof requirements>, { mailbox }) =>
-    db.messages
-      .withIndex("by_mailbox", (q) => q.eq("mailbox", mailbox))
-      .order("desc")
-      .take(50),
+  { description: "Recent messages", input: object({ mailbox: string() }) },
+  async ({ sql }: QueryContext<typeof requirements>, { mailbox }) =>
+    sql
+      .exec<Message>(
+        "SELECT id, subject FROM messages WHERE mailbox = ? ORDER BY created_at DESC LIMIT 50",
+        mailbox,
+      )
+      .toArray(),
 );
 
 const add = mutation(
-  {
-    description: "Store a message",
-    input: object({ mailbox: string(), subject: string() }),
-    output: json(),
-  },
-  async ({ db }: MutationContext<typeof requirements>, message) => db.messages.insert(message),
+  { description: "Store a message", input: object({ mailbox: string(), subject: string() }) },
+  async ({ sql }: MutationContext<typeof requirements>, message) =>
+    sql
+      .exec<Message>(
+        "INSERT INTO messages (id, mailbox, subject, created_at) VALUES (?, ?, ?, ?) RETURNING id, subject",
+        crypto.randomUUID(),
+        message.mailbox,
+        message.subject,
+        Date.now(),
+      )
+      .one(),
 );
 
 export default defineApp(requirements, { tools: router({ list, add }) });
 ```
 
-Query it through `db` on the context, with `withIndex`, `order`, and a terminal:
-`first`, `take`, `collect`, `count` or `paginate({ cursor, numItems })`. A
-`by_creation` index exists without being declared. A mutation's `db` also has
-`insert`, `update` and `delete`. The host sets each row's `id`, `createdAt` and
-`updatedAt`.
-
-Reads are bounded: 5,000 rows scanned, 1,000 returned, 4 MiB per invocation.
-`collect` and `count` fail rather than truncate, so you notice. A mutation
-allows 1,000 writes.
+`exec<Row>` types the rows it returns. Queries get read-only SQL; mutations can
+write. Each statement commits on its own, and `ctx.sql.transaction(...)` groups statements. A transaction is
+synchronous, so calls to other services always happen between transactions,
+never inside one.
 
 ## Shipping instructions
 
@@ -466,8 +479,6 @@ the UI renders. Check the actual page before reporting it as working.
 
 ## What is coming later
 
-- Scheduled and background work.
 - Calling one app from another.
 - Authoring general HTTP endpoints.
-- Stored-data schema migration between deployments.
 - A local `executor dev` loop.

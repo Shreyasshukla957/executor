@@ -3,8 +3,9 @@ import { traceHeaders } from "@executor-js/telemetry";
 import { authenticatedMcp, browserMcpRequest, mcpSessionKey } from "@executor-js/hosted-server";
 import * as Cloudflare from "alchemy/Cloudflare";
 import { Effect } from "effect";
-import { HttpServerRequest } from "effect/unstable/http";
+import { HttpServerRequest } from "effect/http";
 import { forwardMcpRequest } from "../implementation/mcp-forward.ts";
+import { timedForward } from "../implementation/mcp-session-timing.ts";
 import { observeMcpStream } from "../implementation/mcp-stream-observability.ts";
 import type { McpSessionObject } from "./mcp-session.ts";
 import { McpServer } from "./mcp-server-worker.ts";
@@ -23,11 +24,12 @@ export const cloudMcp = Effect.gen(function* () {
   const sessions = yield* McpSession.from(McpServer);
   const forward = (access: Parameters<typeof mcpSessionKey>[0]) =>
     Effect.gen(function* () {
+      yield* Effect.annotateCurrentSpan("executor.organization.id", access.access.organization);
       const request = yield* HttpServerRequest.HttpServerRequest;
       const headers = yield* traceHeaders;
       const traced = request.modify({ headers: { ...request.headers, ...headers } });
       return yield* forwardMcpRequest(traced, (attempt) =>
-        sessions.getByName(mcpSessionKey(access)).fetch(attempt),
+        timedForward(sessions.getByName(mcpSessionKey(access)).fetch(attempt)),
       );
     }).pipe(Effect.flatMap(observeMcpStream("gateway")), Effect.withSpan("mcp.session.forward"));
   return {

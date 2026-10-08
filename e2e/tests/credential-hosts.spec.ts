@@ -10,7 +10,7 @@ import { randomUUID } from "node:crypto";
 import { Actors } from "../support/actors.ts";
 import { Api, body } from "../support/api.ts";
 import { Browser } from "../support/browser.ts";
-import { appsManifest, withApps } from "../support/apps-release.ts";
+import { appsManifest, databaseFiles, withApps } from "../support/apps-release.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { Resource } from "../support/contracts.ts";
 import { credentialUpstream, ReceivedRequest } from "../support/credential-upstream.ts";
@@ -25,7 +25,6 @@ const App = Schema.Struct({
   }),
 });
 const CredentialCheck = Schema.Struct({ status: Schema.String });
-const SetupStatus = Schema.Struct({ status: Schema.String });
 const Fields = Schema.Struct({
   region: Schema.String,
   token: Schema.String,
@@ -70,9 +69,7 @@ const credentialApp = (options: {
   readonly name: string;
   readonly host: string | readonly string[] | null;
   readonly health: string | null;
-  /** With a database, queries run in the app's data facet and use its outbound network. */
-  readonly database?: boolean;
-}) => `import { defineApp, defineDatabase, defineProvider, secrets, table, object, string, plain, raw, query, router, workflow } from "apps";
+}) => `import { defineApp, defineProvider, secrets, object, string, plain, raw, query, router, workflow } from "apps";
 const service = defineProvider({
   name: ${JSON.stringify(options.name)},
 ${options.host === null ? "" : `  hosts: ${JSON.stringify([options.host].flat())},\n`}
@@ -97,7 +94,7 @@ const send = async (url, init) => {
   const response = await fetch(url, init);
   return { status: response.status, echoed: response.headers.get("x-echo-authorization") ?? "", text: await response.text() };
 };
-export default defineApp({ accounts: { service }${options.database === true ? ", database: defineDatabase({ marks: table({ label: string() }) })" : ""} }, {
+export default defineApp({ accounts: { service } }, {
   // A workflow step reads its accounts through the run's own capability.
   workflows: { fields: workflow({ input: object({}) }, async (ctx) =>
     ctx.step.do("fields", async (step) => step.accounts.service.fields)) },
@@ -168,11 +165,11 @@ const scenario = Effect.gen(function* () {
   const api = yield* Api,
     actors = yield* Actors;
   const prefix = `/api/organizations/${actors.organization.id}`;
-  const deploy = (name: string, content: string, manifest = appsManifest) =>
+  const deploy = (name: string, content: string, manifest = appsManifest, database = false) =>
     Effect.gen(function* () {
       const deployed = yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
         name,
-        files: [{ path: "index.ts", content }, manifest],
+        files: [{ path: "index.ts", content }, manifest, ...databaseFiles(database)],
       });
       expect(deployed.status, JSON.stringify(deployed.body)).toBe(200);
       const app = yield* body(App, deployed);
@@ -195,18 +192,11 @@ const scenario = Effect.gen(function* () {
         ),
         Effect.flatMap((response) => body(CredentialCheck, response)),
       );
-  /** Wait until background profile setup has resolved the profile's accounts. */
-  const settled = (path: string, profile: string) =>
-    api.request(actors.owner, "GET", `${path}/profiles/${profile}`).pipe(
-      Effect.flatMap((response) => body(SetupStatus, response)),
-      Effect.flatMap((current) =>
-        current.status !== "pending"
-          ? Effect.void
-          : Effect.fail(new Error("Profile setup has not finished")),
-      ),
-      Effect.retry({ schedule: Schedule.spaced("200 millis"), times: 100 }),
-    );
-  /** Select an existing account in a fresh profile of another app. */
+  /**
+   * Select an existing account in a fresh profile of another app. Tool calls read the saved
+   * selection, so nothing here waits for background profile setup: on a shared Cloud stage that
+   * setup queues behind every other organization's.
+   */
   const select = (path: string, account: string) =>
     Effect.gen(function* () {
       const profile = yield* createProfile(actors.owner, path);
@@ -214,10 +204,9 @@ const scenario = Effect.gen(function* () {
         service: account,
       });
       expect(selected.status, JSON.stringify(selected.body)).toBe(200);
-      yield* settled(path, profile.id);
       return profile.id;
     });
-  /** Connect one account through a fresh profile and wait for its setup to settle. */
+  /** Connect one account through a fresh profile, which selects it. */
   const connect = (path: string, label: string, fields: typeof Fields.Type) =>
     Effect.gen(function* () {
       const profile = yield* createProfile(actors.owner, path);
@@ -237,7 +226,6 @@ const scenario = Effect.gen(function* () {
       yield* Effect.addFinalizer(() =>
         api.request(actors.owner, "DELETE", `${prefix}/accounts/${account}`).pipe(Effect.orDie),
       );
-      yield* settled(path, profile.id);
       return { profile: profile.id, account };
     });
   const call = <A>(
@@ -313,20 +301,49 @@ const synthetic = () => ({
   signing: `synthetic-signing-${randomUUID()}`,
 });
 
+/**
+ * The hosts the refusal checks name. On self-host the declared and the undeclared name both reach
+ * a loopback receiver, which shows that a refused request sends nothing. Cloud app Workers refuse
+ * private addresses before the credential check, so there the hosts are under the reserved
+ * `.invalid` suffix: Executor treats them as public, and nothing could answer a request that
+ * escaped the checks.
+ */
+const refusalHosts = Effect.gen(function* () {
+  if ((yield* Target).metadata.target === "cloud")
+    return {
+      declaredHost: "api.credential-hosts.invalid",
+      declaredOrigin: "https://api.credential-hosts.invalid",
+      undeclaredOrigin: "https://undeclared.credential-hosts.invalid",
+      received: null,
+    };
+  const upstream = yield* credentialUpstream;
+  return {
+    declaredHost: `127.0.0.1:${upstream.port}`,
+    declaredOrigin: upstream.origin,
+    undeclaredOrigin: upstream.undeclaredOrigin,
+    received: upstream.received,
+  };
+});
+
 layer(HostedLive, { excludeTestServices: true })("Credential hosts", (it) => {
   /**
-   * Deploy an app whose provider declares the upstream's host, connect an account, and check that
+   * Deploy an app whose provider `name` declares one of `hosts`, connect an account, and check that
    * app code reads handles and that an undeclared host is refused.
    */
-  const sealedApp = (database: boolean) =>
+  const sealedApp = (
+    database: boolean,
+    hosts: Effect.Success<typeof refusalHosts>,
+    name = `Credential hosts ${randomUUID().slice(0, 8)}`,
+  ) =>
     Effect.gen(function* () {
       const { deploy, connect, call, callFailure } = yield* scenario;
-      const upstream = yield* credentialUpstream;
-      const name = `Credential hosts ${randomUUID().slice(0, 8)}`;
+      const { declaredHost, undeclaredOrigin } = hosts;
       const values = synthetic();
       const { path } = yield* deploy(
         name,
-        credentialApp({ name, host: `127.0.0.1:${upstream.port}`, health: null, database }),
+        credentialApp({ name, host: declaredHost, health: null }),
+        appsManifest,
+        database,
       );
       const { profile, account } = yield* connect(path, name, values);
 
@@ -337,23 +354,23 @@ layer(HostedLive, { excludeTestServices: true })("Credential hosts", (it) => {
       expect(fields.token).toMatch(handle);
       expect(JSON.stringify(fields)).not.toContain(values.token);
 
-      // The same service under a name the provider does not declare never receives the token.
+      // A host the provider does not declare is refused before anything is sent.
       const undeclared = yield* call(
         path,
         Sent,
         "send",
-        { url: `${upstream.undeclaredOrigin}/undeclared` },
+        { url: `${undeclaredOrigin}/undeclared` },
         profile,
       );
       expect(undeclared.status).toBe(421);
-      const refusal = `Executor refused this request: ${name} credentials cannot be sent to localhost:${upstream.port}. The provider allows: 127.0.0.1:${upstream.port}.`;
+      const refusal = `Executor refused this request: ${name} credentials cannot be sent to ${new URL(undeclaredOrigin).host}. The provider allows: ${declaredHost}.`;
       expect(Schema.decodeUnknownSync(Refusal)(undeclared.text)).toEqual({
         _tag: "NetworkRefused",
-        host: `localhost:${upstream.port}`,
+        host: new URL(undeclaredOrigin).host,
         refusal: {
           reason: "credential_host",
           provider: name,
-          allowedHosts: [`127.0.0.1:${upstream.port}`],
+          allowedHosts: [declaredHost],
         },
         message: refusal,
       });
@@ -361,7 +378,7 @@ layer(HostedLive, { excludeTestServices: true })("Credential hosts", (it) => {
       const fetched = yield* callFailure(
         path,
         "fetchSend",
-        { url: `${upstream.undeclaredOrigin}/fetched` },
+        { url: `${undeclaredOrigin}/fetched` },
         profile,
       );
       expect(fetched.failure).toEqual({
@@ -371,7 +388,7 @@ layer(HostedLive, { excludeTestServices: true })("Credential hosts", (it) => {
         message: refusal,
       });
       expect(fetched.reason).toBe(`The app threw NetworkRefused (credential_host): ${refusal}`);
-      return { upstream, values, name, path, profile, account, refusal, sealed: fields.token };
+      return { values, path, profile, account, refusal, sealed: fields.token };
     });
 
   it.effect(scenarios.credentialHostsRefused.title, (context) =>
@@ -381,62 +398,81 @@ layer(HostedLive, { excludeTestServices: true })("Credential hosts", (it) => {
         const { deploy, call, runWorkflow, select } = yield* scenario;
         const api = yield* Api,
           actors = yield* Actors;
-        const { upstream, values, name, path, profile, account, refusal, sealed } =
-          yield* sealedApp(false);
+        const hosts = yield* refusalHosts;
+        const name = `Credential hosts ${randomUUID().slice(0, 8)}`;
+        // The replay and MCP apps do not depend on the sealed app, so all three deploy together.
+        const [{ values, path, profile, account, refusal, sealed }, replay, mcp] =
+          yield* Effect.all(
+            [
+              sealedApp(false, hosts, name),
+              deploy(`Credential replay ${randomUUID().slice(0, 8)}`, replayApp),
+              deploy(
+                `Credential MCP ${randomUUID().slice(0, 8)}`,
+                mcpApp({
+                  name,
+                  host: hosts.declaredHost,
+                  url: `${hosts.undeclaredOrigin}/mcp`,
+                }),
+                {
+                  path: "package.json",
+                  content: JSON.stringify({
+                    dependencies: withApps({ "@modelcontextprotocol/sdk": "1.30.0" }),
+                  }),
+                },
+              ),
+            ],
+            { concurrency: "unbounded" },
+          );
 
-        // Workflow steps receive the same handles, never the stored value.
-        const stepped = Schema.decodeUnknownSync(Fields)(
-          yield* runWorkflow(path, "fields", profile),
-        );
-        expect(stepped.token).toMatch(handle);
-        expect(stepped.signing).toBe(values.signing);
-
-        // Another app cannot send this app's handle, even to the declared host.
-        const replay = yield* deploy(`Credential replay ${randomUUID().slice(0, 8)}`, replayApp);
-        const replayed = yield* call(replay.path, Sent, "send", {
-          url: `${upstream.origin}/replayed`,
-          credential: sealed,
-        });
-        expect(replayed.status).toBe(421);
-        expect(replayed.text).toContain("not valid for this app");
-
-        // A protocol helper reports the same refusal when its server is on an undeclared host.
-        const mcp = yield* deploy(
-          `Credential MCP ${randomUUID().slice(0, 8)}`,
-          mcpApp({
-            name,
-            host: `127.0.0.1:${upstream.port}`,
-            url: `${upstream.undeclaredOrigin}/mcp`,
-          }),
-          {
-            path: "package.json",
-            content: JSON.stringify({
-              dependencies: withApps({ "@modelcontextprotocol/sdk": "1.30.0" }),
+        yield* Effect.all(
+          [
+            // Workflow steps receive the same handles, never the stored value.
+            Effect.gen(function* () {
+              const stepped = Schema.decodeUnknownSync(Fields)(
+                yield* runWorkflow(path, "fields", profile),
+              );
+              expect(stepped.token).toMatch(handle);
+              expect(stepped.signing).toBe(values.signing);
             }),
-          },
+            // Another app cannot send this app's handle, even to the declared host.
+            Effect.gen(function* () {
+              const replayed = yield* call(replay.path, Sent, "send", {
+                url: `${hosts.declaredOrigin}/replayed`,
+                credential: sealed,
+              });
+              expect(replayed.status).toBe(421);
+              expect(replayed.text).toContain("not valid for this app");
+            }),
+            // A protocol helper reports the same refusal when its server is on an undeclared host.
+            Effect.gen(function* () {
+              const mcpProfile = yield* select(mcp.path, account);
+              const listed = yield* api.request(
+                actors.owner,
+                "GET",
+                `${mcp.path}/tools?profile=${mcpProfile}`,
+              );
+              expect(listed.status, JSON.stringify(listed.body)).not.toBe(200);
+              expect(listed.body).toMatchObject({
+                _tag: "AppEvaluationFailed",
+                failure: {
+                  source: "app",
+                  errorName: "NetworkRefused",
+                  code: "credential_host",
+                  message: refusal,
+                },
+              });
+            }),
+          ],
+          { concurrency: "unbounded", discard: true },
         );
-        const mcpProfile = yield* select(mcp.path, account);
-        const listed = yield* api.request(
-          actors.owner,
-          "GET",
-          `${mcp.path}/tools?profile=${mcpProfile}`,
-        );
-        expect(listed.status, JSON.stringify(listed.body)).not.toBe(200);
-        expect(listed.body).toMatchObject({
-          _tag: "AppEvaluationFailed",
-          failure: {
-            source: "app",
-            errorName: "NetworkRefused",
-            code: "credential_host",
-            message: refusal,
-          },
-        });
 
-        const received = yield* upstream.received;
-        expect(
-          received.filter((entry) => /undeclared|replayed|fetched|mcp/.test(entry.url)),
-        ).toEqual([]);
-        expect(JSON.stringify(received)).not.toContain(values.token);
+        if (hosts.received !== null) {
+          const received = yield* hosts.received;
+          expect(
+            received.filter((entry) => /undeclared|replayed|fetched|mcp/.test(entry.url)),
+          ).toEqual([]);
+          expect(JSON.stringify(received)).not.toContain(values.token);
+        }
       }),
     ),
   );
@@ -446,10 +482,13 @@ layer(HostedLive, { excludeTestServices: true })("Credential hosts", (it) => {
       context,
       Effect.gen(function* () {
         // Queries of an app with a database run in its data facet, which has its own outbound.
-        const { upstream, values } = yield* sealedApp(true);
-        const received = yield* upstream.received;
-        expect(received.filter((entry) => entry.url.includes("/undeclared"))).toEqual([]);
-        expect(JSON.stringify(received)).not.toContain(values.token);
+        const hosts = yield* refusalHosts;
+        const { values } = yield* sealedApp(true, hosts);
+        if (hosts.received !== null) {
+          const received = yield* hosts.received;
+          expect(received.filter((entry) => /undeclared|fetched/.test(entry.url))).toEqual([]);
+          expect(JSON.stringify(received)).not.toContain(values.token);
+        }
       }),
     ),
   );

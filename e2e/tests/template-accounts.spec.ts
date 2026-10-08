@@ -2,12 +2,7 @@
 import { expect, layer } from "@effect/vitest";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { Effect, Layer, Schema } from "effect";
-import {
-  HttpRouter,
-  HttpServer,
-  HttpServerRequest,
-  HttpServerResponse,
-} from "effect/unstable/http";
+import { HttpRouter, HttpServer, HttpServerRequest, HttpServerResponse } from "effect/http";
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { Actors } from "../support/actors.ts";
@@ -15,6 +10,8 @@ import { Api, body } from "../support/api.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { App, Resource } from "../support/contracts.ts";
 import { authoredAppFiles } from "../support/authored-templates.ts";
+import { strictTypeProblems } from "../support/apps-package.ts";
+import { withApps } from "../support/apps-release.ts";
 import { McpClient } from "../support/mcp-client.ts";
 import { outputContractProblems } from "../support/output-contract.ts";
 import { templateUpstream } from "../support/template-upstream.ts";
@@ -125,6 +122,84 @@ const treeUpstream = Effect.gen(function* () {
   if (!("port" in server.address)) return yield* Effect.die("Fixture must listen on TCP");
   return `http://127.0.0.1:${server.address.port}`;
 });
+
+/**
+ * One app with both `accountRouter` callback forms integrations.md shows: a synchronous callback
+ * returning `liveOpenapiRouter`, and a router of hand-written queries and mutations whose handlers
+ * take `(_ctx, input)`. No casts, so it type-checks only if the framework's types accept them.
+ */
+const routedAppFiles = (origin: string) => [
+  {
+    path: "index.ts",
+    content: `import { accountRouter, defineApp, defineProvider, mutation, object, query, router, secrets, string } from "apps";
+import { liveOpenapiRouter } from "apps/openapi";
+
+const service = defineProvider({
+  name: "Routed accounts",
+  auth: { apiKey: secrets({ label: "API key", fields: object({ token: string({ minLength: 1 }) }) }) },
+});
+
+export default defineApp({ accounts: { service: service.many() } }, async ({ accounts, cache, fetch, signal }) => ({
+  tools: router({
+    own: await accountRouter(
+      accounts.service,
+      (account) =>
+        router({
+          whoami: query({ input: object({}) }, async () => account.id),
+          echo: mutation({ input: object({ text: string() }) }, async (_ctx, input) => input.text),
+        }),
+      { signal },
+    ),
+    api: await accountRouter(
+      accounts.service,
+      (account) =>
+        liveOpenapiRouter({
+          source: { url: ${JSON.stringify(`${origin}/openapi.json`)} },
+          allowedOrigin: ${JSON.stringify(origin)},
+          baseUrl: ${JSON.stringify(origin)},
+          securitySchemes: { bearer: { type: "http", scheme: "bearer" } },
+          methods: { apiKey: [{ scheme: "bearer", field: "token", part: "value", prefix: "" }] },
+          oauth: [],
+          cache,
+          fetch,
+          signal,
+          account,
+        }),
+      { signal },
+    ),
+  }),
+}));
+`,
+  },
+  {
+    path: "package.json",
+    content: JSON.stringify({
+      name: "routed-app",
+      private: true,
+      type: "module",
+      dependencies: withApps(),
+    }),
+  },
+];
+
+/** An account router whose handler needs a GitHub account the app does not declare. */
+const undeclaredAccountFiles = [
+  {
+    path: "index.ts",
+    content: `import { accountRouter, defineApp, defineProvider, object, query, router, secrets, string, type QueryContext } from "apps";
+const service = defineProvider({ name: "Service", auth: { apiKey: secrets({ label: "API key", fields: object({ token: string() }) }) } });
+const github = defineProvider({ name: "GitHub", auth: { token: secrets({ label: "Token", fields: object({ token: string() }) }) } });
+const repo = query({ input: object({}) }, async (ctx: QueryContext<{ accounts: { github: typeof github } }>) => ctx.accounts.github.id);
+export default defineApp({ accounts: { service: service.many() } }, async ({ accounts, signal }) => ({
+  tools: await accountRouter(accounts.service, () => router({ repo }), { signal }),
+}));
+`,
+  },
+  {
+    path: "package.json",
+    content: JSON.stringify({ type: "module", dependencies: withApps() }),
+  },
+];
 
 layer(HostedLive, { excludeTestServices: true })("Template accounts", (it) => {
   it.effect(scenarios.templateAccounts.title, (context) =>
@@ -381,8 +456,112 @@ return { items: found.items, results };`,
         expect(incomplete.status, JSON.stringify(incomplete.body)).toBe(502);
         const rejected = yield* body(OutputRejected, incomplete);
         expect(rejected.failure.message).toContain(
-          'Missing key\n  at ["structuredContent"]["child"]["name"]',
+          'Missing key. Expected string\n  at ["structuredContent"]["child"]["name"]',
         );
+      }),
+    ),
+  );
+  it.effect(scenarios.templateAccountsRouterForms.title, (context) =>
+    withHostedCase(
+      context,
+      Effect.gen(function* () {
+        const api = yield* Api,
+          actors = yield* Actors,
+          origin = yield* templateUpstream;
+        const files = routedAppFiles(origin);
+        // deploy.md's local check, with the package this run deploys against.
+        expect(yield* strictTypeProblems(files)).toEqual([]);
+        // The routed handlers keep their context, so defineApp sees the missing account.
+        expect(yield* strictTypeProblems(undeclaredAccountFiles)).toEqual([
+          {
+            file: "index.ts",
+            line: 5,
+            code: 2345,
+            message: expect.stringContaining(
+              "Property 'github' is missing in type '{ readonly service: readonly { readonly id: string & Brand<\"acc\">;",
+            ),
+          },
+        ]);
+        const prefix = `/api/organizations/${actors.organization.id}`;
+        const response = yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
+          name: `Routed accounts ${randomUUID().slice(0, 8)}`,
+          files,
+        });
+        expect(response.status, JSON.stringify(response.body)).toBe(200);
+        const path = `${prefix}/apps/${(yield* body(App, response)).id}`;
+        const accounts: string[] = [];
+        let profile = yield* body(
+          Profile,
+          yield* api.request(actors.owner, "POST", `${path}/profiles`, {
+            accounts: { service: [] },
+            idempotencyKey: randomUUID(),
+          }),
+        );
+        yield* Effect.addFinalizer(() =>
+          Effect.gen(function* () {
+            yield* api.request(actors.owner, "DELETE", `${path}/profiles/${profile.id}`);
+            yield* api.request(actors.owner, "DELETE", path);
+            for (const id of accounts)
+              yield* api.request(actors.owner, "DELETE", `${prefix}/accounts/${id}`);
+          }).pipe(Effect.orDie),
+        );
+        for (const label of ["work", "personal"]) {
+          const connection = yield* body(
+            Resource,
+            yield* api.request(actors.owner, "POST", `${path}/connections`, {
+              requirement: "service",
+              profile: profile.id,
+            }),
+          );
+          const saved = yield* api.request(
+            actors.owner,
+            "POST",
+            `${prefix}/connections/${connection.id}/submit`,
+            { method: "apiKey", label, fields: { token: `synthetic-${label}` } },
+          );
+          expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+          accounts.push((yield* body(Resource, saved)).id);
+        }
+        profile = yield* body(
+          Profile,
+          yield* api.request(actors.owner, "GET", `${path}/profiles/${profile.id}`),
+        );
+        const tools = yield* api.request(
+          actors.owner,
+          "GET",
+          `${path}/tools?profile=${profile.id}`,
+        );
+        expect(tools.status, JSON.stringify(tools.body)).toBe(200);
+        expect(
+          (yield* body(Tools, tools)).items.map((item) => item.name).toSorted(),
+          JSON.stringify(tools.body),
+        ).toEqual(["api.identity.getIdentity", "own.echo", "own.whoami"]);
+        const call = (
+          tool: string,
+          kind: "query" | "mutation",
+          accountId: string,
+          input: unknown,
+        ) =>
+          api.request(actors.owner, "POST", `${path}/tools/call`, {
+            profile: profile.id,
+            tool,
+            kind,
+            input: { accountId, input },
+          });
+        // Each call reaches the selected account's own router.
+        for (const [index, label] of ["work", "personal"].entries()) {
+          const id = accounts[index];
+          if (id === undefined) return yield* Effect.die("Account fixture missing");
+          const whoami = yield* call("own.whoami", "query", id, {});
+          expect(whoami.status, JSON.stringify(whoami.body)).toBe(200);
+          expect(whoami.body).toBe(id);
+          const echo = yield* call("own.echo", "mutation", id, { text: label });
+          expect(echo.status, JSON.stringify(echo.body)).toBe(200);
+          expect(echo.body).toBe(label);
+          const identity = yield* call("api.identity.getIdentity", "query", id, {});
+          expect(identity.status, JSON.stringify(identity.body)).toBe(200);
+          expect(identity.body).toEqual({ account: label });
+        }
       }),
     ),
   );

@@ -22,13 +22,17 @@ const covers = (hosts: ReadonlyArray<string>, hostname: string) =>
     return label.length > 0 && !label.includes(".");
   });
 
-/** Fail when a certificate that can serve the apex does not cover every proxied host. */
-export const productZoneCertificateCoverage = (zoneId: string) =>
+/**
+ * Fail when a certificate that can serve the apex does not cover every proxied host: those in the
+ * zone now and the `declared` hosts a deploy is about to add.
+ */
+export const productZoneCertificateCoverage = (zoneId: string, declared: ReadonlyArray<string>) =>
   Effect.gen(function* () {
-    const proxied = yield* listRecords.items({ zoneId, proxied: true }).pipe(
+    const existing = yield* listRecords.items({ zoneId, proxied: true }).pipe(
       Stream.map((record) => record.name),
       Stream.runCollect,
     );
+    const proxied = [...existing, ...declared];
     const packs = yield* listCertificatePacks.items({ zoneId, status: "all" }).pipe(
       Stream.filter((pack) => pack.hosts.includes(productZone)),
       Stream.runCollect,

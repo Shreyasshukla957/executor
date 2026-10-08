@@ -95,6 +95,7 @@ export const SkillDefinitionInvalid = ApiError.define({
     ]),
   },
   message: ({ file, reason }) => skillDefinitionFailures[reason](file),
+  recorded: ({ reason }) => `The app's skill definition is invalid (${reason})`,
 });
 export type SkillDefinitionInvalid = typeof SkillDefinitionInvalid.Type;
 
@@ -104,12 +105,16 @@ export const AppSkills = Schema.Array(AppSkillSource).check(
 );
 /** Short display name for a skill source, such as "GitLab" or an index host name. */
 export const SkillServiceName = Schema.String.check(
-  Schema.isPattern(/^[A-Za-z0-9](?:[A-Za-z0-9 .-]{0,98}[A-Za-z0-9])?$/),
+  Schema.isPattern(/^[A-Za-z0-9](?:[A-Za-z0-9 .-]{0,98}[A-Za-z0-9])?$/u),
 );
 /**
  * A skill loader failure shown to people. `message` is the explanation they read; write it for
  * them and never include URLs, tokens or response bodies. `reason` selects the title and whether
  * a retry can help. Custom loaders throw this error to get the same presentation as built-ins.
+ * With `source`, `missing` names what the service's answer points to as missing: the `repository`,
+ * or the branch or tag (`ref`). It may be missing, or not readable with the request's credentials.
+ * Without it, the source's settings or the paths it lists are not valid.
+ * These fields choose the explanation; they never show that the failure lies outside Executor.
  */
 export class SkillLoadFailed extends Schema.TaggedError<SkillLoadFailed>()("SkillLoadFailed", {
   reason: Schema.Literals([
@@ -124,6 +129,7 @@ export class SkillLoadFailed extends Schema.TaggedError<SkillLoadFailed>()("Skil
   // Error instances read an omitted message as "", so an empty message means none was given.
   message: Schema.optional(Schema.String.check(Schema.isMaxLength(500))),
   status: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 100, maximum: 599 }))),
+  missing: Schema.optional(Schema.Literals(["repository", "ref"])),
 }) {}
 /** Bounds shared by skill loaders across all app hosts. */
 export const skillLoadLimits = {
@@ -131,6 +137,8 @@ export const skillLoadLimits = {
   fileBytes: 2_000_000,
   totalBytes: 20_000_000,
   concurrency: 8,
+  /** The request that checks whether a kept catalog's publication changed. */
+  checkMillis: 5_000,
 } as const;
 /** Invocation-owned transport and cancellation, supplied by the app context. */
 export interface SkillTransport {
@@ -142,14 +150,19 @@ export interface SkillReaderOptions extends SkillTransport {
   readonly service: string;
 }
 /**
- * Catalog reuse shared by remote skill loaders, with the same policy as MCP tool catalogs. Pass
- * `ctx.cache` to keep the loaded catalog; without it every read fetches the source again.
+ * Catalog reuse shared by remote skill loaders. Pass `ctx.cache` to keep the loaded catalog;
+ * without it every read fetches the source again. Unlike an MCP tool catalog, a skill catalog
+ * past `freshFor` is not served while it refreshes: the read first asks the source whether its
+ * publication changed, so agents never read skills that a refresh replaces moments later.
  */
 export interface SkillCacheOptions {
   readonly cache?: import("./cache.ts").AppCache;
-  /** Reuse the catalog for this duration. Defaults to five minutes. */
+  /** Reuse the catalog without asking the source for this duration. Defaults to five minutes. */
   readonly freshFor?: import("effect").Duration.Input;
-  /** Serve the retained catalog while refreshing. Defaults to one day. */
+  /**
+   * Keep the catalog this long after `freshFor`. A read then confirms it with one request and
+   * loads the files again only when the publication changed. Defaults to one day.
+   */
   readonly staleFor?: import("effect").Duration.Input;
 }
 /**
@@ -166,7 +179,7 @@ export type GitHubSkillsAccount = import("./cache.ts").AccountCredential<{
 }>;
 /**
  * A GitHub repository and an optional immutable commit, tag or branch. With a cache, a branch or
- * tag is resolved again when the catalog refreshes, and each commit's file list is kept.
+ * tag is resolved again once the catalog is past `freshFor`, and each commit's file list is kept.
  */
 export type GitHubSkillsOptions = SkillTransport &
   SkillCacheOptions &

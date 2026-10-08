@@ -96,7 +96,8 @@ export default defineApp({accounts:{}}, {tools: router({
                 operationName: "runtime.cloud.build",
                 tags: expect.objectContaining({
                   "build.stage": "compile",
-                  "build.cause": expect.stringContaining("Worker exceeded memory limit"),
+                  // The failure's tag; its message can quote the deployer's source.
+                  "build.error": "BuildMemoryExceeded",
                 }),
               }),
             }),
@@ -302,7 +303,8 @@ export default defineApp({accounts:{}}, {tools: router({
                   operationName: "runtime.cloud.build",
                   tags: expect.objectContaining({
                     "build.stage": "compile",
-                    "build.cause": expect.stringContaining("The compiler did not answer"),
+                    // The deadline is the compiler span's; the build records the failure's tag.
+                    "build.error": "RuntimeBuildFailed",
                   }),
                 }),
               }),

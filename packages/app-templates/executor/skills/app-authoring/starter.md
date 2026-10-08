@@ -1,7 +1,7 @@
 ## Start from a checked example
 
 For a small UI with stored records, such as a todo list or inbox, adapt the
-`live-inbox` example returned by `framework.describe`. It includes a database,
+`live-inbox` example returned by `framework.describe`. It includes SQL migrations,
 typed query and mutation, shared schemas, React UI, live subscription,
 optimistic insertion, HTML, styles and package dependencies. Reuse those files
 instead of reconstructing the framework setup. Choose another approach when

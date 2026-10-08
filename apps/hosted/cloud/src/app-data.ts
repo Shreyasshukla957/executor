@@ -21,7 +21,8 @@ import { cloudOrigin } from "./infrastructure/stage.ts";
 import { loadCloudBuildRecord, loadCloudFramework } from "./implementation/build-storage.ts";
 import { cachedRuntimeBuilds } from "./implementation/runtime-build-cache.ts";
 import { appCredentialOutbound, appOutboundBindings } from "./infrastructure/app-outbound.ts";
-import { HttpServerResponse } from "effect/unstable/http";
+import { sentryBindings } from "./infrastructure/sentry.ts";
+import { HttpServerResponse } from "effect/http";
 import {
   cloudObservability,
   cloudTelemetry,
@@ -66,9 +67,12 @@ const AppDataSupervisorLive = AppDataSupervisor.make(
           return response;
         }),
         alarm: () => supervisor.recover.pipe(Effect.orDie),
-        webSocketMessage: () => Effect.void,
-        webSocketClose: (socket: Cloudflare.WebSocket) => socket.close(1000, "Closed"),
-        webSocketError: (socket: Cloudflare.WebSocket) => socket.close(1011, "Reconnect"),
+        // Socket events can wake a hibernated supervisor too, so they count as calls it received.
+        webSocketMessage: () => supervisor.enter(Effect.void),
+        webSocketClose: (socket: Cloudflare.WebSocket) =>
+          supervisor.enter(socket.close(1000, "Closed")),
+        webSocketError: (socket: Cloudflare.WebSocket) =>
+          supervisor.enter(socket.close(1011, "Reconnect")),
       };
     });
   }),
@@ -86,6 +90,8 @@ export default AppData.make(
         ...(yield* telemetryBindings),
         ...(yield* appOutboundBindings),
         [runnerReadsBuilds.name]: runnerReadsBuilds.value,
+        // App requests Executor's network could not send are reported.
+        ...(yield* sentryBindings).env,
       },
     };
   }),

@@ -38,20 +38,15 @@ import { recordRequestRejections, requestTiming } from "@executor-js/telemetry/h
 import { appAddresses, hostedAppUi } from "@executor-js/hosted-server/app-ui";
 import { appSignInCallbackPath } from "apps/ui/auth";
 import { AppUiApi } from "apps/ui/contracts";
-import { HttpApiBuilder } from "effect/unstable/httpapi";
+import { HttpApiBuilder } from "effect/http-api";
 import { appUiBaseUrl } from "../contracts/config.ts";
 import { type HostEgress } from "@executor-js/utils/url-policy";
 import { Config, Effect, Layer, Option } from "effect";
-import {
-  HttpRouter,
-  HttpServer,
-  HttpServerRequest,
-  HttpServerResponse,
-} from "effect/unstable/http";
+import { HttpRouter, HttpServer, HttpServerRequest, HttpServerResponse } from "effect/http";
 import { withHostPipeline } from "@executor-js/dashboard-start/in-process";
 import { selfHostApi } from "./api.ts";
 import { selfHostMcp } from "../mcp.ts";
-import { selfHostAuth } from "../auth.ts";
+import { SelfHostAuth } from "../auth.ts";
 import { selfHostAnalytics } from "./product-analytics.ts";
 
 import type { SourceFile } from "@executor-js/sdk/core";
@@ -67,7 +62,7 @@ export const selfHostRouteMap = <DashboardE, DashboardR>(options: {
 }) =>
   Effect.gen(function* () {
     const { skills, egress, executorServices, dashboard } = options;
-    const auth = yield* selfHostAuth;
+    const auth = yield* SelfHostAuth.pipe(Effect.provide(executorServices));
     const analytics = yield* selfHostAnalytics;
     /** Requests and background schedules record through this instance's sink unless it opted out. */
     const observed = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
@@ -106,8 +101,12 @@ export const selfHostRouteMap = <DashboardE, DashboardR>(options: {
       HttpRouter.provideRequest(localSourceFormatter),
       Layer.provide(appUi.dashboard),
       HttpRouter.provideRequest(auth.appSessions),
-      HttpRouter.provideRequest(catalogLive(document.document, egress, clientMetadata)),
+      HttpRouter.provideRequest(
+        catalogLive(document.document, egress, clientMetadata, auth.origin),
+      ),
       Layer.provide(hostedMiddlewareLive),
+      // Organization middleware reads the product's removal tombstones when it is built.
+      Layer.provide(executorServices),
       HttpRouter.provideRequest(executorServices),
       Layer.provide(auth.identity),
       Layer.provide(auth.apiIdentity),

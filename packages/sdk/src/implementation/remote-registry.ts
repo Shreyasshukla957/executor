@@ -6,7 +6,7 @@ import {
   HttpClientError,
   HttpClientRequest,
   type HttpClientResponse,
-} from "effect/unstable/http";
+} from "effect/http";
 import {
   Publication,
   PublicationSnapshot,

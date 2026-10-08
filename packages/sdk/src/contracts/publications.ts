@@ -1,6 +1,6 @@
 /** Publishing and catalog HTTP groups. Kept apart from the registry vocabulary, which the apps contract imports. */
 import { Schema } from "effect";
-import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi";
+import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/http-api";
 import { AppNotFound } from "./apps.ts";
 import {
   PackageName,

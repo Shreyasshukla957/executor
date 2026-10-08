@@ -21,17 +21,20 @@ const files = [
   },
   {
     path: "index.ts",
-    content: `import { defineApp, defineDatabase, table, query, mutation, object, string, router } from "apps";
-const database = defineDatabase({ repairs: table({ note: string() }) });
-export const status = query({ input: object({}), output: string() }, async ({ db }) => {
-  const repairs = await db.repairs.withIndex("by_creation").collect();
+    content: `import { defineApp, query, mutation, object, string, router } from "apps";
+export const status = query({ input: object({}), output: string() }, async ({ sql }) => {
+  const repairs = sql.exec("SELECT note FROM repairs").toArray();
   if (repairs.length === 0) throw new Error("Upstream is unavailable");
   return "Repaired";
 });
-export const repair = mutation({ input: object({}), output: string() }, async ({ db }) => {
-  await db.repairs.insert({ note: "repaired" }); return "ok";
+export const repair = mutation({ input: object({}), output: string() }, async ({ sql }) => {
+  sql.exec("INSERT INTO repairs (note) VALUES ('repaired')"); return "ok";
 });
-export default defineApp({ accounts: {}, database }, { tools: router({ status, repair }) });`,
+export default defineApp({ accounts: {} }, { tools: router({ status, repair }) });`,
+  },
+  {
+    path: "migrations/0001_repairs.sql",
+    content: "CREATE TABLE repairs (note TEXT NOT NULL);\n",
   },
   {
     path: "ui/index.html",

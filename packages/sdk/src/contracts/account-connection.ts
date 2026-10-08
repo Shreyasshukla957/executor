@@ -3,7 +3,7 @@ import { ProfileId } from "./shared.ts";
 import { ProfileErrors } from "./profiles.ts";
 /** Pending account setup shared by browser forms, OAuth, and other SDK consumers. */
 import { Schema } from "effect";
-import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi";
+import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/http-api";
 import { Account, AccountNotFound, AccountFieldsInput, AccountFieldsInvalid } from "./account.ts";
 import { AppNotFound, AccountSelectionInvalid } from "./apps.ts";
 import { AuthMethodName, AuthMethodInvalid, Provider, ProviderNotFound } from "./provider.ts";
@@ -12,7 +12,6 @@ import {
   AppId,
   AccountId,
   OwnerId,
-  ProviderId,
   HttpUrl,
   StorageError,
   CredentialsError,
@@ -71,21 +70,15 @@ export const AccountConnection = Schema.Struct({
   state: AccountConnectionState,
 });
 export type AccountConnection = typeof AccountConnection.Type;
-/** A reconnect binds the existing account, provider and owner at creation. */
-export const CreateAccountConnection = Schema.Union([
-  Schema.Struct({
-    owner: OwnerId,
-    provider: ProviderId,
-    account: Schema.optional(AccountId),
-    target: Schema.optional(Schema.Never),
-  }),
-  Schema.Struct({
-    owner: OwnerId,
-    target: AccountConnectionTarget,
-    account: Schema.optional(AccountId),
-    provider: Schema.optional(Schema.Never),
-  }),
-]);
+/**
+ * Every connection is for an app requirement, which supplies its provider. `account` reconnects
+ * that existing account instead of adding one; its owner and provider must match.
+ */
+export const CreateAccountConnection = Schema.Struct({
+  owner: OwnerId,
+  target: AccountConnectionTarget,
+  account: Schema.optional(AccountId),
+});
 /** Owner filters remain data predicates; the host must authorize each call. */
 export const GetAccountConnection = Schema.Struct({
   connection: AccountConnectionId,
@@ -213,7 +206,7 @@ export const AccountConnectionsGroup = HttpApiGroup.make("accountConnections")
       error: [...errors, AccountConnectionTargetChanged],
     }).annotate(
       OpenApi.Description,
-      "Check a connection request: pending, completed with account metadata, cancelled or expired. A pending or expired request whose latest OAuth sign-in failed has state.failure: the error the user saw, with its reason, cause (stage and HTTP status) and serviceError (the service's own error and description, or the bounded text of another error body). A rate_limited failure has retryAfter when the service said when to try again. Credentials are never returned. Do not busy-poll; check after the user finishes. Completed targeted requests have already selected the account for the named profile. Provider-only requests save standalone accounts. A pending targeted request whose app no longer requires its provider fails with AccountConnectionTargetChanged; request a new connection.",
+      "Check a connection request: pending, completed with account metadata, cancelled or expired. A pending or expired request whose latest OAuth sign-in failed has state.failure: the error the user saw, with its reason, cause (stage and HTTP status) and serviceError (the service's own error and description, or the bounded text of another error body). A rate_limited failure has retryAfter when the service said when to try again. Credentials are never returned. Do not busy-poll; check after the user finishes. Completed requests have already selected the account for the named profile. A pending request whose app no longer requires its provider fails with AccountConnectionTargetChanged; request a new connection.",
     ),
   )
   .add(

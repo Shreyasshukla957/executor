@@ -44,8 +44,8 @@ import { appAsset, appDocument, appWatchScript } from "apps/ui/serving";
 import { receiveBrowserTelemetry } from "@executor-js/telemetry/http";
 import { currentTraceContext } from "@executor-js/telemetry";
 import { Clock, Context, Effect, Option, Redacted, Schema, Stream } from "effect";
-import { HttpApiBuilder } from "effect/unstable/httpapi";
-import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
+import { HttpApiBuilder } from "effect/http-api";
+import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 import {
   AppUiUnavailable,
   HostedAppRuntime,

@@ -1,8 +1,8 @@
 /** Execute tool schemas, limits and discovery instructions. */
 import { CodeMode } from "@opencode-ai/codemode";
 import { Schema } from "effect";
-import { HttpServerRequest } from "effect/unstable/http";
-import { McpSchema, Tool as McpTool } from "effect/unstable/ai";
+import { HttpServerRequest } from "effect/http";
+import { McpSchema, Tool as McpTool } from "effect/ai";
 import { ApiErrorResponse, ElicitationResponse } from "apps/contracts";
 import { UserFacingError } from "@executor-js/utils/user-facing-error";
 import { InteractionId, PendingInteraction, ElicitationResponseInvalid } from "./interactions.ts";
@@ -67,6 +67,7 @@ export const AppDiscoveryTimedOut = UserFacingError.define({
   tag: "AppDiscoveryTimedOut",
   status: 504,
   fields: { app: Schema.String, elapsedMs: Schema.Number },
+  recorded: ({ elapsedMs }) => `Listing the app's tools timed out after ${elapsedMs}ms`,
   presentation: ({ elapsedMs }) => ({
     title: "App tools did not load in time",
     description: `Listing this app's tools timed out after ${elapsedMs}ms in this execution, so its tools are unavailable here. A listing that was still running continues in the background, so a slow app usually loads in a later execution. Other apps are not affected.`,
@@ -273,7 +274,7 @@ export const searchPageBytes = (limits: McpLimits) => Math.floor(limits.maxOutpu
 /** Execute programs over the host-provided app catalog. */
 export const ExecuteTool = McpTool.make("execute", {
   description:
-    "Run a JavaScript program over Executor apps; find their tools with tools.search inside it and full signatures with tools.search.describe({ paths }). First read the Executor app's executor skill with the skills tool. Never ask the user for secrets in chat; accounts connect through Executor's secure links. If approval-required or input-required is returned, show it to the user and call resume with their answer; never run the program's source again. External effects are not rolled back on error or cancellation. If Executor itself blocks you, send feedback with the Executor app's feedback.submit tool.",
+    "Run a JavaScript program over Executor apps; find their tools with tools.search inside it and full signatures with tools.search.describe({ paths }). First read the Executor app's executor skill with the skills tool. Never ask the user for secrets in chat; accounts connect through Executor's secure links. If approval-required or input-required is returned, show it to the user and call resume with their answer; never run the program's source again. External effects are not rolled back on error or cancellation. Send feedback with the Executor app's feedback.submit tool when Executor gets in your way or something works especially well.",
   dependencies: [HttpServerRequest.HttpServerRequest],
   parameters: ExecuteInput,
   success: McpExecutionResult,
@@ -283,7 +284,7 @@ export const ExecuteTool = McpTool.make("execute", {
 /** Native-mode execution obtains policy decisions through server-initiated MCP requests. */
 export const NativeExecuteTool = McpTool.make("execute", {
   description:
-    "Run a JavaScript program over Executor apps; find their tools with tools.search inside it and full signatures with tools.search.describe({ paths }). First read the Executor app's executor skill with the skills tool. Never ask the user for secrets in chat; accounts connect through Executor's secure links. Approvals and tool input open the MCP client's own prompt, and execute continues the same program. Earlier tool calls may already have completed and are not rolled back; never rerun the program automatically after an error. If Executor itself blocks you, send feedback with the Executor app's feedback.submit tool.",
+    "Run a JavaScript program over Executor apps; find their tools with tools.search inside it and full signatures with tools.search.describe({ paths }). First read the Executor app's executor skill with the skills tool. Never ask the user for secrets in chat; accounts connect through Executor's secure links. Approvals and tool input open the MCP client's own prompt, and execute continues the same program. Earlier tool calls may already have completed and are not rolled back; never rerun the program automatically after an error. Send feedback with the Executor app's feedback.submit tool when Executor gets in your way or something works especially well.",
   dependencies: [HttpServerRequest.HttpServerRequest, McpSchema.McpRequestContext],
   parameters: ExecuteInput,
   success: McpExecutionResult,

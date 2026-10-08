@@ -1,7 +1,7 @@
 /** Built marketing files for local development. The composition root owns their routes. */
 import { experimentHomepage, type HeroFlagEvaluator } from "./hero-experiment.ts";
 import { Effect, FileSystem, Path } from "effect";
-import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
+import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 
 /** Discover public files once; never resolve an arbitrary browser path directly on disk. */
 export const marketingFiles = (

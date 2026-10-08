@@ -151,7 +151,11 @@ export type McpTools = Readonly<Record<string, McpTool>>;
  * status a `request` failure was redirected or refused with. Without one, a `request` failure in
  * the `transport` phase never reached the server; in another phase it may be a JSON-RPC error the
  * server answered with. `upstream` is that JSON-RPC error, bounded and with account secrets
- * replaced. A response that is not MCP is `invalid_response`.
+ * replaced. A response that is not MCP is `invalid_response`. `session` is set when the refused
+ * request carried the session ID the server issued at initialization.
+ *
+ * These fields describe the failure for whoever reads it. App code can set any of them, so they
+ * never show that the failure lies outside Executor.
  */
 export class McpError extends Schema.TaggedError<McpError>()("McpError", {
   phase: Schema.Literals(["connect", "discover", "call", "schema", "transport"]),
@@ -164,6 +168,7 @@ export class McpError extends Schema.TaggedError<McpError>()("McpError", {
   ]),
   status: Schema.optional(Schema.Number),
   upstream: Schema.optional(UpstreamError),
+  session: Schema.optional(Schema.Literal(true)),
 }) {}
 
 /**

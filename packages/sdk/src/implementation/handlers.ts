@@ -1,6 +1,6 @@
 /** HTTP adapters call the same native operations as the in-process SDK. */
 import { Layer } from "effect";
-import { HttpApiBuilder } from "effect/unstable/httpapi";
+import { HttpApiBuilder } from "effect/http-api";
 import { ExecutorApi } from "../contracts/http.ts";
 import type { Executor } from "../contracts/executor.ts";
 

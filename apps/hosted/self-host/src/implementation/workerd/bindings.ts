@@ -1,6 +1,6 @@
 /** Host bindings exist only on the trusted product Worker, never on authored app isolates. */
 import { Effect, Option, Schema } from "effect";
-import { FetchHttpClient, HttpClient, HttpServerResponse } from "effect/unstable/http";
+import { FetchHttpClient, HttpClient, HttpServerResponse } from "effect/http";
 import { dashboardRoutes, fileHeaders } from "../web.ts";
 import { BlobKey, BlobStoreError, SourceError, type BlobStorage } from "@executor-js/sdk/core";
 import { gitRepositories } from "@executor-js/app-source/host";

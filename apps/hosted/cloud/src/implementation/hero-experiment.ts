@@ -6,7 +6,7 @@ import {
   HttpClientRequest,
   HttpServerRequest,
   HttpServerResponse,
-} from "effect/unstable/http";
+} from "effect/http";
 import {
   heroCookieName,
   heroVisitorCookie,
@@ -64,6 +64,8 @@ export type HeroFlagEvaluator = (visitor: string) => Effect.Effect<HeroFlagValue
 export const experimentHomepage = <E, R>(
   document: (entry: string) => Effect.Effect<HttpServerResponse.HttpServerResponse, E, R>,
   evaluate: HeroFlagEvaluator,
+  /** Shares the experiment cookies with the browser origin, where sign-up reads them. */
+  cookieDomain?: string,
 ) =>
   Effect.gen(function* () {
     const request = yield* HttpServerRequest.HttpServerRequest;
@@ -74,6 +76,7 @@ export const experimentHomepage = <E, R>(
       sameSite: "lax",
       secure: url.protocol === "https:",
       httpOnly: false,
+      ...(cookieDomain === undefined ? {} : { domain: cookieDomain }),
     } as const;
     const preview = heroVariants.find((variant) => variant.id === url.searchParams.get("hero"));
     if (url.searchParams.has("hero")) {
@@ -115,21 +118,25 @@ export const experimentHomepage = <E, R>(
   });
 
 /** Prevent a later user on a shared browser from inheriting an identified anonymous ID. */
-export const clearHeroIdentityOnSignOut = (response: HttpServerResponse.HttpServerResponse) =>
-  Effect.gen(function* () {
-    const request = yield* HttpServerRequest.HttpServerRequest;
-    if (
-      request.method !== "POST" ||
-      new URL(request.url, "http://localhost").pathname !== "/api/auth/sign-out" ||
-      response.status < 200 ||
-      response.status >= 300
-    )
-      return response;
-    let cleared = response;
-    for (const name of [heroVisitorCookie, heroCookieName, heroPreviewCookie])
-      cleared = yield* cleared.pipe(
-        HttpServerResponse.expireCookie(name, { path: "/" }),
-        Effect.orDie,
-      );
-    return cleared;
-  });
+export const clearHeroIdentityOnSignOut =
+  (cookieDomain?: string) => (response: HttpServerResponse.HttpServerResponse) =>
+    Effect.gen(function* () {
+      const request = yield* HttpServerRequest.HttpServerRequest;
+      if (
+        request.method !== "POST" ||
+        new URL(request.url, "http://localhost").pathname !== "/api/auth/sign-out" ||
+        response.status < 200 ||
+        response.status >= 300
+      )
+        return response;
+      let cleared = response;
+      for (const name of [heroVisitorCookie, heroCookieName, heroPreviewCookie])
+        cleared = yield* cleared.pipe(
+          HttpServerResponse.expireCookie(name, {
+            path: "/",
+            ...(cookieDomain === undefined ? {} : { domain: cookieDomain }),
+          }),
+          Effect.orDie,
+        );
+      return cleared;
+    });

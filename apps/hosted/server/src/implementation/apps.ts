@@ -10,7 +10,7 @@ import {
 } from "@executor-js/sdk/core";
 import { Effect } from "effect";
 import { CurrentOrganizationNamespace } from "../contracts/organization.ts";
-import { HttpApiBuilder } from "effect/unstable/httpapi";
+import { HttpApiBuilder } from "effect/http-api";
 import { HostedApi } from "../contracts/api.ts";
 import type { DeployApp, InstallApp } from "../contracts/apps.ts";
 import { HostedCatalog } from "../contracts/catalog.ts";

@@ -3,6 +3,7 @@ import { Cause, Option, Schema } from "effect";
 import { ProviderErrorNotice } from "@executor-js/ui/dashboard/provider-error-notice";
 import { CompactFailure, ErrorNotice } from "@executor-js/ui/dashboard/error-notice";
 import { UserFacingError } from "@executor-js/utils/user-facing-error";
+import { ConnectionFailed, hasConnectionFailure } from "@executor-js/utils/connection-failure";
 import { parseAppSearch } from "../../contracts/navigation.ts";
 import type { ReactNode } from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
@@ -74,6 +75,16 @@ export function HostedFailure({ cause, retry, retrying, layout }: FailureProps<H
     return (
       <ErrorNotice
         error={error.value}
+        context="While completing this action in Executor."
+        retry={retry}
+        retrying={retrying}
+        layout={layout}
+      />
+    );
+  if (hasConnectionFailure(cause))
+    return (
+      <ErrorNotice
+        error={new ConnectionFailed()}
         context="While completing this action in Executor."
         retry={retry}
         retrying={retrying}

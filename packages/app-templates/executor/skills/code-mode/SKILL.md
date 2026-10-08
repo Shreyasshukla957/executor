@@ -95,7 +95,8 @@ arguments or source, and never search their files for tokens. The Executor app
 - Local: `accountConnect.issue`, then `accountConnections.get` to check it.
 - Hosted: `accounts.connect`, then `accounts.connection` to check it. Hosted
   management calls need the organization: call `context.get({})` first and pass
-  its `organization` as `path.organization`.
+  its `organization` as `path.organization`. For an OAuth sign-in,
+  `accounts.oauthSetup` lists the scopes it will request; tell the user.
 
 Search for these tools and read their input types first. Give the user the
 returned URL. After they finish, check the connection in a new execution, then
@@ -162,5 +163,5 @@ Inside a program, a caught tool error's `message` is the same JSON as
 `status: "capacity-exceeded"` means the server is running too many programs.
 Wait briefly, then retry.
 
-If Executor itself blocks you, send feedback with the Executor app's
-`feedback.submit` tool; the `executor` skill says how.
+Send feedback with the Executor app's `feedback.submit` tool when Executor gets
+in your way or something works especially well; the `executor` skill says how.

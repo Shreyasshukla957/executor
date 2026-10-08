@@ -8,8 +8,8 @@
  */
 import { expect, layer } from "@effect/vitest";
 import { Duration, Effect, Schedule, Schema } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
-import { HttpClient } from "effect/unstable/http";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { HttpClient } from "effect/http";
 import { randomUUID } from "node:crypto";
 import { scenarios } from "../test-plan.ts";
 import { Actors } from "../support/actors.ts";
@@ -50,6 +50,24 @@ const ancestry = (spans: Spans, spanId: string) => {
   }
   return chain;
 };
+
+/**
+ * A trace, once the span `select` finds and its whole ancestry up to the trace's root have reached
+ * Motel. A parent ends after its children, so it leaves in the same export or a later one, and a
+ * refused export is sent again after later ones.
+ */
+const deliveredAncestry = (traceId: string, select: (span: Spans[number]["span"]) => boolean) =>
+  Telemetry.pipe(
+    Effect.flatMap((telemetry) => telemetry.query(traceId)),
+    Effect.flatMap((trace) => {
+      const found = trace.data.find(({ span }) => select(span));
+      const chain = found === undefined ? [] : ancestry(trace.data, found.span.spanId);
+      return chain.at(-1)?.parentSpanId === null
+        ? Effect.succeed({ trace: trace.data, chain })
+        : Effect.fail(new Error("The span or its ancestors have not all reached Motel"));
+    }),
+    Effect.retry({ schedule: Schedule.spaced("500 millis"), times: 60 }),
+  );
 
 const echoAppSource = `import { defineApp, query, object, string, router } from "apps";
 export default defineApp({ accounts: {} }, async () => ({ tools: router({
@@ -166,8 +184,10 @@ layer(HostedLive, { excludeTestServices: true })("Cloud database placement", (it
           ),
           Effect.retry({ schedule: Schedule.spaced("500 millis"), times: 60 }),
         );
-        const trace = yield* telemetry.query(job.traceId);
-        const chain = ancestry(trace.data, job.span.spanId);
+        const { trace, chain } = yield* deliveredAncestry(
+          job.traceId,
+          (span) => span.spanId === job.span.spanId,
+        );
         yield* evidence.json(
           "provisioning-job-ancestry.json",
           chain.map((span) => ({ name: span.operationName, tags: span.tags })),
@@ -185,10 +205,10 @@ layer(HostedLive, { excludeTestServices: true })("Cloud database placement", (it
         // The cron invocation itself opens no database connection.
         const triggerSpan = chain[trigger];
         if (triggerSpan === undefined) return yield* Effect.die("Missing dispatch span");
-        const outside = below(trace.data, (span) => span.spanId === triggerSpan.spanId).filter(
+        const outside = below(trace, (span) => span.spanId === triggerSpan.spanId).filter(
           ({ span }) =>
             span.operationName === "sql.connect" &&
-            !ancestry(trace.data, span.spanId).some(
+            !ancestry(trace, span.spanId).some(
               (parent) => parent.tags["url.path"] === "/api/internal/jobs/provisioning",
             ),
         );
@@ -258,8 +278,14 @@ return out;`,
               expect(completed.execution.value).toEqual(["0", "1", "2", "3", "4", "5"]);
               return (yield* evidence.requests).slice(seen).map((request) => request.traceId);
             });
-          // The session object's own spans, once its calls have reached Motel.
-          const sessionSpans = (traces: ReadonlyArray<string>, operations: number) =>
+          // The session object's own spans, once each one a check reads has reached Motel. A
+          // request's spans leave the object in several exports, one each second while it runs and
+          // one when it ends, and a refused export is sent again later, so they arrive in any order.
+          type Counts = Record<"operations" | "databases" | "connects" | "windows", number>;
+          const sessionSpans = (
+            traces: ReadonlyArray<string>,
+            ready: (counts: Counts) => boolean,
+          ) =>
             Effect.forEach(traces, (trace) => telemetry.query(trace)).pipe(
               Effect.map((results) =>
                 results.flatMap((result) =>
@@ -269,17 +295,24 @@ return out;`,
               Effect.flatMap((spans) => {
                 const count = (name: string) =>
                   spans.filter(({ span }) => span.operationName === name).length;
-                return count("mcp.backend.dispatch") < operations
-                  ? Effect.fail(new Error("The session's operations have not reached Motel"))
-                  : Effect.succeed({
-                      operations: count("mcp.backend.dispatch"),
-                      databases: count("runtime.cloud.database.initialize"),
-                      connects: count("sql.connect"),
-                      windows: count("database.object.open"),
+                const counts = {
+                  operations: count("mcp.backend.dispatch"),
+                  databases: count("runtime.cloud.database.initialize"),
+                  connects: count("sql.connect"),
+                  windows: count("database.object.open"),
+                };
+                return ready(counts)
+                  ? Effect.succeed({
+                      ...counts,
                       object: spans
                         .map(({ span }) => span.tags["executor.mcp.object_id"])
                         .find((id) => id !== undefined),
-                    });
+                    })
+                  : Effect.fail(
+                      new Error(
+                        `The session's spans have not reached Motel: ${JSON.stringify(counts)}`,
+                      ),
+                    );
               }),
               Effect.retry({ schedule: Schedule.spaced("500 millis"), times: 40 }),
             );
@@ -288,7 +321,7 @@ return out;`,
           yield* execute("Six more tool calls");
           const first = yield* sessionSpans(
             (yield* evidence.requests).slice(opened).map((request) => request.traceId),
-            12,
+            (counts) => counts.operations >= 12 && counts.databases >= 12 && counts.windows >= 1,
           );
           yield* evidence.json("first-window.json", first);
           expect(first.databases, "Each operation resolves its database").toBeGreaterThanOrEqual(
@@ -306,7 +339,7 @@ return out;`,
           expect(yield* objectConnections(owner, { terminate: true })).toBeGreaterThan(0);
           const dropped = yield* sessionSpans(
             yield* execute("Tool calls after a dropped connection"),
-            6,
+            (counts) => counts.operations >= 6 && counts.connects >= 1,
           );
           yield* evidence.json("after-drop.json", dropped);
           expect(dropped.windows).toBe(0);
@@ -315,7 +348,10 @@ return out;`,
           // Once the session has been idle, it holds no connection; the next call opens a window.
           yield* Effect.sleep(Duration.seconds(32));
           expect(yield* objectConnections(owner)).toBe(0);
-          const reopened = yield* sessionSpans(yield* execute("Tool calls after idling"), 6);
+          const reopened = yield* sessionSpans(
+            yield* execute("Tool calls after idling"),
+            (counts) => counts.operations >= 6 && counts.windows >= 1 && counts.connects >= 1,
+          );
           yield* evidence.json("after-idle.json", reopened);
           expect(reopened.windows).toBe(1);
           expect(reopened.connects).toBeGreaterThan(0);
@@ -478,7 +514,10 @@ return out;`,
             ),
             Effect.retry({ schedule: Schedule.spaced("500 millis"), times: 60 }),
           );
-          const chain = ancestry((yield* telemetry.query(wake.traceId)).data, wake.span.spanId);
+          const { chain } = yield* deliveredAncestry(
+            wake.traceId,
+            (span) => span.spanId === wake.span.spanId,
+          );
           yield* evidence.json(
             "schedule-wake-ancestry.json",
             chain.map((span) => ({ name: span.operationName, tags: span.tags })),
@@ -525,6 +564,11 @@ return out;`,
                   found.data.filter(({ span }) => span.operationName === operation),
                 ),
               );
+          // The dispatches of this app's runs, which leave in other exports than the runs.
+          const dispatching = (found: { readonly runs: Spans; readonly dispatches: Spans }) => {
+            const runTraces = new Set(found.runs.map((entry) => entry.traceId));
+            return found.dispatches.filter((entry) => runTraces.has(entry.traceId));
+          };
           const coordinator = yield* Effect.all({
             handovers: spans("schedule.handover"),
             retirements: spans("schedule.retire"),
@@ -532,7 +576,10 @@ return out;`,
             dispatches: spans("schedule.dispatch", { "executor.schedule.runner": "cloud" }),
           }).pipe(
             Effect.flatMap((found) =>
-              found.handovers.length === 0 || found.runs.length < 3
+              found.handovers.length === 0 ||
+              found.retirements.length === 0 ||
+              found.runs.length < 3 ||
+              dispatching(found).length === 0
                 ? Effect.fail(new Error("The coordinator's spans have not reached Motel"))
                 : Effect.succeed(found),
             ),
@@ -553,12 +600,9 @@ return out;`,
           expect(coordinator.handovers).toHaveLength(1);
           expect(coordinator.retirements.length).toBeGreaterThanOrEqual(1);
           // The coordinator dispatches as `cloud`, as the first one did, and records where it runs.
-          const runTraces = new Set(coordinator.runs.map((entry) => entry.traceId));
-          const dispatching = coordinator.dispatches.filter((entry) =>
-            runTraces.has(entry.traceId),
-          );
-          expect(dispatching.length).toBeGreaterThan(0);
-          for (const { span } of dispatching)
+          const runDispatches = dispatching(coordinator);
+          expect(runDispatches.length).toBeGreaterThan(0);
+          for (const { span } of runDispatches)
             expect(span.tags["cloudflare.colo"]).toMatch(/^(?:[A-Z]+|unknown)$/);
 
           // The retired coordinator keeps its alarm as a minute heartbeat, so a revert finds it armed.
@@ -613,23 +657,16 @@ return out;`,
           for (const { at, armed, pending } of kept)
             expect(armed).toBe(Math.min(pending ?? Infinity, at + 60_000));
           const forwarded = yield* Effect.forEach(fresh, ({ trace }) =>
-            telemetry.query(trace).pipe(
-              Effect.map(({ data }) => {
-                const wake = data.find(
-                  ({ span }) =>
-                    span.operationName === "schedule.wake" &&
-                    span.tags["executor.schedule.wake"] === "job",
-                );
-                return {
-                  cron: data.some(({ span }) => span.operationName === "faas.cron"),
-                  path: (wake === undefined ? [] : ancestry(data, wake.span.spanId)).map(
-                    (span) => ({
-                      name: span.operationName,
-                      status: span.status,
-                    }),
-                  ),
-                };
-              }),
+            deliveredAncestry(
+              trace,
+              (span) =>
+                span.operationName === "schedule.wake" &&
+                span.tags["executor.schedule.wake"] === "job",
+            ).pipe(
+              Effect.map(({ trace, chain }) => ({
+                cron: trace.some(({ span }) => span.operationName === "faas.cron"),
+                path: chain.map((span) => ({ name: span.operationName, status: span.status })),
+              })),
             ),
           );
           yield* evidence.json("heartbeats.json", forwarded);

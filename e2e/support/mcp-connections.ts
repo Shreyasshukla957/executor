@@ -1,11 +1,12 @@
 /** Scoped connection fixtures through public product routes and the standard OAuth endpoints. */
 import { expect } from "@effect/vitest";
 import { Effect, Redacted, Schema } from "effect";
-import { HttpClient, HttpClientRequest } from "effect/unstable/http";
+import { HttpClient, HttpClientRequest } from "effect/http";
 import { createHash, randomBytes } from "node:crypto";
 import { Api, body, type Session } from "./api.ts";
 import { Evidence } from "./evidence.ts";
 import { Target } from "./platform.ts";
+import { targetHosts } from "./role-hosts.ts";
 import { appsManifest } from "./apps-release.ts";
 
 const RunTarget = Schema.Union([
@@ -51,7 +52,8 @@ export const consentTo = (
     const api = yield* Api,
       target = yield* Target,
       http = yield* HttpClient.HttpClient;
-    const origin = target.metadata.origin;
+    // Authorization and consent run on the browser origin, Cloud's `app.` host.
+    const origin = targetHosts(target).browser;
     const redirect = "http://127.0.0.1:9/callback";
     const registered = yield* api.request(
       yield* api.session(),

@@ -3,11 +3,13 @@ import {
   AccountId,
   CurrentProfile,
   StorageError,
+  type Account,
+  type Profile,
   type ResourceLifecycle,
   type OwnerId,
 } from "@executor-js/sdk/core";
 import { Context, Effect, Schema } from "effect";
-import { SqlClient } from "effect/unstable/sql";
+import { SqlClient } from "effect/sql";
 import { CurrentUserId } from "../contracts/auth.ts";
 import { OrganizationId } from "../contracts/organization.ts";
 import { ConnectionDestination } from "../contracts/resource-access.ts";
@@ -45,6 +47,13 @@ const organizationOf = (owner: OwnerId) =>
       )
     : Effect.fail(new StorageError());
 
+const AllowedAccount = Schema.Struct({ id: AccountId, owner: Schema.String });
+type AllowedAccount = typeof AllowedAccount.Type;
+const ProfileRecheck = Schema.Struct({
+  access: Schema.Number,
+  accounts: Schema.fromJsonString(Schema.Array(AllowedAccount)),
+});
+
 /** Capture the host client, not a transaction or actor; both resolve on each resource write. */
 export const hostedResourceLifecycle = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -56,40 +65,29 @@ export const hostedResourceLifecycle = Effect.gen(function* () {
       if (rows.length !== 1) return yield* new StorageError();
       return user;
     });
-  const lifecycle: ResourceLifecycle = {
-    profileResolving: (profile) =>
-      Effect.gen(function* () {
-        const organization = yield* organizationOf(profile.owner);
-        const caller = yield* CurrentUserId;
-        if (caller !== undefined && caller !== profile.subject) return yield* new StorageError();
-        const rows = yield* sql`select p.id from hosted_app_access p join member m
+  /** The subject may still run the profile's app: exactly one row. */
+  const profileAccess = (profile: Profile, organization: OrganizationId) =>
+    sql`select p.id from hosted_app_access p join member m
         on m."organizationId" = p.organization_id and m."userId" = ${profile.subject}
         where p.id = ${profile.app} and p.organization_id = ${organization}
         and ((p.audience = 'private' and p.creator_id = m."userId") or p.audience = 'everyone'
           or (p.audience = 'groups' and exists(select 1 from hosted_app_groups g
             join hosted_group_members gm on gm.group_id = g.group_id
             where g.app_id = p.id and gm.member_id = m.id)))`;
-        if (rows.length !== 1) return yield* new StorageError();
-      }).pipe(Effect.catchTag("SqlError", () => new StorageError())),
-    accountsResolving: (accounts) =>
-      Effect.gen(function* () {
-        const profile = yield* CurrentProfile;
-        const user = profile === undefined ? yield* CurrentUserId : profile.subject;
-        if (user === undefined) return yield* new StorageError();
-        // An account outside an organization is never authorized; it is refused in its turn.
-        const owned = accounts.filter(
-          (account) =>
-            account.owner.startsWith("organization:") &&
-            Schema.is(OrganizationId)(account.owner.slice("organization:".length)),
-        );
-        if (owned.length === 0) return new Set<AccountId>();
-        // The SDK resolved each account with its owner; only the product's policy is checked here.
-        const rows =
-          yield* sql`select p.account_id as id, 'organization:' || p.organization_id as owner
+  // An account outside an organization is never authorized; it is refused in its turn.
+  const organizationAccounts = (accounts: readonly Account[]) =>
+    accounts.filter(
+      (account) =>
+        account.owner.startsWith("organization:") &&
+        Schema.is(OrganizationId)(account.owner.slice("organization:".length)),
+    );
+  /** The accounts whose policy still lets the user use them, with the owner each belongs to. */
+  const accountAccess = (accounts: readonly Account[], user: string) =>
+    sql`select p.account_id as id, 'organization:' || p.organization_id as owner
         from hosted_account_access p
         where ${sql.in(
           "p.account_id",
-          owned.map((account) => account.id),
+          accounts.map((account) => account.id),
         )}
         and (p.kind <> 'personal' or exists(select 1 from member owner_member
           where owner_member."organizationId" = p.organization_id and owner_member."userId" = p.personal_user_id))
@@ -99,13 +97,44 @@ export const hostedResourceLifecycle = Effect.gen(function* () {
             or (p.kind = 'shared' and (p.audience = 'everyone' or exists(
               select 1 from hosted_account_groups g join hosted_group_members gm on gm.group_id = g.group_id
               where g.account_id = p.account_id and gm.member_id = m.id)))))`;
-        const allowed = yield* Schema.decodeUnknownEffect(
-          Schema.Array(Schema.Struct({ id: AccountId, owner: Schema.String })),
-        )(rows);
-        // Each account must still belong to the owner the invocation resolved it under.
-        const owners = new Map(owned.map((account) => [account.id, account.owner]));
-        return new Set(
-          allowed.filter((row) => owners.get(row.id) === row.owner).map((row) => row.id),
+  // Each account must still belong to the owner the invocation resolved it under.
+  const allowedOf = (accounts: readonly Account[], allowed: ReadonlyArray<AllowedAccount>) => {
+    const owners = new Map(accounts.map((account) => [account.id, account.owner]));
+    return new Set(allowed.filter((row) => owners.get(row.id) === row.owner).map((row) => row.id));
+  };
+  const lifecycle: ResourceLifecycle = {
+    profileResolving: (profile, accounts) =>
+      Effect.gen(function* () {
+        const organization = yield* organizationOf(profile.owner);
+        const caller = yield* CurrentUserId;
+        if (caller !== undefined && caller !== profile.subject) return yield* new StorageError();
+        // The SDK resolved each account with its owner; only the product's policy is checked here.
+        const owned = organizationAccounts(accounts);
+        const rows = yield* sql`select
+          (select count(*)::int from (${profileAccess(profile, organization)}) access) as access,
+          (select coalesce(json_agg(allowed), '[]'::json)::text
+            from (${accountAccess(owned, profile.subject)}) allowed) as accounts`;
+        const checked = (yield* Schema.decodeUnknownEffect(Schema.Array(ProfileRecheck))(rows))[0];
+        if (checked === undefined || checked.access !== 1) return yield* new StorageError();
+        return allowedOf(owned, checked.accounts);
+      }).pipe(
+        Effect.catchTags({
+          SqlError: () => new StorageError(),
+          SchemaError: () => new StorageError(),
+        }),
+      ),
+    accountsResolving: (accounts) =>
+      Effect.gen(function* () {
+        const profile = yield* CurrentProfile;
+        const user = profile === undefined ? yield* CurrentUserId : profile.subject;
+        if (user === undefined) return yield* new StorageError();
+        const owned = organizationAccounts(accounts);
+        if (owned.length === 0) return new Set<AccountId>();
+        // The SDK resolved each account with its owner; only the product's policy is checked here.
+        const rows = yield* accountAccess(owned, user);
+        return allowedOf(
+          owned,
+          yield* Schema.decodeUnknownEffect(Schema.Array(AllowedAccount))(rows),
         );
       }).pipe(
         Effect.catchTags({

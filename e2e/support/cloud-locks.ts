@@ -6,7 +6,7 @@
  * rows the scenario created: the Cloud database is shared by every scenario of the run.
  */
 import { Effect, Queue, Schema, Stream, type Cause, type PlatformError } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { Target } from "./platform.ts";
 
 export interface Statement {

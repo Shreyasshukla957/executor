@@ -14,7 +14,7 @@ import {
   HttpServer,
   HttpServerRequest,
   HttpServerResponse,
-} from "effect/unstable/http";
+} from "effect/http";
 
 /** Why the server refused a client; each is a check the draft or OAuth 2.1 requires. */
 export type ClientRefusal =

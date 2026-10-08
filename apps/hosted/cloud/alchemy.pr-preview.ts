@@ -47,7 +47,9 @@ export default Alchemy.Stack(
         "Cleanup failed. Scheduled reconciliation will retry; resources may still exist.",
     };
     const run = yield* Config.String("GITHUB_RUN_ID").pipe(
-      Effect.flatMap(Schema.decodeUnknownEffect(Schema.String.check(Schema.isPattern(/^[0-9]+$/)))),
+      Effect.flatMap(
+        Schema.decodeUnknownEffect(Schema.String.check(Schema.isPattern(/^[0-9]+$/u))),
+      ),
     );
     const comment = yield* GitHub.Comment("Preview", {
       owner,

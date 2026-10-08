@@ -12,7 +12,7 @@ import {
   ProvisioningFailed,
   type ProvisioningServices,
 } from "@executor-js/hosted-server/provisioning";
-import { SqlClient } from "effect/unstable/sql";
+import { SqlClient } from "effect/sql";
 import { cloudProduct } from "./product.ts";
 import { appDataSupervisors } from "./app-data.ts";
 import { cloudEmail } from "./email.ts";
@@ -77,7 +77,8 @@ export class Provisioning extends Cloudflare.Workflow<Provisioning>()(
                   Effect.provide(executor),
                   Effect.scoped,
                   Effect.provideContext(context),
-                  Effect.orDie,
+                  // The engine retries typed failures only; a defect ends the workflow at once.
+                  Effect.mapError(() => new ProvisioningFailed()),
                 ),
               })
               .pipe(

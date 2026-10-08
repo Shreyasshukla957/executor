@@ -39,7 +39,7 @@ import {
   StorageError,
 } from "@executor-js/sdk/core";
 import { Schema } from "effect";
-import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi";
+import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/http-api";
 import {
   OrganizationSlug,
   OrganizationReference,
@@ -138,13 +138,6 @@ export const HostedAccounts = HttpApiGroup.make("accounts")
     }).pipe(requireAccount.use),
   )
   .add(
-    HttpApiEndpoint.post("reconnect", `${prefix}/accounts/:account/connections`, {
-      params: { ...params, account: AccountId },
-      success: AccountConnection,
-      error: [...connectionErrors, AccountSelectionInvalid],
-    }).pipe(requireAccount.reconnect),
-  )
-  .add(
     HttpApiEndpoint.delete("disconnect", `${prefix}/accounts/:account`, {
       params: { ...params, account: AccountId },
       success: Schema.Struct({ account: AccountId }),
@@ -176,7 +169,12 @@ export const HostedAccounts = HttpApiGroup.make("accounts")
       params: { ...params, provider: ProviderId, method: AuthMethodName },
       success: OAuthClientSetup,
       error: [...connectionErrors, AuthMethodInvalid, CredentialsError, OAuthSetupFailed],
-    }).annotate(RequiredAction, "manage"),
+    })
+      .annotate(RequiredAction, "manage")
+      .annotate(
+        OpenApi.Description,
+        "Check how an OAuth method will connect before the user signs in. scopes are the permissions sign-in will ask the provider for, and userScopes the ones Slack's user_scope asks for the user's own token; the connection form lists them too. Tell the user what will be requested before giving them the connection link. Without declared scopes, an MCP sign-in asks for the scopes the server's challenge names, which can be narrower than the ones it advertises. For other access, declare scopes on the app's provider and deploy it, then connect without account: declaring scopes changes the provider, so this creates a new account and selects it for the profile. The old account keeps its credentials and stays selected wherever else it is used. Pass account only to replace credentials for an unchanged provider.",
+      ),
   )
   .add(
     HttpApiEndpoint.post("connect", `${prefix}/apps/:app/connections`, {
@@ -185,10 +183,17 @@ export const HostedAccounts = HttpApiGroup.make("accounts")
         requirement: Schema.NonEmptyString,
         profile: ProfileId,
         destination: Schema.optional(ConnectionDestination),
+        /** Replace this account's credentials instead of adding an account. */
+        account: Schema.optional(AccountId),
       }),
       success: BrowserAccountConnection,
       error: [...connectionErrors, AccountSelectionInvalid],
-    }).annotate(RequiredAction, "manage"),
+    })
+      .annotate(RequiredAction, "manage")
+      .annotate(
+        OpenApi.Description,
+        "Create a connection request and return the url of the browser form where the user enters credentials or signs in. For an OAuth method of the returned provider, oauthSetup with provider.id and the method name lists the permissions sign-in will request.",
+      ),
   )
   .add(
     HttpApiEndpoint.get("connection", `${prefix}/connections/:connection`, {

@@ -1,7 +1,7 @@
 /** Skill access through an authorized app evaluation and retained deployment. */
 import { Schema } from "effect";
 import { ApiError } from "@executor-js/utils/api-error";
-import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi";
+import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/http-api";
 import { AppId, DeploymentId, OwnerId, RequestInvalid, StorageError } from "./shared.ts";
 import { AccountNotFound } from "./account.ts";
 import { CredentialsError } from "./shared.ts";
@@ -22,7 +22,7 @@ import {
 /** A configured installation supplies the namespace; skill source never hardcodes it. */
 export const SkillApp = Schema.Struct({ id: AppId, name: Schema.String, slug: AppSlug });
 /** A content digest identifies the complete evaluated catalog, independently of its deployment. */
-export const SkillRevision = Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/));
+export const SkillRevision = Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/u));
 export const SkillRevisionChanged = ApiError.define({
   tag: "SkillRevisionChanged",
   status: 409,
@@ -68,6 +68,8 @@ export const AppSkillNotFound = ApiError.define({
   status: 404,
   fields: { app: AppId, name: AppSkillName, file: SourceFilePath },
   message: ({ name, file }) => `The app has no skill “${name}” with the file “${file}”.`,
+  // The skill name and file are the caller's text.
+  recorded: () => "The app has no skill with the requested name and file",
 });
 export type AppSkillNotFound = typeof AppSkillNotFound.Type;
 

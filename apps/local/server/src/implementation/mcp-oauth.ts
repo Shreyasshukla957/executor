@@ -3,13 +3,14 @@ import { betterAuth } from "better-auth";
 import { APIError, isAPIError } from "better-auth/api";
 import { makeSignature } from "better-auth/crypto";
 import { getMigrations } from "better-auth/db/migration";
-import { grantOAuthPlugins } from "@executor-js/mcp-auth/oauth";
+import { grantExpiry, grantOAuthPlugins } from "@executor-js/mcp-auth/oauth";
 import {
   GrantId,
   mcpOAuthResources,
   requestedMcpAddress,
   mcpResource,
   mcpResourceMetadataUrl,
+  singleResourceOrigin,
 } from "@executor-js/mcp-auth";
 import { makeAuthDatabase } from "@executor-js/mcp-auth/node-database";
 import type { ConnectionId, ConnectionPolicy } from "@executor-js/mcp-auth/connections";
@@ -25,7 +26,7 @@ import {
   Clock,
   Option,
 } from "effect";
-import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
+import { HttpServerRequest, HttpServerResponse } from "effect/http";
 import { UserFacingError } from "@executor-js/utils/user-facing-error";
 import type { ServerConfig } from "../contracts/config.ts";
 import { localRequest, sessionCookie, type LocalAuth } from "./auth.ts";
@@ -78,10 +79,13 @@ export const makeLocalMcpOAuth = (config: ServerConfig, pairing: LocalAuth, cryp
         "",
       );
     });
+    // Local serves its browser pages and its MCP resources on one origin.
     const oauth = grantOAuthPlugins({
       origin,
+      resourceOrigins: singleResourceOrigin(origin),
+      issuer: `${origin}/api/auth`,
       scopes: ["mcp", "offline_access"],
-      resources: mcpOAuthResources(origin),
+      resources: mcpOAuthResources([origin]),
       selectResource: (_ctx, _userId, required) =>
         required === undefined || required === "local"
           ? Effect.succeed("local")
@@ -260,6 +264,23 @@ export const makeLocalMcpOAuth = (config: ServerConfig, pairing: LocalAuth, cryp
         try: run,
         catch: (cause) => (isAPIError(cause) ? cause.statusCode : ("unavailable" as const)),
       });
+    /** The grant's current authority, or none when it was revoked or deleted. */
+    const grant = (id: GrantId) =>
+      Effect.tryPromise({
+        try: () => auth.api.getMcpGrant({ body: { id } }),
+        // Only a definitive refusal means the grant is gone; an outage is retried.
+        catch: (cause) =>
+          isAPIError(cause) && [401, 403, 404].includes(cause.statusCode)
+            ? ("refused" as const)
+            : ("unavailable" as const),
+      }).pipe(
+        Effect.map(Option.some),
+        Effect.catch((reason) =>
+          reason === "refused"
+            ? Effect.succeed(Option.none())
+            : Effect.fail(new LocalMcpAuthUnavailable()),
+        ),
+      );
     const connections = {
       list: connectionCall(() => auth.api.listMcpConnections({ body: connectionOwner })),
       create: (input: { id: ConnectionId; name: string; policy: ConnectionPolicy }) =>
@@ -277,12 +298,16 @@ export const makeLocalMcpOAuth = (config: ServerConfig, pairing: LocalAuth, cryp
       origin,
       authenticate,
       browserGrant,
+      grant,
       handler,
       metadata,
       protectedResource,
       challenge,
       invalidAddress,
       connections,
+      agentGrants: grantExpiry((run) =>
+        Effect.tryPromise({ try: () => run(auth.api), catch: (cause) => cause }),
+      ),
     };
   });
 /** Provider capabilities captured by the local server, never by app code. */

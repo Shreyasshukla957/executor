@@ -35,6 +35,10 @@ export const AppAccessDenied = ApiError.define({
     reason === "authentication"
       ? "This request is not authenticated for app management."
       : "This caller may not perform this app operation, or cannot access this app.",
+  recorded: ({ reason }) =>
+    reason === "authentication"
+      ? "This request is not authenticated for app management."
+      : "This caller may not perform this app operation, or cannot access this app.",
 });
 export type AppAccessDenied = typeof AppAccessDenied.Type;
 /** Expected operation failures are shared unchanged across the product transports. */
@@ -59,7 +63,10 @@ export const AppOperationError = Schema.Union(appOperationErrors);
 /** Authoring controls need product permissions and clone metadata, without reading Git contents. */
 const authoringFields = {
   namespace: Schema.NullOr(Schema.String),
+  /** The remote's path. Clients released before `gitUrl` add it to the host they called. */
   gitPath: Schema.String,
+  /** The absolute clone URL, on the origin where the host serves Git. */
+  gitUrl: Schema.String,
   canEdit: Schema.Boolean,
 };
 /** Permissions and clone location for controls that do not need a source snapshot. */
@@ -85,7 +92,7 @@ import {
   HttpApiGroup,
   HttpApiMiddleware,
   OpenApi,
-} from "effect/unstable/httpapi";
+} from "effect/http-api";
 import {
   App,
   AppId,
@@ -167,7 +174,10 @@ export const appManagementApi = <I extends HttpApiMiddleware.AnyId, S>(
           params: app,
           success: AppAuthoringMetadata,
           error: appOperationErrors,
-        }),
+        }).annotate(
+          OpenApi.Description,
+          "Read whether you can edit and publish this app, and its Git clone location, without its files. For how to write apps, read the app-authoring skill with the skills tool.",
+        ),
         HttpApiEndpoint.get("source", "/apps/:app/workspace", {
           params: app,
           success: AppSourceView,
@@ -229,11 +239,12 @@ export const appManagementApi = <I extends HttpApiMiddleware.AnyId, S>(
         ),
         HttpApiEndpoint.get("git", "/apps/:app/git", {
           params: app,
-          success: Schema.Struct({ path: Schema.String }),
+          // `path` stays for clients released before `url`, which add it to the host they called.
+          success: Schema.Struct({ path: Schema.String, url: Schema.String }),
           error: appOperationErrors,
         }).annotate(
           OpenApi.Description,
-          "Read the authenticated Git clone path. Ordinary Git pushes update source but do not deploy it.",
+          "Read the authenticated Git clone URL, which may be on another origin than this API, and its path. Ordinary Git pushes update source but do not deploy it.",
         ),
         HttpApiEndpoint.post("publish", "/apps/:app/publication", {
           params: app,

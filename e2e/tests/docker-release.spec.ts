@@ -13,7 +13,7 @@ import {
   Schedule,
   Stream,
 } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { randomBytes } from "node:crypto";
 import { request as httpRequest } from "node:http";
 import { createServer } from "node:net";
@@ -24,6 +24,20 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { appsManifest, withApps } from "../support/apps-release.ts";
 import { containerNpmRegistry } from "../support/npm-registry.ts";
+
+/**
+ * `workerd --version` prints the release date of the workerd the checkout pins, which the image
+ * ships: 1.20260918.1 prints `workerd 2026-09-18`.
+ */
+const pinnedWorkerd = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const manifest = yield* Schema.decodeUnknownEffect(
+    Schema.fromJsonString(
+      Schema.Struct({ devDependencies: Schema.Struct({ workerd: Schema.String }) }),
+    ),
+  )(yield* fs.readFileString("package.json"));
+  return `workerd ${manifest.devDependencies.workerd.replace(/^\d+\.(\d{4})(\d{2})(\d{2})\.\d+$/, "$1-$2-$3")}`;
+});
 
 for (const mode of ["explicit", "local", "railway"] as const)
   it.live(`released image keeps login and encrypted credentials across restart (${mode})`, () =>
@@ -240,19 +254,23 @@ for (const mode of ["explicit", "local", "railway"] as const)
             files: [
               {
                 path: "index.ts",
-                content: `import { defineApp, defineDatabase, table, defineProvider, secrets, string, query, mutation, workflow, object, router } from "apps";
+                content: `import { defineApp, defineProvider, secrets, string, query, mutation, workflow, object, router } from "apps";
 import isNumber from "is-number";
 const service = defineProvider({ name: "Release test", auth: { key: secrets({ label: "API key", fields: object({ token: string() }) }) } });
-const database = defineDatabase({ messages: table({ body: string() }) });
-export default defineApp({ accounts: { service }, database }, async ({ accounts }) => ({
+export default defineApp({ accounts: { service } }, async ({ accounts }) => ({
   tools: router({
     check: query({ input: object({}) }, async () => isNumber("2") && accounts.service.fields.token === "synthetic-release-token"),
-    messages: query({ input: object({}) }, async ({ db }) => (await db.messages.withIndex("by_creation").collect()).map(row => row.body)),
-    save: mutation({ input: object({ body: string() }) }, async ({ db }, input) => { await db.messages.insert(input); return input.body; }),
+    messages: query({ input: object({}) }, async ({ sql }) => sql.exec("SELECT body FROM messages ORDER BY seq").toArray().map(row => row.body)),
+    save: mutation({ input: object({ body: string() }) }, async ({ sql }, input) => { sql.exec("INSERT INTO messages (body) VALUES (?)", input.body); return input.body; }),
   }),
   workflows: { check: workflow({ input: object({}) }, async (ctx) =>
     ctx.step.do("credential", async (step) => step.accounts.service.fields.token === "synthetic-release-token")) }
 }));`,
+              },
+              {
+                path: "migrations/0001_messages.sql",
+                content:
+                  "CREATE TABLE messages (seq INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT NOT NULL);\n",
               },
               {
                 path: "package.json",
@@ -364,7 +382,7 @@ function visit(directory){for(const name of fs.readdirSync(directory).sort()){co
 visit("/app/data/hosted.pglite");process.stdout.write(hash.digest("hex"));`,
           ]).pipe(
             Effect.flatMap(
-              Schema.decodeUnknownEffect(Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/))),
+              Schema.decodeUnknownEffect(Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/u))),
             ),
           );
         let nativeBackup: string | undefined;
@@ -685,7 +703,7 @@ http.createServer((request, response) => {
               "Motel resets independently while product state is retained",
             ).toBe("404");
             expect((yield* run(["exec", id, "/app/workerd", "--version"])).trim()).toBe(
-              "workerd 2026-09-01",
+              yield* pinnedWorkerd,
             );
             // The collector shares the product's memory limit. It holds at most four exports of
             // 16 MiB in flight and refuses beyond that; the product's own exports fit.

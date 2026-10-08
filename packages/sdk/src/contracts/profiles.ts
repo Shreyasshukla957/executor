@@ -1,7 +1,7 @@
 import { UserFacingError } from "@executor-js/utils/user-facing-error";
 /** Durable account bindings and setup state for one use of an app. Deployments belong to the app. */
 import { Context, Schema, type Effect } from "effect";
-import { HttpApiEndpoint, HttpApiGroup } from "effect/unstable/httpapi";
+import { HttpApiEndpoint, HttpApiGroup } from "effect/http-api";
 import { AppId, OwnerId, ProfileId, DeploymentId, StorageError } from "./shared.ts";
 import { AppNotFound, AccountSelectionInvalid, SelectedAccounts } from "./apps.ts";
 import { AccountNotFound } from "./account.ts";

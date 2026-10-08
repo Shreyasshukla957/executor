@@ -11,15 +11,12 @@ import {
 import { deepCompareStrict, dereference, validate } from "@cfworker/json-schema";
 import { JsonObject, ValidationError, type JsonValue } from "../contracts/schema.ts";
 
-import type { Field } from "@executor-js/app-data/contracts";
 import type { FieldExposure } from "../contracts/provider.ts";
-const StorageField = Symbol("apps.StorageField");
 
 const Decoder = Symbol("apps.Schema");
 
 /** An author-facing value schema. Effect is never required in author code. */
 export interface Schema<T, Optional extends boolean = false> {
-  readonly [StorageField]?: Field;
   readonly [Decoder]: EffectSchema.Decoder<T>;
   readonly optionalValue: Optional;
   /** Parse an unknown value; invalid input throws a safe ValidationError. */
@@ -88,19 +85,12 @@ export const parse = <T>(
 export function wrap<T, Optional extends boolean>(
   decoder: EffectSchema.Decoder<T>,
   optionalValue: Optional,
-  field?: Field,
 ): Schema<T, Optional> {
   return {
     [Decoder]: decoder,
-    ...(field === undefined ? {} : { [StorageField]: field }),
     optionalValue,
     parse: (input) => Effect.runSync(parse(decoder, input)),
-    optional: () =>
-      wrap(
-        EffectSchema.optional(decoder),
-        true,
-        field === undefined ? undefined : { ...field, optional: true },
-      ),
+    optional: () => wrap(EffectSchema.optional(decoder), true),
     default: (value) => {
       const parsed = Effect.runSync(parse(decoder, value));
       return {
@@ -109,18 +99,6 @@ export function wrap<T, Optional extends boolean>(
             .annotate({ default: parsed })
             .pipe(EffectSchema.withDecodingDefault(Effect.succeed(parsed))),
           false,
-          field === undefined || parsed === undefined
-            ? undefined
-            : {
-                ...field,
-                default: EffectSchema.decodeUnknownSync(
-                  EffectSchema.Union([
-                    EffectSchema.String,
-                    EffectSchema.Finite,
-                    EffectSchema.Boolean,
-                  ]),
-                )(parsed),
-              },
         ),
         hasDefault: true,
         inputOptional: optionalValue,
@@ -136,14 +114,12 @@ export function string(options: { readonly minLength?: number } = {}): Schema<st
       ? EffectSchema.String
       : EffectSchema.String.check(EffectSchema.isMinLength(options.minLength)),
     false,
-    { kind: "string" },
   );
 }
 /** A finite JSON number. No coercion. */
-export const number = (): Schema<number> => wrap(EffectSchema.Finite, false, { kind: "number" });
+export const number = (): Schema<number> => wrap(EffectSchema.Finite, false);
 /** A boolean. No coercion. */
-export const boolean = (): Schema<boolean> =>
-  wrap(EffectSchema.Boolean, false, { kind: "boolean" });
+export const boolean = (): Schema<boolean> => wrap(EffectSchema.Boolean, false);
 /** Any JSON value. Values still cross the native JSON decoder. */
 export const json = (): Schema<EffectSchema.Json> => wrap(EffectSchema.Json, false);
 /** Named values with a common schema. */
@@ -511,6 +487,12 @@ export const unionShape = (alternatives: readonly string[], selector: string | u
   }`;
 };
 
+/** The problem for a required key the input omits, with what its schema expects when stated. */
+export const missingKey = (expected: string | undefined) =>
+  expected === undefined ? missingKeyText : `${missingKeyText}. Expected ${expected}`;
+/** The text every missing-key problem starts with, so the caller can add where the input has it. */
+export const missingKeyText = "Missing key";
+
 const isJsonRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
@@ -722,8 +704,10 @@ const outlineOf = (
   );
 };
 
-/** An alternative by the values it allows, else by its types and object keys. */
-const describeOutline = (outline: Outline): string => {
+const otherConstraints = "a value with other constraints";
+
+/** An outline by the values it allows, else by its types and up to `limit` object keys. */
+const outlineText = (outline: Outline, limit: number): string => {
   if (outline.values !== undefined) return allowedValues(outline.values);
   const names = [
     ...outline.properties.keys(),
@@ -735,11 +719,95 @@ const describeOutline = (outline: Outline): string => {
       : objectShape(
           names.map((name) => ({ name, optional: !outline.required.has(name) })),
           !outline.closed,
-          maxAlternativeKeys,
+          limit,
         );
   if (outline.types === undefined)
-    return names.length > 0 || outline.closed ? shape : "a value with other constraints";
+    return names.length > 0 || outline.closed ? shape : otherConstraints;
   return [...outline.types].map((type) => (type === "object" ? shape : type)).join(" or ");
+};
+
+/** An alternative by the values it allows, else by its types and object keys. */
+const describeOutline = (outline: Outline) => outlineText(outline, maxAlternativeKeys);
+
+/**
+ * Whether an outline fixes the type of every value it accepts, by its values or its types. Object
+ * keywords alone constrain only objects, and other keywords still apply to every value, so an
+ * outline without either promises no type.
+ */
+const typed = (outline: Outline) => outline.values !== undefined || outline.types !== undefined;
+
+/**
+ * What a declared key's schema expects, as a missing key's problem states it: its values, types
+ * and object keys, or its `anyOf` alternatives when every alternative fixes a type. Undefined when
+ * the schema fixes no type, since keywords other than these may still reject a value, and for any
+ * schema with a `oneOf`, even beside its own values or types, since its alternatives' overlap
+ * rejects values that each alternative alone allows.
+ */
+const describeProperty = (node: unknown, inspection: Inspection): string | undefined => {
+  const target = inspection.referenced(node) ?? node;
+  if (isJsonRecord(target) && Object.hasOwn(target, "oneOf")) return undefined;
+  const outline = outlineOf(node, inspection);
+  if (typed(outline)) return outlineText(outline, maxShapeKeys);
+  const members = isJsonRecord(target) && Array.isArray(target.anyOf) ? target.anyOf : [];
+  const outlines = members
+    .filter((member) => member !== false)
+    .map((member) => outlineOf(member, inspection));
+  return outlines.length === 0 || !outlines.every(typed)
+    ? undefined
+    : unionShape([...new Set(outlines.map(describeOutline))], undefined);
+};
+
+const maxPatternText = 160;
+const count = (amount: number, noun: string) => `${amount} ${noun}${amount === 1 ? "" : "s"}`;
+
+/**
+ * A failed validation keyword as the limit its schema node declares, such as `Expected a string
+ * of at least 3 characters`. Limits and patterns come from the schema, never from input.
+ * Undefined for a keyword without a stated limit here, or when the node's value is not one.
+ */
+const constraintProblem = (keyword: string, node: unknown): string | undefined => {
+  if (!isJsonRecord(node)) return undefined;
+  const value = node[keyword];
+  if (keyword === "pattern")
+    return typeof value !== "string"
+      ? undefined
+      : value.length <= maxPatternText
+        ? `Expected a string matching the pattern ${JSON.stringify(value)}`
+        : "Expected a string matching the schema's pattern, which is too long to show";
+  if (keyword === "format")
+    return typeof value === "string"
+      ? `Expected a string in the ${JSON.stringify(value.slice(0, 64))} format`
+      : undefined;
+  if (keyword === "uniqueItems") return "Expected an array without repeated items";
+  if (typeof value !== "number") return undefined;
+  switch (keyword) {
+    // Draft 4's boolean `exclusiveMinimum` is not applied: imported schemas validate as draft 7
+    // or 2020-12, where `minimum` and `maximum` always include their bound.
+    case "minimum":
+      return `Expected a number of at least ${value}`;
+    case "maximum":
+      return `Expected a number of at most ${value}`;
+    case "exclusiveMinimum":
+      return `Expected a number greater than ${value}`;
+    case "exclusiveMaximum":
+      return `Expected a number less than ${value}`;
+    case "multipleOf":
+      return `Expected a multiple of ${value}`;
+    case "minLength":
+      return `Expected a string of at least ${count(value, "character")}`;
+    case "maxLength":
+      return `Expected a string of at most ${count(value, "character")}`;
+    case "minItems":
+      return `Expected an array of at least ${count(value, "item")}`;
+    case "maxItems":
+      return `Expected an array of at most ${count(value, "item")}`;
+    case "minProperties":
+      return `Expected an object with at least ${count(value, "key")}`;
+    case "maxProperties":
+      return `Expected an object with at most ${count(value, "key")}`;
+    default:
+      return undefined;
+  }
 };
 
 /** How many keys of an input object, at any depth, an outline declares. */
@@ -916,14 +984,24 @@ const unionProblems = (
   const shared = outlineOf(holder, inspection);
   const own = alternatives.map(({ schema }) => outlineOf(schema, inspection));
   const outlines = own.map((outline) => mergeOutlines(shared, outline));
-  const fixed = outlines.flatMap(({ values }) => (values === undefined ? [] : [values]));
-  if (fixed.length === outlines.length)
-    return [{ path, issue: `Expected ${allowedValues(fixed.flat())}` }];
   const selector = selectorOf(holder, own, inspection);
   const expected = `Expected ${unionShape(outlines.map(describeOutline), selector)}`;
   const matched = alternatives.filter((alternative) => alternative.matched).length;
   if (union.keyword === "oneOf" && matched > 1)
     return [{ path, issue: `${expected}. Exactly one may match, but ${matched} do` }];
+  // With no alternative matching, every value any `anyOf` alternative fixes is one the input could
+  // use. A `oneOf` rejects a value its alternatives share, so its alternatives stay apart.
+  const fixed = outlines.flatMap(({ values }) => (values === undefined ? [] : [values]));
+  if (fixed.length === outlines.length)
+    return [
+      {
+        path,
+        issue:
+          union.keyword === "oneOf"
+            ? `${expected}. Exactly one alternative must match`
+            : `Expected ${allowedValues(fixed.flat())}`,
+      },
+    ];
   const value = valueAt(inspection.input, location);
   const selectorValue =
     selector !== undefined && isJsonRecord(value) && Object.hasOwn(value, selector)
@@ -1013,7 +1091,12 @@ const problemsOf = (errors: readonly ValidatorError[], inspection: Inspection): 
     const required =
       keyword === "required" ? /required property "([^"]*)"/.exec(error.error) : null;
     if (required !== null) {
-      problem("Missing key", [...path, required[1] ?? ""]);
+      const name = required[1] ?? "";
+      const property = outlineOf(node(), inspection).properties.get(name);
+      problem(
+        missingKey(property === undefined ? undefined : describeProperty(property, inspection)),
+        [...path, name],
+      );
       continue;
     }
     const expected = keyword === "type" ? /Expected "([^.]*)"\.?$/.exec(error.error) : null;
@@ -1043,10 +1126,58 @@ const problemsOf = (errors: readonly ValidatorError[], inspection: Inspection): 
       );
       continue;
     }
-    problem(`Failed the "${keyword}" constraint`);
+    problem(constraintProblem(keyword, node()) ?? `Failed the "${keyword}" constraint`);
   }
   return problems;
 };
+
+/**
+ * Whether an imported schema may accept a key as an object's own key anywhere in its document:
+ * one some object names in `properties`, `required` or `dependentRequired`, or any key once some
+ * object accepts keys by pattern or by an `additionalProperties` or `unevaluatedProperties`
+ * schema. It errs toward accepting, since it is used to avoid suggesting a key moved when the
+ * schema has a place for it where it is.
+ */
+const documentKeys = (document: unknown): ((key: string) => boolean) => {
+  const named = new Set<string>();
+  let any = false;
+  const visit = (node: unknown, depth: number): void => {
+    if (depth > 64 || typeof node !== "object" || node === null) return;
+    if (Array.isArray(node)) {
+      for (const item of node) visit(item, depth + 1);
+      return;
+    }
+    const record = node as Readonly<Record<string, unknown>>;
+    if (isJsonRecord(record.properties))
+      for (const name of Object.keys(record.properties)) named.add(name);
+    for (const name of strings(record.required)) named.add(name);
+    if (isJsonRecord(record.dependentRequired))
+      for (const [name, names] of Object.entries(record.dependentRequired)) {
+        named.add(name);
+        for (const other of strings(names)) named.add(other);
+      }
+    if (
+      (isJsonRecord(record.patternProperties) &&
+        Object.keys(record.patternProperties).length > 0) ||
+      isJsonRecord(record.additionalProperties) ||
+      isJsonRecord(record.unevaluatedProperties)
+    )
+      any = true;
+    for (const value of Object.values(record)) visit(value, depth + 1);
+  };
+  visit(document, 0);
+  return (key) => any || named.has(key);
+};
+
+/** Each imported schema decoder's check, by the keys its document may accept. */
+const importedKeys = new WeakMap<object, (key: string) => boolean>();
+
+/**
+ * Whether the imported schema whose check failed may accept a key as an object's own key, for a
+ * failure's check; undefined when the check is not an imported schema's.
+ */
+export const importedSchemaKeys = (check: object): ((key: string) => boolean) | undefined =>
+  importedKeys.get(check);
 
 /** Problems for the decoder's filter, or `false` when none locate the failure. */
 const jsonSchemaProblems = (errors: readonly ValidatorError[], inspection: Inspection) => {
@@ -1108,19 +1239,19 @@ export const compileJsonSchemaDecoder = (document: JsonObject) =>
       },
       catch: () => new ValidationError(),
     });
-    const decoder = EffectSchema.Json.check(
-      EffectSchema.makeFilter(
-        (value) => {
-          try {
-            const result = validator.validate(value);
-            return result.valid || jsonSchemaProblems(result.errors, validator.inspection(value));
-          } catch {
-            return false;
-          }
-        },
-        { expected: "a value matching a supported imported JSON Schema" },
-      ),
+    const check = EffectSchema.makeFilter(
+      (value: EffectSchema.Json) => {
+        try {
+          const result = validator.validate(value);
+          return result.valid || jsonSchemaProblems(result.errors, validator.inspection(value));
+        } catch {
+          return false;
+        }
+      },
+      { expected: "a value matching a supported imported JSON Schema" },
     );
+    importedKeys.set(check, documentKeys(document));
+    const decoder = EffectSchema.Json.check(check);
     return Object.assign(decoder, { [ImportedJsonSchema]: document });
   });
 
@@ -1210,16 +1341,6 @@ export const jsonSchema = (input: unknown): Schema<EffectSchema.Json> => {
     false,
   );
 };
-
-/** Database declaration retained by primitive constructors; nested payload schemas are not database fields. */
-export const storageFieldOf = (schema: Schema<unknown, boolean>): Field | undefined =>
-  schema[StorageField];
-/** A row reference records the target table; existence is not a foreign-key constraint. */
-export const id = (table: string): Schema<string> =>
-  wrap(EffectSchema.NonEmptyString, false, { kind: "id", references: table });
-/** A host user identifier, stored as a string without imposing a product auth model. */
-export const userId = (): Schema<string> =>
-  wrap(EffectSchema.NonEmptyString, false, { kind: "userId" });
 
 /** Render a decoder as a JSON Schema document, keeping an imported upstream document as-is. */
 export const jsonSchemaDocument = (decoder: EffectSchema.Decoder<unknown>) => {

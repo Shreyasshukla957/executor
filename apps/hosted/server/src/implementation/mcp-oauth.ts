@@ -1,16 +1,17 @@
 import { ApiKeyId } from "../contracts/api-keys.ts";
 import { browserPersonalTokenAccess, apiKeyAccess, requirePinnedOrganization } from "./api-keys.ts";
-import { ApprovalMode, GrantId, mcpOAuthResources } from "@executor-js/mcp-auth";
+import { ApprovalMode, type ConnectionId, GrantId, mcpOAuthResources } from "@executor-js/mcp-auth";
 
 /** Hosted membership composes with the shared OAuth grant lifecycle. */
 import type { BetterAuthPlugin, GenericEndpointContext } from "@better-auth/core";
 import { APIError, createAuthEndpoint, isAPIError } from "better-auth/api";
-import { Effect, Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
 import {
   grantOAuthPlugins,
   authCall,
   runAuth,
   type GrantAccess,
+  type GrantOAuthOptions,
   type OAuthResourceSeedContext,
 } from "@executor-js/mcp-auth/oauth";
 import { AuthenticationUnavailable } from "../contracts/auth.ts";
@@ -26,6 +27,7 @@ import {
   ConnectionNotFound,
   type ConnectionPolicy,
 } from "@executor-js/mcp-auth/connections";
+import { ConnectedAgent, ConnectedAgentNotFound } from "@executor-js/mcp-auth/agents";
 import { OrganizationId, OrganizationRole, organizationOwner } from "../contracts/organization.ts";
 const Member = Schema.Struct({ role: OrganizationRole });
 const membership = (
@@ -54,13 +56,24 @@ const membership = (
     ),
   );
 
-const hostedGrantOAuth = (origin: string) =>
+/**
+ * The browser origin serves sign-in and consent; the resource origins name MCP and API audiences;
+ * the issuer identifies the authorization server, possibly on another host.
+ */
+export type HostedOAuthOrigins = Pick<GrantOAuthOptions, "origin" | "resourceOrigins" | "issuer">;
+
+const hostedGrantOAuth = ({ origin, resourceOrigins, issuer }: HostedOAuthOrigins) =>
   grantOAuthPlugins({
     origin,
+    resourceOrigins,
+    issuer,
     scopes: ["mcp", "executor", "offline_access"],
     resources: [
-      ...mcpOAuthResources(origin),
-      { identifier: `${origin}/api`, allowedScopes: ["executor", "offline_access"] },
+      ...mcpOAuthResources(resourceOrigins.mcp),
+      ...resourceOrigins.api.map((resourceOrigin) => ({
+        identifier: `${resourceOrigin}/api`,
+        allowedScopes: ["executor", "offline_access"],
+      })),
     ],
     selectResource: (ctx, userId, required) =>
       Effect.gen(function* () {
@@ -87,12 +100,25 @@ const hostedGrantOAuth = (origin: string) =>
       ),
   });
 
-const PatGrant = Schema.Struct({
+export const PatGrant = Schema.Struct({
   token: ApiKeyId,
   organization: OrganizationId,
   mode: ApprovalMode,
 });
 const patGrantPrefix = "pat:";
+/** The PAT a synthetic grant ID names, or none for an OAuth grant ID. */
+export const patGrantOf = (id: string) =>
+  id.startsWith(patGrantPrefix)
+    ? Schema.decodeUnknownOption(Schema.fromJsonString(PatGrant))(
+        (() => {
+          try {
+            return decodeURIComponent(id.slice(patGrantPrefix.length));
+          } catch {
+            return "";
+          }
+        })(),
+      )
+    : Option.none();
 export const patGrantId = (value: typeof PatGrant.Type) =>
   GrantId.make(patGrantPrefix + encodeURIComponent(JSON.stringify(value)));
 const parsePatGrant = (id: GrantId) =>
@@ -126,12 +152,24 @@ const projectPatAccess = (
   });
 
 /** Provision the host's fixed resources before serving OAuth requests. */
-export const provisionHostedOAuthResources = (origin: string, context: OAuthResourceSeedContext) =>
-  hostedGrantOAuth(origin).provisionResources(context);
+export const provisionHostedOAuthResources = (
+  origins: HostedOAuthOrigins,
+  context: OAuthResourceSeedContext,
+) => hostedGrantOAuth(origins).provisionResources(context);
+
+/**
+ * Insert one existing connection's missing resources at every resource origin, as a new
+ * connection gets them. Existing resource rows are never changed.
+ */
+export const provisionHostedConnectionResources = (
+  origins: HostedOAuthOrigins,
+  context: OAuthResourceSeedContext,
+  connection: ConnectionId,
+) => hostedGrantOAuth(origins).provisionConnectionResources(context, connection);
 
 /** A consent binds a new grant to the selected organization; refresh retains its identity. */
-export const mcpOAuthPlugins = (origin: string) => {
-  const oauth = hostedGrantOAuth(origin);
+export const mcpOAuthPlugins = (origins: HostedOAuthOrigins) => {
+  const oauth = hostedGrantOAuth(origins);
   const projectAccess = (ctx: GenericEndpointContext, grant: GrantAccess) =>
     Effect.gen(function* () {
       const organization = yield* Schema.decodeUnknownEffect(OrganizationId)(grant.resource).pipe(
@@ -164,7 +202,7 @@ export const mcpOAuthPlugins = (origin: string) => {
                   .lookupBrowser(ctx)
                   .pipe(Effect.flatMap((grant) => projectAccess(ctx, grant)));
               const target = yield* parsePatGrant(ctx.body.id);
-              const identity = yield* browserPersonalTokenAccess(ctx, origin, target.token);
+              const identity = yield* browserPersonalTokenAccess(ctx, origins.origin, target.token);
               return yield* projectPatAccess(ctx, identity, target.organization, target.mode);
             }),
           ),
@@ -197,6 +235,12 @@ export interface McpConnectionApi {
   readonly createMcpConnection: (input: { body: ConnectionBody }) => Promise<unknown>;
   readonly updateMcpConnection: (input: { body: ConnectionBody }) => Promise<unknown>;
   readonly revokeMcpConnection: (input: {
+    body: { userId: string; resource: string; id: string };
+  }) => Promise<unknown>;
+  readonly listMcpAgents: (input: {
+    body: { userId: string; resource: string };
+  }) => Promise<unknown>;
+  readonly revokeMcpAgent: (input: {
     body: { userId: string; resource: string; id: string };
   }) => Promise<unknown>;
 }
@@ -252,6 +296,22 @@ export const mcpConnectionStore = (
         Effect.mapError((status) =>
           status === 404
             ? new ConnectionNotFound({ connection: id })
+            : new AuthenticationUnavailable(),
+        ),
+      ),
+    agents: (owner) =>
+      request((api) => api.listMcpAgents({ body: owner }), Schema.Array(ConnectedAgent)).pipe(
+        Effect.mapError(unavailable),
+      ),
+    revokeAgent: (owner, id) =>
+      request(
+        (api) => api.revokeMcpAgent({ body: { ...owner, id } }),
+        Schema.Struct({ revoked: Schema.Literal(true) }),
+      ).pipe(
+        Effect.asVoid,
+        Effect.mapError((status) =>
+          status === 404
+            ? new ConnectedAgentNotFound({ agent: id })
             : new AuthenticationUnavailable(),
         ),
       ),

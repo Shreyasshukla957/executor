@@ -9,7 +9,7 @@
 import { detectMcpAccess, McpDetection, McpSignal } from "@executor-js/catalog";
 import { httpsOnlyUrlPolicy } from "@executor-js/utils/url-policy";
 import { Config, Console, Effect, Option } from "effect";
-import { FetchHttpClient, HttpClient } from "effect/unstable/http";
+import { FetchHttpClient, HttpClient } from "effect/http";
 
 const servers = [
   ["Exa", "https://mcp.exa.ai/mcp"],

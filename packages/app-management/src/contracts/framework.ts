@@ -1,7 +1,7 @@
 /** Framework documentation served by the management API. It describes this server's `apps` build. */
 import { Context, Schema, type Effect } from "effect";
-import type { HttpApiMiddleware } from "effect/unstable/httpapi";
-import { HttpApi, HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi";
+import type { HttpApiMiddleware } from "effect/http-api";
+import { HttpApi, HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/http-api";
 
 const Entry = Schema.Struct({
   symbol: Schema.String,

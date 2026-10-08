@@ -38,7 +38,7 @@ import { makeResetAction } from "./implementation/reset.ts";
 import { makePortAction, readSettings, type PortSource } from "./implementation/settings.ts";
 import { makeExportDiagnosticsAction } from "./implementation/diagnostics.ts";
 import { makeRotateKeyAction, rotateAfterStop } from "./implementation/rotation.ts";
-import type { ChildProcessSpawner } from "effect/unstable/process";
+import type { ChildProcessSpawner } from "effect/process";
 
 const root = app.isPackaged
   ? resolve(process.resourcesPath, "runtime")
@@ -84,7 +84,7 @@ const desktop = Effect.gen(function* () {
   // Beside the data directory, so a reset is a same-volume rename.
   const backups = path.join(path.dirname(directory), "backups");
   yield* fs.makeDirectory(directory, { recursive: true });
-  const file = yield* rotatingJsonLogger(diagnostics, "executor-desktop");
+  const log = yield* rotatingJsonLogger(diagnostics, "executor-desktop");
   const environmentPort = yield* Config.String("EXECUTOR_PORT").pipe(Config.option);
   const source: PortSource = Option.isSome(environmentPort)
     ? { kind: "environment", port: environmentPort.value }
@@ -155,10 +155,6 @@ const desktop = Effect.gen(function* () {
           catch: () => new DesktopFailed({ stage: "window" }),
         });
         const browserSession = session.fromPartition("executor-desktop");
-        browserSession.setPermissionRequestHandler((_contents, _permission, callback) =>
-          callback(false),
-        );
-        browserSession.setPermissionCheckHandler(() => false);
         const windowOptions = {
           width: 1180,
           height: 800,
@@ -181,6 +177,14 @@ const desktop = Effect.gen(function* () {
         let window: BrowserWindow | undefined;
         let pendingOAuthState: string | undefined;
         const origin = () => (view.kind === "ready" ? view.origin : undefined);
+        // The dashboard's copy buttons need clipboard writes; every other permission stays denied.
+        browserSession.setPermissionRequestHandler((_contents, permission, callback, details) =>
+          callback(
+            permission === "clipboard-sanitized-write" &&
+              new URL(details.requestingUrl).origin === origin(),
+          ),
+        );
+        browserSession.setPermissionCheckHandler(() => false);
         const viewUrl = () => {
           switch (view.kind) {
             case "starting":
@@ -291,6 +295,7 @@ const desktop = Effect.gen(function* () {
           directory,
           backups,
           appVersion: app.getVersion(),
+          whileMoving: log.whileMoving,
           window: () => window,
         });
 
@@ -492,7 +497,7 @@ const desktop = Effect.gen(function* () {
           )
         : Effect.void,
     ),
-    Effect.provide(Logger.layer([Logger.withConsoleError(Logger.formatJson), file])),
+    Effect.provide(Logger.layer([Logger.withConsoleError(Logger.formatJson), log.logger])),
   );
 });
 

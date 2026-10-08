@@ -8,7 +8,7 @@ import {
   mcpSessionKey,
 } from "@executor-js/hosted-server";
 import { Effect, RcMap } from "effect";
-import { HttpServerResponse } from "effect/unstable/http";
+import { HttpServerResponse } from "effect/http";
 
 /** Own protocol sessions in the server scope; the returned handler receives SDK/auth per request. */
 export const selfHostMcp = Effect.gen(function* () {

@@ -16,8 +16,8 @@ import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Pool, type PoolClient } from "pg";
 import { Config, Effect, FileSystem, Redacted, Schema } from "effect";
-import { Command, Flag } from "effect/unstable/cli";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { Command, Flag } from "effect/cli";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { LocalDatabaseUrl } from "../cloud/src/contracts/database.ts";
 
 const Statement = Schema.Struct({

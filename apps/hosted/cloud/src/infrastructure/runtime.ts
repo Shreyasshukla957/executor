@@ -7,6 +7,7 @@ import {
   RuntimeProtocolUnsupported,
   describeBuildCause,
   RuntimeAppsDependencyMissing,
+  ownsDatabase,
   runtimeAdapter,
 } from "@executor-js/sdk/core";
 import {
@@ -166,7 +167,7 @@ export const cloudRuntime = Effect.fn(function* (origin: string) {
               );
             const stored = yield* retainCloudBuild(
               build,
-              { ...bundle, database: requirements.database !== undefined, protocol },
+              { ...bundle, database: ownsDatabase(requirements), protocol },
               framework,
               ui,
             ).pipe(Effect.provide(RuntimeContext.phantom));
@@ -185,7 +186,9 @@ export const cloudRuntime = Effect.fn(function* (origin: string) {
                     : Schema.is(RuntimeAppsDependencyMissing)(error)
                       ? "dependencies"
                       : error.stage,
-                "build.cause": error.message,
+                // The message quotes the deployer's source and its compiler errors, which only the
+                // deployer receives; the span records which failure it was.
+                "build.error": error._tag,
               }),
             ),
           ),

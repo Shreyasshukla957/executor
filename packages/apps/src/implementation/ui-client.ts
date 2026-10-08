@@ -13,10 +13,10 @@ import {
   Stream,
   Tracer,
 } from "effect";
-import { AsyncResult, Atom } from "effect/unstable/reactivity";
+import { AsyncResult, Atom } from "effect/reactivity";
 import { externalTrace, pendingSpan } from "@executor-js/telemetry";
-import { FetchHttpClient, HttpClientError } from "effect/unstable/http";
-import { HttpApiClient } from "effect/unstable/httpapi";
+import { FetchHttpClient, HttpClientError } from "effect/http";
+import { HttpApiClient } from "effect/http-api";
 import { AppUiApi, UiContext, UiDeploymentChanged, UiFailed } from "../contracts/ui.ts";
 import { AppQueryFailed, type OperationReference } from "../contracts/live.ts";
 import { JsonValue } from "../contracts/schema.ts";

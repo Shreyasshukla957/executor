@@ -1,7 +1,7 @@
 import { expect, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Config, Effect, FileSystem, Layer, Path, Schedule, Schema } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient } from "effect/http";
 import type { ElectronApplication, Page } from "playwright";
 import { randomBytes, randomUUID } from "node:crypto";
 import { driver } from "../support/platform.ts";
@@ -206,6 +206,27 @@ it.live(scenarios.desktopCrashRecovery.title, () =>
   ).pipe(Effect.provide(services)),
 );
 
+it.live(scenarios.desktopClipboard.title, () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { home, env, origin } = yield* desktopHome();
+      const electron = yield* launchDesktop({ cwd: home, env });
+      const page = yield* driver("desktop window", () => electron.firstWindow());
+      yield* dashboard(page);
+      yield* driver("open the custom app page", () => page.goto(`${origin}/apps/add/custom`));
+      const copy = page.getByRole("button", { name: "Copy setup prompt" });
+      yield* driver("copy the setup prompt", () => copy.click());
+      yield* driver("the copy succeeds", () =>
+        copy.getByText("Copied", { exact: true }).waitFor({ state: "visible" }),
+      );
+      const copied = yield* driver("read the system clipboard", () =>
+        electron.evaluate(({ clipboard }) => clipboard.readText()),
+      );
+      expect(copied).toContain("Help me add a service to Executor as an app.");
+    }),
+  ).pipe(Effect.provide(services)),
+);
+
 it.live(scenarios.desktopReset.title, () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -359,6 +380,12 @@ it.live(scenarios.desktopReset.title, () =>
             event.message === "Showing desktop recovery",
         ),
       ).toEqual([]);
+      // Lines logged before a move go with it: the first backup holds both reset attempts.
+      expect(
+        (yield* desktopEvents(backup)).filter(
+          (event) => event.message === "Resetting Executor data",
+        ),
+      ).toHaveLength(2);
     }),
   ).pipe(Effect.provide(services)),
 );

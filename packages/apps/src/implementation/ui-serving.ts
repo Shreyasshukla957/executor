@@ -1,7 +1,7 @@
 /** Shared private SPA rendering, independent of identity, database, and runtime choice. */
 import { CurrentTelemetryConfig } from "@executor-js/telemetry";
 import { Effect } from "effect";
-import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
+import { HttpServerRequest, HttpServerResponse } from "effect/http";
 import { UiForbidden, type AppUiAsset, type UiAccountNotice } from "../contracts/ui.ts";
 import {
   accountBlockedPage,

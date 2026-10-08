@@ -18,13 +18,8 @@
  * carry credentials, or call tools, and any session opened for the check is released.
  */
 import { Effect, Option, Schema, Stream } from "effect";
-import * as Sse from "effect/unstable/encoding/Sse";
-import {
-  FetchHttpClient,
-  HttpBody,
-  HttpClient,
-  type HttpClientResponse,
-} from "effect/unstable/http";
+import * as Sse from "effect/encoding/Sse";
+import { FetchHttpClient, HttpBody, HttpClient, type HttpClientResponse } from "effect/http";
 import { bearerChallenge, discoverResourceOAuth } from "@executor-js/sdk/core";
 import { ResourceOAuth } from "@executor-js/sdk";
 import type { HostEgress } from "@executor-js/utils/url-policy";

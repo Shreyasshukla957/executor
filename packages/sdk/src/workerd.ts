@@ -34,3 +34,4 @@ export {
   type AppEgress,
   type CredentialOutbound,
 } from "./implementation/credential-handles.ts";
+export { NetworkUnreachable, networkUnreachableResponse } from "./implementation/app-network.ts";

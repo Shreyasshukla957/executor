@@ -3,8 +3,6 @@ import { appProviderFailure } from "./provider-error.ts";
 import { grantedDefinition } from "./provider.ts";
 /** Snapshot the configured app, then execute with its selected credentials. */
 import { type Crypto, Effect, Match, Option, Redacted, Result, Schema } from "effect";
-import type { AppDatabases } from "@executor-js/app-data";
-import { bindAppStorage } from "./app-database.ts";
 import {
   type WorkflowHostControls,
   HostToolApprovalRequired,
@@ -62,6 +60,7 @@ import { CurrentProfile, ProfileConflict } from "../contracts/profiles.ts";
 import type { ProfileId } from "../contracts/shared.ts";
 import { validateSelection } from "./selection.ts";
 import type { Listings, ToolListing } from "./listings.ts";
+import { ownsDatabase } from "../contracts/apps.ts";
 
 /**
  * Resolve the app, pinned deployment, profile and account selection before invoking authored code.
@@ -169,8 +168,6 @@ export function resolve(
   lifecycle?: ResourceLifecycle,
 ) {
   return Effect.gen(function* () {
-    if (state.profile !== undefined && lifecycle?.profileResolving)
-      yield* lifecycle.profileResolving(state.profile);
     const selections = new Map<string, ResolvedAccounts[string]>();
     // An account selected for several slots is resolved once per invocation, in selection
     // order. A token renewed for one slot is the token every slot uses, even when it already
@@ -180,7 +177,18 @@ export function resolve(
       for (const account of accounts)
         if (!distinct.has(account.id))
           distinct.set(account.id, { account, provider: required.definition });
-    const resolvedFields = yield* resolveAccount([...distinct.values()]);
+    const selected = [...distinct.values()];
+    // The profile's subject and its accounts are rechecked together, before any credential.
+    const resolvedFields =
+      state.profile !== undefined && lifecycle?.profileResolving
+        ? yield* resolveAccount(
+            selected,
+            lifecycle.profileResolving(
+              state.profile,
+              selected.map(({ account }) => account),
+            ),
+          )
+        : yield* resolveAccount(selected);
     const credentials = new Map(
       [...distinct.keys()].map((id, index) => [id, resolvedFields[index]] as const),
     );
@@ -402,7 +410,6 @@ export const makeTools = (
   credentials: Credentials,
   crypto: Crypto.Crypto,
   listings: Listings,
-  appStorage?: AppDatabases,
   workflows?: (state: InvocationSnapshot) => WorkflowHostControls,
   lifecycle?: ResourceLifecycle,
 ) => {
@@ -738,20 +745,17 @@ export const makeTools = (
           "executor.app.id": state.app.id,
           "executor.deployment.id": state.deployment.id,
           "executor.build.id": state.deployment.build,
-          "executor.tool.name": parsed.tool,
         });
         const kind = yield* kindOf(state, context, parsed.tool, parsed.kind);
         let toolError = false;
-        const storageBinding = yield* bindAppStorage(appStorage, state.app.id);
         const execute = (context: InvocationContext) =>
           Effect.suspend(() => {
             toolError = false;
             return runtime.call({
               app: state.app.id,
-              ...storageBinding,
               ...(workflows === undefined ? {} : { workflowControls: workflows(state) }),
               build: state.deployment.build,
-              database: state.deployment.requirements.database !== undefined,
+              database: ownsDatabase(state.deployment.requirements),
               ...context,
               tool: parsed.tool,
               ...(kind === undefined ? {} : { kind }),
@@ -767,6 +771,13 @@ export const makeTools = (
             Effect.result,
           );
         const result = yield* executeRenewing(state, context, kind, execute);
+        // The tool is named once the app has answered for it: a name it lacks is the caller's text.
+        if (
+          Result.isSuccess(result) ||
+          (result.failure._tag !== "HostToolNotFound" &&
+            result.failure._tag !== "HostOperationNotFound")
+        )
+          yield* Effect.annotateCurrentSpan("executor.tool.name", parsed.tool);
         if (Result.isSuccess(result)) {
           if (toolError)
             yield* Effect.annotateCurrentSpan({
@@ -840,16 +851,14 @@ export const makeTools = (
                   );
                   const kind = yield* kindOf(state, context, saved.tool, saved.kind);
                   let toolError = false;
-                  const storageBinding = yield* bindAppStorage(appStorage, saved.app);
                   const execute = (context: InvocationContext) =>
                     Effect.suspend(() => {
                       toolError = false;
                       return runtime.call({
                         app: saved.app,
-                        ...storageBinding,
                         ...(workflows === undefined ? {} : { workflowControls: workflows(state) }),
                         build: state.deployment.build,
-                        database: state.deployment.requirements.database !== undefined,
+                        database: ownsDatabase(state.deployment.requirements),
                         ...context,
                         tool: saved.tool,
                         ...(kind === undefined ? {} : { kind }),

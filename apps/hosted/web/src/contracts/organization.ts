@@ -15,7 +15,7 @@ import { UploadedOrganizationIcon } from "@executor-js/hosted-server/organizatio
 import { OrganizationAccess, OrganizationForbidden } from "@executor-js/hosted-server/organization";
 import { OrganizationId } from "@executor-js/hosted-server/organization";
 import { Effect, Option, Schema } from "effect";
-import { AsyncResult, Atom } from "effect/unstable/reactivity";
+import { AsyncResult, Atom } from "effect/reactivity";
 import {
   authCallOptions,
   organizationOperations,

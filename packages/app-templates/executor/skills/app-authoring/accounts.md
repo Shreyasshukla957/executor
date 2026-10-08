@@ -57,6 +57,12 @@ refuses a request that sends a handle anywhere else: `ctx.fetch` rejects with
 global `fetch` receives status 421 with the same details. Values the service
 echoes back reach the app as handles.
 
+**Adding a host to a provider that already declares hosts means users must
+connect existing accounts again.** Each account keeps the hosts it was connected
+with, so Executor refuses requests that send its credentials to the new host
+until it is reconnected. Declare every host the app needs before users connect
+accounts.
+
 ```ts
 import { defineProvider, object, plain, raw, secrets, string } from "apps";
 
@@ -81,10 +87,25 @@ subdomain. Pass handles to headers and clients as ordinary strings. Do not
 decode, hash or sign them; mark such a field `raw()`, and the connect form
 warns that the app can read it. Multipart and streamed bodies are sent
 unchanged. A provider without `hosts` gives app code real values unless the
-account was connected with hosts. An account keeps the hosts it was connected
-with: after you add a host, existing accounts reach it only once they are
-connected again. Changing `plain()` or `raw()` changes the provider, so
-existing accounts must be connected again.
+account was connected with hosts. Changing `plain()` or `raw()` changes the
+provider, so existing accounts must be connected again.
+
+Basic credentials work with handles. Encode `username:password` with `btoa` as
+usual; Executor decodes a `Basic` `Authorization` header, replaces the handles
+inside it and encodes it again. This [check](#check-an-account) sends a
+`secrets` method's `username` and `password` fields to a declared host:
+
+```ts
+async health({ account, fetch, signal }) {
+  const basic = btoa(`${account.fields.username}:${account.fields.password}`);
+  const response = await fetch("https://api.example.com/v1/me", {
+    signal,
+    headers: { Authorization: `Basic ${basic}` },
+  });
+  const me = await decodeJson(response, object({ id: string(), email: string() }));
+  return { accountInfo: { externalId: me.id, email: me.email } };
+},
+```
 
 ## Check an account
 
@@ -131,12 +152,41 @@ const vercel = defineProvider({
 
 `account` is typed from `auth`; with several methods, switch on `account.method`.
 A failed `decodeJson` status is classified for you: 401 means the credentials were
-refused, 429 and 5xx mean the service is unavailable. Throw
-`new ProviderError({ reason: "forbidden" })` only with explicit evidence of a
-missing permission, such as an `insufficient_scope` challenge; a bare 403 is not
-enough. Services that answer a bad token with something other than 401, as Vercel does, need
-an explicit `new ProviderError({ reason: "unauthorized" })`. `ProviderError` carries only its
-reason and status, never a message.
+refused, 429 and 5xx mean the service is unavailable. Otherwise throw
+`new ProviderError({ reason, status })` with the reason the service's evidence
+supports:
+
+| `reason`       | Use it when                                                      | Check status           |
+| -------------- | ---------------------------------------------------------------- | ---------------------- |
+| `unauthorized` | the service refused the credentials                              | `credentials_rejected` |
+| `forbidden`    | explicit evidence of a missing permission (`insufficient_scope`) | `forbidden`            |
+| `rate_limited` | the service is limiting requests                                 | `upstream_unavailable` |
+| `unavailable`  | a server error or outage                                         | `upstream_unavailable` |
+| `rejected`     | the service refused without saying why, such as a bare 403       | `check_failed`         |
+
+A bare 403 is not enough for `forbidden`. Services that answer a bad token with
+something other than 401, as Vercel does, need an explicit `unauthorized`. Tool
+calls that fail with `rate_limited` or `unavailable` tell the agent to retry
+later. `ProviderError` carries only its reason and optional HTTP status, never a
+message.
+
+Decode only the fields the check reads; `object()` drops the rest. A field the
+service may return as `null` fails both `string()` and `string().optional()`,
+which accepts only a missing field. There is no nullable helper, so declare it
+with `json()` and use it only when it is a string. Each `accountInfo` value must
+be a non-empty string of at most 255 characters, and its URLs must be http(s);
+an invalid value fails the check, so leave such fields out:
+
+```ts
+const { user } = await decodeJson(
+  response,
+  object({ user: object({ id: string(), name: json() }) }),
+);
+const name = typeof user.name === "string" && user.name !== "" ? user.name : undefined;
+return {
+  accountInfo: { externalId: user.id, ...(name === undefined ? {} : { displayName: name }) },
+};
+```
 
 To tell the user why the check failed, throw an ordinary `Error` with a message written for them.
 The account form shows it after "Couldn't verify this API token:". Read the service's documented
@@ -290,6 +340,31 @@ service outage, or when its response cannot be used, the call fails with the
 retryable `OAuthRenewalFailed` and the saved sign-in is kept, so retry later
 instead of reconnecting or changing the provider.
 
+For service-to-service access without a user's sign-in, declare the client
+credentials grant with `tokenUrl` (or `discover`), `scopes`, and the client
+authentication the token endpoint accepts: `client_secret_basic`,
+`client_secret_post`, or `client_secret_basic_raw` for a service that wants the
+Basic credentials without form encoding.
+
+```ts
+const reports = defineProvider({
+  name: "Reports",
+  auth: {
+    machine: oauth2({
+      grant: "client_credentials",
+      tokenUrl: "https://auth.example.com/oauth/token",
+      scopes: ["reports:read"],
+      tokenEndpointAuthMethod: "client_secret_basic",
+    }),
+  },
+});
+```
+
+The connect page asks for the client ID and secret and exchanges them at once;
+there is no browser redirect. App code reads `account.fields.access_token`.
+Executor exchanges the client credentials again when the token expires; this
+grant has no refresh token.
+
 Deploy the source, create a profile, then request a connection for its account requirement.
 The management examples below use the **local** API. For hosted calls, use
 `profiles.create` and `accounts.connect` with `path.organization`, as shown in
@@ -322,7 +397,7 @@ return connection.state; // { status: "completed", account } means setup finishe
 // A pending state with `failure` holds the error the user saw, including the service's own error.
 ```
 
-Completing a targeted request saves the account and selects it for the named profile in
+Completing a request saves the account and selects it for the named profile in
 one transaction. A `.many()` target appends without duplicates. Other selections
 are kept. If a single-account selection or the requirement changed during sign-in,
 completion returns `AccountConnectionTargetChanged` without saving credentials;
@@ -330,16 +405,21 @@ inspect the profile and request a new link. A pending link whose app was redeplo
 with a different provider for that requirement, such as an API key instead of OAuth,
 returns the same error when read or opened. Request a new link after such a deploy.
 
-To save an account without selecting it for any app, pass `provider` instead:
+Every request names an app profile requirement; there are no standalone
+connections. To replace the credentials of an account a profile already uses,
+add `account` beside `target`. The account keeps its ID, name and selections:
 
 ```js
 return await tools.executor.profiles["<management-profile-id>"].accountConnect.issue({
-  body: { owner: "alice", provider: "<provider-reference>" },
+  body: {
+    owner: "alice",
+    target: { app: "<app-id>", profile: "<profile-id>", requirement: "vercel" },
+    account: "<account-id>",
+  },
 });
 ```
 
-Supply exactly one of `target` or `provider`. Requests expire after thirty
-minutes. Cancelled or expired requests need a new link. Do not wait or busy-poll
+Requests expire after thirty minutes. Cancelled or expired requests need a new link. Do not wait or busy-poll
 inside execute.
 
 Use `accounts.list({ query: { provider } })` to find compatible saved accounts first when

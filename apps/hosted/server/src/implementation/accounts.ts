@@ -11,11 +11,13 @@ import {
 } from "./connection-policy.ts";
 import { accountDestination } from "./resource-lifecycle.ts";
 import { AccountGrants } from "./proofs/account-access.ts";
+import { AccountTargets } from "../contracts/account-grants.ts";
 import { requireAppAccess, visibleApps, visibleAccounts } from "./resource-policy.ts";
 import type { ConnectionDestination } from "../contracts/resource-access.ts";
 /** Account use cases, connection grants and OAuth routes share the same ownership checks. */
 import {
   type AccountHealth,
+  type AccountId,
   type App,
   type AppId,
   type Executor,
@@ -23,8 +25,8 @@ import {
   StorageError,
 } from "@executor-js/sdk/core";
 import { Effect, Schema } from "effect";
-import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
-import { HttpApiBuilder } from "effect/unstable/httpapi";
+import { HttpServerRequest, HttpServerResponse } from "effect/http";
+import { HttpApiBuilder } from "effect/http-api";
 import { HostedApi } from "../contracts/api.ts";
 import { ApiAuthentication, Authentication, CurrentPrincipal } from "../contracts/auth.ts";
 import {
@@ -116,22 +118,6 @@ export const oauthSetup = (
     return yield* executor.accountConnections.oauthSetup({ ...input, owner });
   });
 
-/** Replace credentials on the same identity so every app keeps its selection. */
-export const reconnectAccount = Effect.gen(function* () {
-  const { owner, account, access } = yield* AccountGrants.reconnect;
-  const executor = yield* Effect.flatten(HostedExecutor);
-  const existing = yield* executor.accounts.get({ owner, account });
-  const destination =
-    access.ownership.kind === "personal" ? ({ kind: "personal" } as const) : access.ownership;
-  yield* checkDestination(destination);
-  return yield* executor.accountConnections
-    .create({
-      owner,
-      account,
-      provider: existing.provider,
-    })
-    .pipe(Effect.flatMap((connection) => recordConnection(connection, destination)));
-});
 /** Delete saved credentials and remove their selections through the transactional lifecycle hook. */
 export const disconnectAccount = Effect.gen(function* () {
   const { owner, account } = yield* AccountGrants.delete;
@@ -149,7 +135,10 @@ export const updateAccount = (metadata: {
     const executor = yield* Effect.flatten(HostedExecutor);
     return yield* executor.accounts.update({ ...metadata, owner, account });
   });
-/** Create a sign-in request for an app requirement belonging to this organization. */
+/**
+ * Create a sign-in request for an app requirement belonging to this organization. With `account`,
+ * it replaces that account's credentials; there is no reconnect outside an app.
+ */
 export const connectAccount = (
   owner: OwnerId,
   input: {
@@ -157,6 +146,7 @@ export const connectAccount = (
     readonly requirement: string;
     readonly profile: import("@executor-js/sdk/core").ProfileId;
     readonly destination?: typeof ConnectionDestination.Type | undefined;
+    readonly account?: AccountId | undefined;
   },
 ) =>
   Effect.gen(function* () {
@@ -164,7 +154,20 @@ export const connectAccount = (
     yield* executor.apps.get({ owner, app: input.app });
     yield* executionManagerOwner(executor, input.app, input.profile);
     yield* requireAppAccess(input.app, "use");
-    yield* checkDestination(input.destination ?? { kind: "personal" });
+    // A reconnect keeps the account where it is shared; a new account goes where the caller asks.
+    const reconnect =
+      input.account === undefined
+        ? undefined
+        : yield* AccountGrants.reconnect.pipe(
+            Effect.provideService(AccountTargets.reconnect, { account: input.account }),
+          );
+    const destination =
+      reconnect === undefined
+        ? (input.destination ?? ({ kind: "personal" } as const))
+        : reconnect.access.ownership.kind === "personal"
+          ? ({ kind: "personal" } as const)
+          : reconnect.access.ownership;
+    yield* checkDestination(destination);
     return yield* executor.accountConnections
       .create({
         owner,
@@ -173,12 +176,9 @@ export const connectAccount = (
           requirement: input.requirement,
           profile: input.profile,
         },
+        ...(input.account === undefined ? {} : { account: input.account }),
       })
-      .pipe(
-        Effect.flatMap((connection) =>
-          recordConnection(connection, input.destination ?? { kind: "personal" }),
-        ),
-      );
+      .pipe(Effect.flatMap((connection) => recordConnection(connection, destination)));
   });
 /** Connection metadata never grants access to another organization's request or app. */
 export const getConnection = (
@@ -250,7 +250,6 @@ export const hostedAccountHandlers = HttpApiBuilder.group(HostedApi, "accounts",
         ),
       )
       .handle("check", () => checkAccount)
-      .handle("reconnect", () => reconnectAccount)
       .handle("disconnect", () => disconnectAccount)
       .handle("update", ({ payload }) => updateAccount(payload))
       .handle("oauthSetup", ({ params }) =>

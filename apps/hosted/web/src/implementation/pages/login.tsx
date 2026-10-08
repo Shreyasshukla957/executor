@@ -1,7 +1,7 @@
 import { ContinueAfterSignIn } from "../components/sign-in.tsx";
 export { ContinueAfterSignIn } from "../components/sign-in.tsx";
 import { browserReturnTo } from "@executor-js/hosted-server/browser/contracts";
-import { AsyncResult } from "effect/unstable/reactivity";
+import { AsyncResult } from "effect/reactivity";
 import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react";
 import { Cause, Exit, Option } from "effect";
 import { useState, type ReactNode } from "react";

@@ -9,19 +9,27 @@
  * protocol 7's, re-exported unchanged.
  *
  * Once released this protocol is frozen like the earlier ones: `bun run check` compares `protocol8`
- * with `packages/apps/protocols/8.json`. Define the next protocol instead of editing this file.
- * See notes/apps-publishing.md.
+ * with `packages/apps/protocols/8.json`. The module imports only `effect` and earlier protocol
+ * modules, so no change elsewhere can alter it. Define the next protocol instead of editing this
+ * file. See notes/apps-publishing.md.
  */
 import { Schema } from "effect";
-import { DatabaseFieldReserved, DatabaseLimitExceeded } from "@executor-js/app-data/contracts";
-import { OpenapiResponseError } from "../api-response-error.ts";
-import { ElicitationFailed } from "../elicitation.ts";
-import { FailureDetail } from "../failure.ts";
-import { McpError } from "../mcp.ts";
-import { ProviderError } from "../provider-error.ts";
-import { JsonValue } from "../schema.ts";
-import { SkillLoadFailed } from "../skills.ts";
-import { WorkflowFailure } from "../workflows.ts";
+import {
+  AccountId,
+  ElicitationFailed,
+  JsonValue,
+  OpenapiResponseError,
+  SkillLoadFailed,
+} from "./1.ts";
+import {
+  DatabaseFieldReserved,
+  DatabaseLimitExceeded,
+  FailureCode,
+  FailureMessage,
+  FailureName,
+  FailureSource,
+  WorkflowFailure,
+} from "./3.ts";
 import {
   HostAccountsInvalid,
   HostedRouter as PreviousRouter,
@@ -40,6 +48,86 @@ import {
 } from "./7.ts";
 
 export * from "./7.ts";
+
+/** Most fields of one thrown error carried across the runtime boundary. */
+export const maxFailureFields = 8;
+/** Longest text field value carried across the runtime boundary. */
+export const maxFailureFieldLength = 256;
+/** A field name as the error's code spells it, such as `reason` or `pointer`. */
+export const FailureFieldName = Schema.String.check(
+  Schema.isPattern(/^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/),
+);
+/** Bounded text with account secrets replaced, a finite number, or a boolean. */
+export const FailureFieldValue = Schema.Union([
+  Schema.String.check(Schema.isMaxLength(maxFailureFieldLength)),
+  Schema.Finite,
+  Schema.Boolean,
+]);
+/**
+ * The thrown error's own scalar fields beside its name, code and message, such as the `reason`
+ * and `pointer` a spec compiler sets. Nested values, stacks and causes are never carried.
+ */
+export const FailureFields = Schema.Record(FailureFieldName, FailureFieldValue).check(
+  Schema.isMaxProperties(maxFailureFields),
+);
+export type FailureFields = typeof FailureFields.Type;
+
+/**
+ * The error an app's own code raised, or the specific host failure it hit. Stacks and cause
+ * values stay private. Builds from before these fields existed send none.
+ */
+export const FailureDetail = {
+  source: Schema.optionalKey(FailureSource),
+  errorName: Schema.optionalKey(FailureName),
+  code: Schema.optionalKey(FailureCode),
+  message: Schema.optionalKey(FailureMessage),
+  fields: Schema.optionalKey(FailureFields),
+};
+
+/** Longest error message a service stated, as carried across the runtime boundary. */
+export const maxUpstreamMessageLength = 1024;
+/**
+ * The error a service stated in its own response: a JSON-RPC error's code and message, or an
+ * OAuth Bearer error code and description. Bounded, with the invocation's account secrets replaced.
+ */
+export const UpstreamError = Schema.Struct({
+  code: Schema.Union([
+    Schema.Int,
+    Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(128)),
+  ]),
+  message: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(maxUpstreamMessageLength))),
+});
+export type UpstreamError = typeof UpstreamError.Type;
+
+/** Where a service failed: setting up a session, listing tools, or running one. */
+export const FailurePhase = Schema.Literals(["connect", "discover", "call"]);
+export type FailurePhase = typeof FailurePhase.Type;
+
+/**
+ * Protocol 8's provider failure, as released: protocol 1's with the phase the failure happened in
+ * and the error code and description the service stated. Account secrets in that text are replaced.
+ */
+export class ProviderError extends Schema.TaggedError<ProviderError>()("ProviderError", {
+  reason: Schema.Literals(["unauthorized", "forbidden", "rate_limited", "unavailable", "rejected"]),
+  status: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 100, maximum: 599 }))),
+  accountId: Schema.optional(AccountId),
+  phase: Schema.optional(FailurePhase),
+  upstream: Schema.optional(UpstreamError),
+}) {}
+
+/** Protocol 8's MCP failure, as released: protocol 1's with the JSON-RPC error the server stated. */
+export class McpError extends Schema.TaggedError<McpError>()("McpError", {
+  phase: Schema.Literals(["connect", "discover", "call", "schema", "transport"]),
+  reason: Schema.Literals([
+    "request",
+    "unauthorized",
+    "invalid_response",
+    "timeout",
+    "invalid_input",
+  ]),
+  status: Schema.optional(Schema.Number),
+  upstream: Schema.optional(UpstreamError),
+}) {}
 
 /**
  * The module or declared capability shape could not be hosted. The detail names what the app

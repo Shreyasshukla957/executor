@@ -8,6 +8,7 @@ import {
   Context,
   Duration,
   Effect,
+  ErrorReporter,
   Exit,
   Fiber,
   Layer,
@@ -16,7 +17,8 @@ import {
   Scope,
   Tracer,
 } from "effect";
-import { SqlClient, SqlError } from "effect/unstable/sql";
+import { SqlClient, SqlError } from "effect/sql";
+import { RecordedMessage } from "@executor-js/utils/recorded-message";
 import {
   CompiledQuery,
   DeleteQueryNode,
@@ -44,7 +46,7 @@ import {
 import { cloudInvocationDatabase, InvocationDatabase } from "./invocation-database.ts";
 
 const DriverCode = Schema.Struct({
-  code: Schema.String.check(Schema.isPattern(/^(?:[0-9A-Z]{5}|E[A-Z_]{2,40})$/)),
+  code: Schema.String.check(Schema.isPattern(/^(?:[0-9A-Z]{5}|E[A-Z_]{2,40})$/u)),
 });
 /**
  * A Better Auth query the database or its connection failed. `code` is the server's SQLSTATE
@@ -56,6 +58,31 @@ class AuthDatabaseFailed extends Schema.TaggedError<AuthDatabaseFailed>()("AuthD
   override get message() {
     return `Better Auth query failed: ${this.code}`;
   }
+  /** Fixed text and a closed code: telemetry records the message itself. */
+  get [RecordedMessage]() {
+    return this.message;
+  }
+}
+
+/**
+ * Better Auth's database rate limiter inserts an address's row on its first request to a path.
+ * When two such requests race, the later insert violates the key's unique index; Better Auth
+ * catches that, reads the row the other request inserted and counts this request against it.
+ * The request goes on, so the failed insert is recorded on its span but is not a fault to report.
+ */
+class AuthRateLimitRaced extends Schema.TaggedError<AuthRateLimitRaced>()(
+  "AuthRateLimitRaced",
+  {},
+) {
+  override get message() {
+    return "Another request inserted this address's rate-limit row first; Better Auth counts against that row";
+  }
+  get [RecordedMessage]() {
+    return this.message;
+  }
+  get [ErrorReporter.ignore]() {
+    return true;
+  }
 }
 
 /** A Better Auth query cancelled, or refused, because its invocation was closing its SQL client. */
@@ -65,6 +92,9 @@ class AuthQueryInterrupted extends Schema.TaggedError<AuthQueryInterrupted>()(
 ) {
   override get message() {
     return "The invocation closed its SQL client before a Better Auth query finished";
+  }
+  get [RecordedMessage]() {
+    return this.message;
   }
 }
 
@@ -76,6 +106,10 @@ class AuthWorkUnsettled extends Schema.TaggedError<AuthWorkUnsettled>()("AuthWor
   override get message() {
     return `Better Auth work outlived its invocation: ${this.queries} queries running, ${this.connections} connections reserved`;
   }
+  /** Fixed text and two counts: telemetry records the message itself. */
+  get [RecordedMessage]() {
+    return this.message;
+  }
 }
 
 const failureCode = (error: unknown) =>
@@ -83,6 +117,28 @@ const failureCode = (error: unknown) =>
     onNone: () => (SqlError.isSqlError(error) ? error.reason.name : "UnknownDriverError"),
     onSome: ({ code }) => code,
   });
+
+/** Postgres's `unique_violation`. */
+const uniqueViolation = "23505";
+
+/** Better Auth's table of per-address request counts. */
+const rateLimitTable = "rateLimit";
+
+/**
+ * How a failed Better Auth query is recorded. Only Better Auth's rate limiter inserts into its
+ * table, and it handles losing that insert's race itself.
+ */
+const queryFailure = (error: unknown, node: RootOperationNode, table: string | undefined) => {
+  if (error instanceof AuthQueryInterrupted) return { failure: error, code: undefined };
+  const code = failureCode(error);
+  return {
+    failure:
+      code === uniqueViolation && InsertQueryNode.is(node) && table === rateLimitTable
+        ? new AuthRateLimitRaced()
+        : new AuthDatabaseFailed({ code }),
+    code,
+  };
+};
 
 /**
  * How long a closing invocation waits for the Better Auth work it started. Queries take
@@ -461,12 +517,10 @@ const timedAuthDatabase = () => {
       const start = started.get(event.query.queryId);
       started.delete(event.query.queryId);
       const table = queryTable(event.query.query);
-      const failure =
+      const { failure, code } =
         event.level === "query"
-          ? undefined
-          : event.error instanceof AuthQueryInterrupted
-            ? event.error
-            : new AuthDatabaseFailed({ code: failureCode(event.error) });
+          ? { failure: undefined, code: undefined }
+          : queryFailure(event.error, event.query.query, table);
       return Effect.runPromiseWith(callerContext(current()))(
         (failure === undefined ? Effect.void : Effect.fail(failure)).pipe(
           Effect.withSpan("auth.sql.timing", {
@@ -475,9 +529,7 @@ const timedAuthDatabase = () => {
               ...(table === undefined ? {} : { "db.collection.name": table }),
               "db.query.duration_ms": event.queryDurationMillis,
               "db.query.success": event.level === "query",
-              ...(failure instanceof AuthDatabaseFailed
-                ? { "db.query.error_code": failure.code }
-                : {}),
+              ...(code === undefined ? {} : { "db.query.error_code": code }),
               "db.query.parameter_count": event.query.parameters.length,
               "db.query.clock": "cloudflare-io",
               ...(start === undefined

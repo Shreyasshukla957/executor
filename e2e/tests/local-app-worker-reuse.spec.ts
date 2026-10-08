@@ -23,7 +23,7 @@ import {
   RunObservation,
 } from "../support/worker-observer.ts";
 import { scenarios } from "../test-plan.ts";
-import { appsManifest } from "../support/apps-release.ts";
+import { appsManifest, databaseFiles } from "../support/apps-release.ts";
 
 /** Key replacements, each followed by one tool call and one workflow run. */
 const rotations = 12;
@@ -83,6 +83,7 @@ const localApp = (options: { readonly database: boolean; readonly resource: stri
           content: observerApp({ name, ...options }),
         },
         appsManifest,
+        ...databaseFiles(options.database),
       ],
     });
     expect(deployed.status, JSON.stringify(deployed.body)).toBe(200);

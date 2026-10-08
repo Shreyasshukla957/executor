@@ -16,7 +16,7 @@ import {
   StreamableHTTPError,
 } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { captureTelemetry } from "@executor-js/telemetry";
+import { captureTelemetry, owned } from "@executor-js/telemetry";
 import {
   Clock,
   Deferred,
@@ -34,7 +34,7 @@ import {
   HttpClient,
   HttpClientRequest,
   type HttpClientResponse,
-} from "effect/unstable/http";
+} from "effect/http";
 import {
   defaultMcpClientLimits,
   McpCredentialsUnverified,
@@ -97,11 +97,21 @@ const failure = (
   });
 };
 
-/** The latest error response of a session, and the error its JSON body stated, if any. */
+/**
+ * An error response of a session: the error its JSON body stated, if any, and whether the refused
+ * request carried the session ID the server issued.
+ */
 interface ErrorResponse {
-  readonly status: number;
   readonly upstream: UpstreamError | undefined;
+  readonly session: boolean;
 }
+
+/**
+ * The latest error response of a session with each status. The client reports only a refused
+ * request's status, and other requests of the session, such as its optional event stream, can
+ * be refused meanwhile with another status.
+ */
+type ErrorResponses = ReadonlyMap<number, ErrorResponse>;
 
 /** Error bodies are small: read at most this much, for at most this long. */
 const errorBodyLimits = { maxBytes: 65_536, readTimeoutMs: 2_000 } as const;
@@ -143,7 +153,7 @@ const transportFetch =
     connection: McpConnection,
     telemetry: Effect.Success<typeof captureTelemetry>,
     rejected: Deferred.Deferred<never, ProviderError | NetworkRefused>,
-    answered: Ref.Ref<ErrorResponse | undefined>,
+    answered: Ref.Ref<ErrorResponses>,
   ): FetchLike =>
   (url, init) =>
     Effect.runPromiseWith(telemetry.context)(
@@ -193,7 +203,11 @@ const transportFetch =
           return yield* refused;
         }
         // The SDK reports only the status of a refused request; keep the error the body stated.
-        yield* Ref.set(answered, { status: response.status, upstream });
+        // Only the Streamable HTTP transport sends the session ID its server issued.
+        const session = new Headers(init?.headers).has("mcp-session-id");
+        yield* Ref.update(answered, (responses) =>
+          new Map(responses).set(response.status, { upstream, session }),
+        );
         return new Response(body, { status: response.status, headers: response.headers });
       }).pipe(
         Effect.provide(FetchHttpClient.layer),
@@ -214,36 +228,38 @@ const transportFetch =
 
 /**
  * Name the phase a provider failure happened in, and give a refused request the error its
- * response stated. Session setup is `connect`; the operation itself is the session's mode.
+ * response stated and whether it carried the server's session. Session setup is `connect`; the
+ * operation itself is the session's mode.
  */
 const explain = <E>(
   error: E,
   phase: "connect" | "discover" | "call",
-  response: ErrorResponse | undefined,
+  responses: ErrorResponses,
 ) => {
   if (Schema.is(ProviderError)(error)) return providerErrorDetail(error, { phase });
+  if (!Schema.is(McpError)(error) || error.status === undefined) return error;
+  const response = responses.get(error.status);
   if (
-    !Schema.is(McpError)(error) ||
-    error.upstream !== undefined ||
-    error.status === undefined ||
-    response?.status !== error.status ||
-    response.upstream === undefined
+    response === undefined ||
+    ((error.upstream !== undefined || response.upstream === undefined) && !response.session)
   )
     return error;
+  const upstream = error.upstream ?? response.upstream;
   return new McpError({
     phase: error.phase,
     reason: error.reason,
     status: error.status,
-    upstream: response.upstream,
+    ...(upstream === undefined ? {} : { upstream }),
+    ...(response.session ? { session: true } : {}),
   });
 };
 
-/** Fail with the explained error, reading the session's latest error response. */
+/** Fail with the explained error, reading the session's error response with its status. */
 const explained =
-  (phase: "connect" | "discover" | "call", answered: Ref.Ref<ErrorResponse | undefined>) =>
+  (phase: "connect" | "discover" | "call", answered: Ref.Ref<ErrorResponses>) =>
   <E>(error: E) =>
     Ref.get(answered).pipe(
-      Effect.flatMap((response) => Effect.fail(explain(error, phase, response))),
+      Effect.flatMap((responses) => Effect.fail(explain(error, phase, responses))),
     );
 
 function withClient<A, E>(
@@ -257,7 +273,7 @@ function withClient<A, E>(
       Effect.gen(function* () {
         const telemetry = yield* captureTelemetry;
         const rejected = yield* Deferred.make<never, ProviderError | NetworkRefused>();
-        const answered = yield* Ref.make<ErrorResponse | undefined>(undefined);
+        const answered = yield* Ref.make<ErrorResponses>(new Map());
         const pending = new Set<Promise<void>>();
         const { client, transport } = yield* Effect.acquireRelease(
           Effect.sync(() => {
@@ -278,6 +294,7 @@ function withClient<A, E>(
                   ),
                 );
                 pending.add(task);
+                // oxlint-disable-next-line executor/authored-code-through-adapter -- Executor's catalog invalidation
                 return task.finally(() => pending.delete(task));
               });
             }
@@ -300,6 +317,7 @@ function withClient<A, E>(
           ({ client, transport }) =>
             Effect.gen(function* () {
               client.removeNotificationHandler("notifications/tools/list_changed");
+              // oxlint-disable-next-line executor/authored-code-through-adapter -- Executor's catalog invalidations
               yield* Effect.promise(async () => {
                 await Promise.allSettled(pending);
               });
@@ -307,20 +325,23 @@ function withClient<A, E>(
                 transport instanceof StreamableHTTPClientTransport &&
                 transport.sessionId !== undefined
               ) {
+                // oxlint-disable-next-line executor/authored-code-through-adapter -- MCP SDK
                 yield* Effect.tryPromise(() => transport.terminateSession()).pipe(
                   Effect.timeout(defaultMcpClientLimits.cleanupTimeoutMs),
                   Effect.ignore,
                 );
               }
+              // oxlint-disable-next-line executor/authored-code-through-adapter -- MCP SDK
               yield* Effect.tryPromise(() => client.close()).pipe(
                 Effect.timeout(defaultMcpClientLimits.cleanupTimeoutMs),
                 Effect.ignore,
               );
-            }).pipe(Effect.withSpan("provider.mcp.close")),
+            }).pipe(owned("upstream", "provider.mcp.close")),
         );
         // Hide the SDK getter that conflicts with its own exact-optional Transport type.
         const wire: Omit<StreamableHTTPClientTransport, "sessionId"> | SSEClientTransport =
           transport;
+        // oxlint-disable-next-line executor/authored-code-through-adapter -- MCP SDK
         yield* Effect.tryPromise({
           try: (signal) => client.connect(wire, { signal, timeout: connection.timeoutMs }),
           catch: (error) => failure("connect", error),
@@ -328,7 +349,7 @@ function withClient<A, E>(
           Effect.raceFirst(Deferred.await(rejected)),
           Effect.catch(explained("connect", answered)),
           Effect.timeout(connection.timeoutMs),
-          Effect.withSpan("provider.mcp.connect"),
+          owned("upstream", "provider.mcp.connect"),
         );
         return yield* use(client).pipe(
           Effect.raceFirst(Deferred.await(rejected)),
@@ -336,7 +357,7 @@ function withClient<A, E>(
         );
       }),
     ).pipe(
-      Effect.withSpan("provider.mcp.session", {
+      owned("upstream", "provider.mcp.session", {
         attributes: {
           "mcp.transport": kind,
           "mcp.operation": mode,
@@ -444,9 +465,9 @@ export const mcpHealthEffect = (check: McpHealthCheck, options: McpHealthOptions
               ? Effect.void
               : Effect.fail(new McpCredentialsUnverified({ anonymous: error })),
       }),
-      Effect.withSpan("provider.mcp.anonymous"),
+      owned("upstream", "provider.mcp.anonymous"),
     );
-  }).pipe(Effect.withSpan("provider.mcp.health"));
+  }).pipe(owned("upstream", "provider.mcp.health"));
 
 /** Discover and compile all tools for connection probes and low-level consumers. */
 export const mcpToolsEffect = (input: McpToolsOptions) =>

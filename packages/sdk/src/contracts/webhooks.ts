@@ -4,7 +4,7 @@ import { ProfileId } from "./shared.ts";
 import { ProfileErrors, ProfileRevision } from "./profiles.ts";
 /** Durable, account-bound webhook subscriptions. Products authorize management; callbacks authenticate in app code. */
 import { Schema } from "effect";
-import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi";
+import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/http-api";
 import { HostedWebhook, WebhookRequestData, WebhookResponseData } from "apps/contracts";
 import {
   AppId,
@@ -102,6 +102,7 @@ export const WebhookFailed = ApiError.define({
     reason: Schema.Literals(["unavailable", "definition", "input", "delivery", "inactive"]),
   },
   message: ({ reason }) => webhookFailures[reason],
+  recorded: ({ reason }) => webhookFailures[reason],
 });
 export type WebhookFailed = typeof WebhookFailed.Type;
 /** Shared operation failures, retained as concrete schema variants at HTTP boundaries. */

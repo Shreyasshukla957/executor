@@ -2,7 +2,7 @@
 import { createCatalog } from "@executor-js/catalog";
 import { httpsOnlyUrlPolicy } from "@executor-js/utils/url-policy";
 import { Console, Effect } from "effect";
-import { FetchHttpClient, HttpClient } from "effect/unstable/http";
+import { FetchHttpClient, HttpClient } from "effect/http";
 
 // A host normally passes a client that also checks the address a destination resolves to.
 const egress = {

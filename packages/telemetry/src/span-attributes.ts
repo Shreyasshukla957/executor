@@ -19,6 +19,8 @@
  * Attributes outside these namespaces are the product's own and pass through.
  */
 import { Effect, Exit, Layer, Option, Schema, Tracer } from "effect";
+import { declaredOwner, ownerAttribute } from "./ownership.ts";
+import { recordedCause } from "./recorded-failure.ts";
 
 class LogicalOperationFailed extends Schema.TaggedError<LogicalOperationFailed>()(
   "LogicalOperationFailed",
@@ -36,6 +38,8 @@ export const httpSpanAttributeAllowlist: ReadonlySet<string> = new Set([
   "url.scheme",
   // Path only. `url.full` and `url.query` carry the query string, so neither is listed.
   "url.path",
+  // The router's matched path template, such as `/api/organizations/:organization`; no values.
+  "http.route",
   "http.request.header.content-type",
   "http.request.header.content-length",
   "http.request.header.user-agent",
@@ -95,12 +99,15 @@ const allowlistedSpan = (span: Tracer.Span): Tracer.Span => ({
   },
   // A successful transport can carry a failed domain operation. The producer
   // explicitly marks that outcome; arbitrary result payloads are never inspected.
+  // A failure records the fixed message an error declares in place of an app's text.
   end: (endTime: bigint, exit: Exit.Exit<unknown, unknown>) =>
     span.end(
       endTime,
-      Exit.isSuccess(exit) && span.attributes.get("executor.outcome") === "failed"
-        ? Exit.fail(new LogicalOperationFailed())
-        : exit,
+      Exit.isSuccess(exit)
+        ? span.attributes.get("executor.outcome") === "failed"
+          ? Exit.fail(new LogicalOperationFailed())
+          : exit
+        : Exit.failCause(recordedCause(exit.cause)),
     ),
   attribute: (key: string, value: unknown) => {
     if (spanAttributeAllowed(key)) span.attribute(key, value);
@@ -130,6 +137,8 @@ export const spanAttributes = (
           )
             span.attribute("executor.trace.parent_sampled", options.parent.value.sampled);
           if (clock !== undefined) span.attribute("executor.clock.type", clock);
+          const owner = declaredOwner(options.annotations);
+          if (owner !== undefined) span.attribute(ownerAttribute, owner);
           return span;
         },
       })),

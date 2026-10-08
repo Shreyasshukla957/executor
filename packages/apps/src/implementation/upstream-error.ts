@@ -6,7 +6,7 @@ import { Option, Schema } from "effect";
 import { maxUpstreamMessageLength, UpstreamError } from "../contracts/failure.ts";
 
 /** An OAuth or Bearer error code: a short token such as `invalid_token`, never prose. */
-const ErrorToken = Schema.String.check(Schema.isPattern(/^[A-Za-z0-9._-]{1,128}$/));
+const ErrorToken = Schema.String.check(Schema.isPattern(/^[A-Za-z0-9._-]{1,128}$/u));
 
 /** A JSON-RPC 2.0 error response, as an MCP server answers a request it refuses. */
 const JsonRpcError = Schema.Struct({

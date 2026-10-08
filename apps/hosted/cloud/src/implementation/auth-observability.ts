@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { BetterAuthPlugin } from "better-auth";
 import { Effect, Exit, Option, Schema } from "effect";
-import { HttpServerRequest, type HttpServerResponse } from "effect/unstable/http";
+import { HttpServerRequest, type HttpServerResponse } from "effect/http";
 
 const KnownError = Schema.Literals([
   "access_denied",

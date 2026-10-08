@@ -106,7 +106,9 @@ export interface Credentials {
       | OAuthAttemptId
       | ApprovalRequestId
       | WebhookId
-      | WorkflowRunId,
+      | WorkflowRunId
+      | import("./events.ts").EventSubscriptionId
+      | import("./events.ts").StoredEventId,
     fields: Redacted.Redacted<JsonObject>,
   ) => Effect.Effect<Uint8Array, CredentialsError>;
   readonly decrypt: (
@@ -117,7 +119,9 @@ export interface Credentials {
       | OAuthAttemptId
       | ApprovalRequestId
       | WebhookId
-      | WorkflowRunId,
+      | WorkflowRunId
+      | import("./events.ts").EventSubscriptionId
+      | import("./events.ts").StoredEventId,
     bytes: Redacted.Redacted<Uint8Array>,
   ) => Effect.Effect<Redacted.Redacted<JsonObject>, CredentialsError>;
 }

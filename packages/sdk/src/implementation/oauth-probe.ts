@@ -1,6 +1,6 @@
 /** Header-only OAuth discovery for resources that advertise auth on GET or MCP initialization. */
 import { Effect } from "effect";
-import { FetchHttpClient, HttpBody, HttpClient } from "effect/unstable/http";
+import { FetchHttpClient, HttpBody, HttpClient } from "effect/http";
 import { bearerChallenge } from "./oauth-challenge.ts";
 
 /**

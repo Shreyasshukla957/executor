@@ -58,7 +58,7 @@ export const sourceFilesEqual = (left: SourceFiles, right: SourceFiles): boolean
 };
 
 /** A full immutable Git commit, never a mutable branch name. */
-export const SourceCommit = Schema.String.check(Schema.isPattern(/^[a-f0-9]{40}$/));
+export const SourceCommit = Schema.String.check(Schema.isPattern(/^[a-f0-9]{40}$/u));
 /** Source references keep the code lineage explicit so revisions cannot cross repositories. */
 export const SourceRevision = Schema.Struct({ code: AppCodeId, commit: SourceCommit });
 export type SourceRevision = typeof SourceRevision.Type;
@@ -99,6 +99,7 @@ export const SourceError = ApiError.define({
     ]),
   },
   message: ({ reason }) => sourceFailures[reason],
+  recorded: ({ reason }) => sourceFailures[reason],
 });
 export type SourceError = typeof SourceError.Type;
 
@@ -147,7 +148,7 @@ export interface AppSourceStorage {
 
 /** Portable branch names, including the private retention prefix used by the source service. */
 export const Branch = Schema.String.check(
-  Schema.isPattern(/^[a-zA-Z0-9_][a-zA-Z0-9/_-]{0,127}$/),
+  Schema.isPattern(/^[a-zA-Z0-9_][a-zA-Z0-9/_-]{0,127}$/u),
   Schema.makeFilter((value) => !value.endsWith("/") && !value.includes("//")),
 );
 /** The source budget is identical for complete writes and incremental reads on every host. */

@@ -17,6 +17,7 @@ import {
   type WorkflowExecution,
 } from "apps/contracts";
 import {
+  RuntimeFailure,
   RuntimeProtocolFailed,
   RuntimeProtocolUnsupported,
   type RuntimeBuildUnavailable,
@@ -64,6 +65,8 @@ const RemoteResult = Schema.fromJsonString(
     Schema.Struct({ ok: Schema.Literal(true), value: Schema.Json }),
     Schema.Struct({
       ok: Schema.Literal(false),
+      reason: Schema.optionalKey(RuntimeFailure),
+      /** Only a declaration failure's text, for the deployer. */
       message: Schema.optionalKey(Schema.String),
       /** The build's protocol is one this runner does not run; only its load finds that out. */
       unsupported: Schema.optionalKey(RuntimeProtocolUnsupported),
@@ -223,12 +226,13 @@ const answer = (effect: Effect.Effect<unknown, unknown>) =>
     Effect.map((value) => ({ ok: true as const, value })),
     Effect.catchCause((cause) => {
       const error = Cause.squash(cause);
+      if (Schema.is(RuntimeProtocolUnsupported)(error))
+        return Effect.succeed({ ok: false as const, unsupported: error });
+      if (!Schema.is(RuntimeProtocolFailed)(error)) return Effect.succeed({ ok: false as const });
       return Effect.succeed({
         ok: false as const,
-        ...(Schema.is(RuntimeProtocolFailed)(error) && error.message !== undefined
-          ? { message: error.message }
-          : {}),
-        ...(Schema.is(RuntimeProtocolUnsupported)(error) ? { unsupported: error } : {}),
+        ...(error.reason === undefined ? {} : { reason: error.reason }),
+        ...(error.message ? { message: error.message } : {}),
       });
     }),
     Effect.flatMap(Schema.encodeUnknownEffect(RemoteResult)),
@@ -288,9 +292,10 @@ const result = <E>(effect: Effect.Effect<string, E>) =>
           : reply.unsupported !== undefined
             ? Effect.fail(reply.unsupported)
             : Effect.fail(
-                new RuntimeProtocolFailed(
-                  reply.message === undefined ? {} : { message: reply.message },
-                ),
+                new RuntimeProtocolFailed({
+                  ...(reply.reason === undefined ? {} : { reason: reply.reason }),
+                  ...(reply.message === undefined ? {} : { message: reply.message }),
+                }),
               ),
     ),
   );

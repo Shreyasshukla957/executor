@@ -141,7 +141,7 @@ export type OpenapiFailedOperation = typeof OpenapiFailedOperation.Type;
 /** A response media type without parameters, such as `text/html`. */
 export const OpenapiMediaType = Schema.String.check(
   Schema.isMaxLength(128),
-  Schema.isPattern(/^[\w!#$&^.+-]+\/[\w!#$&^.+-]+$/),
+  Schema.isPattern(/^[\w!#$&^.+-]+\/[\w!#$&^.+-]+$/u),
 );
 
 /**

@@ -3,11 +3,11 @@ import { ApiError } from "@executor-js/utils/api-error";
 /** Local browser pairing and the private desktop bootstrap protocol. */
 import { Schema, type Effect } from "effect";
 import { AppId } from "@executor-js/sdk";
-import { HttpApi, HttpApiEndpoint, HttpApiGroup } from "effect/unstable/httpapi";
+import { HttpApi, HttpApiEndpoint, HttpApiGroup } from "effect/http-api";
 
 /** Ephemeral proof of local possession, redacted immediately at ingress. */
 export const BootstrapToken = Schema.RedactedFromValue(
-  Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/)),
+  Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/u)),
 );
 /** An exchange requires a valid, unused bootstrap credential. */
 export class PairingRejected extends Schema.TaggedError<PairingRejected>()(
@@ -57,7 +57,7 @@ export const AuthStorageError = UserFacingError.define({
 /** Parsed AuthStorageError failure. */
 export type AuthStorageError = typeof AuthStorageError.Type;
 /** SHA-256 digest of an opaque browser credential, never the credential itself. */
-export const SessionHash = Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/)).pipe(
+export const SessionHash = Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/u)).pipe(
   Schema.brand("SessionHash"),
 );
 export type SessionHash = typeof SessionHash.Type;

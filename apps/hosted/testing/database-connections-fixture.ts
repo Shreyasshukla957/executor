@@ -9,7 +9,7 @@ import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Pool } from "pg";
 import { Config, Console, Effect, FileSystem, Option, Redacted, Schema } from "effect";
-import { Command, Flag } from "effect/unstable/cli";
+import { Command, Flag } from "effect/cli";
 import { LocalDatabaseUrl } from "../cloud/src/contracts/database.ts";
 
 /**

@@ -58,21 +58,23 @@ const appMarker = "conversation.id is required";
 const operationApp = [
   {
     path: "index.ts",
-    content: `import { defineApp, defineDatabase, table, string, query, mutation, object, router } from "apps";
+    content: `import { defineApp, string, query, mutation, object, router } from "apps";
 class ConversationMissing extends Error { override name = "ConversationMissing"; }
-export default defineApp({ accounts: {}, database: defineDatabase({ items: table({ label: string() }) }) }, {
+export default defineApp({ accounts: {} }, {
   tools: router({
     fail: query({ input: object({}) }, async () => { throw new ConversationMissing(${JSON.stringify(appMarker)}); }),
-    scans: query({ input: object({}) }, async (ctx) => {
-      for (let index = 0; index < 101; index++) await ctx.db.items.withIndex("by_creation").first();
-      return null;
-    }),
-    failWrite: mutation({ input: object({}) }, async (ctx) => {
-      await ctx.db.items.insert({ label: "rolled back" });
-      throw new TypeError(${JSON.stringify(appMarker)});
-    }),
+    failWrite: mutation({ input: object({}) }, async (ctx) =>
+      ctx.sql.transaction((tx) => {
+        tx.exec("INSERT INTO items (label) VALUES ('rolled back')");
+        throw new TypeError(${JSON.stringify(appMarker)});
+      })),
   }),
 });`,
+  },
+  {
+    path: "migrations/0001_items.sql",
+    content: `CREATE TABLE items (label TEXT NOT NULL);
+`,
   },
   appsManifest,
 ];
@@ -188,6 +190,26 @@ export default defineApp({ accounts: {} }, {});`,
         expect(declared.stage).toBe("declaration");
         expect(declared.message).toContain(declarationMarker);
 
+        // A frozen error keeps its own name, message and location: reporting it changes nothing on it.
+        const frozen = yield* deploy([
+          {
+            path: "index.ts",
+            content: `import { defineApp } from "apps";
+throw Object.freeze(new TypeError(${JSON.stringify(declarationMarker)}));
+export default defineApp({ accounts: {} }, {});`,
+          },
+        ]);
+        yield* evidence.json("frozen-declaration-failure.json", frozen.body);
+        expect(frozen.status).toBe(422);
+        const kept = yield* body(BuildFailed, frozen);
+        expect(kept).toMatchObject({
+          stage: "declaration",
+          location: { file: "index.ts", line: 2, column: 21 },
+        });
+        expect(kept.message).toContain(`TypeError: ${declarationMarker}`);
+        expect(kept.message).toContain("at index.ts:2:21");
+        expect(kept.message).not.toContain("read only");
+
         // The Executor app's deploy tool carries the same detail to an MCP caller.
         const { client, profile } = yield* frameworkSession;
         const deployed = yield* client.use("Deploy a failing app through MCP", (client, signal) =>
@@ -262,13 +284,6 @@ export default defineApp({ accounts: {} }, {});`,
         expect(query.reason).toBe(`The app threw ConversationMissing: ${appMarker}`);
         const mutation = yield* body(ToolFailed, yield* call("failWrite", "mutation"));
         expect(mutation.failure).toMatchObject({ source: "app", errorName: "TypeError" });
-
-        // A host storage limit names itself instead of failing silently.
-        const scans = yield* body(ToolFailed, yield* call("scans", "query"));
-        yield* evidence.json("storage-limit-failure.json", scans);
-        expect(scans.failure.source).toBe("storage");
-        expect(scans.failure.message.length).toBeGreaterThan(0);
-        expect(scans.reason).toContain(scans.failure.message);
 
         // MCP callers receive the same message with recovery guidance.
         const { client } = yield* frameworkSession;

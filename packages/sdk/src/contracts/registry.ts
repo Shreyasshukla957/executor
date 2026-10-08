@@ -5,12 +5,15 @@ import { appSlug } from "./app-slug.ts";
 import { AppId, JsonObject, OwnerId } from "./shared.ts";
 import { SourceCommit, SourceFiles, SourceRevision } from "./source.ts";
 
-/** The hosted Executor origin: the default public registry and the hosted sign-in host. */
-export const hostedExecutorOrigin = "https://v2.executor.sh";
+/**
+ * The hosted Executor API origin: the default public registry and the host the CLI and SDK call.
+ * Clients discover sign-in from it (RFC 9728); the dashboard and MCP live on other hosts.
+ */
+export const hostedExecutorOrigin = "https://api.executor.sh";
 
 /** Public name inside a publishing owner's namespace. */
 export const PackageName = Schema.String.check(
-  Schema.isPattern(/^@[a-z0-9][a-z0-9-]{0,79}\/[a-z0-9][a-z0-9-]{0,62}$/),
+  Schema.isPattern(/^@[a-z0-9][a-z0-9-]{0,79}\/[a-z0-9][a-z0-9-]{0,62}$/u),
 );
 export type PackageName = typeof PackageName.Type;
 /** Standard npm metadata remains source; only name and description identify a public listing. */
@@ -118,6 +121,10 @@ export const RegistryError = ApiError.define({
     status: Schema.optional(Schema.Int),
   },
   message: ({ reason, status }) =>
+    reason === "status" && status !== undefined
+      ? `The public app registry responded with HTTP ${status}.`
+      : registryFailures[reason],
+  recorded: ({ reason, status }) =>
     reason === "status" && status !== undefined
       ? `The public app registry responded with HTTP ${status}.`
       : registryFailures[reason],

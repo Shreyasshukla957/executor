@@ -27,7 +27,7 @@ questions:
     question: What is the MCP endpoint URL, and what transport does it use?
     expected:
       - the endpoint is the origin plus /mcp
-      - hosted is https://v2.executor.sh/mcp
+      - hosted is https://mcp.executor.sh/mcp
       - a local server is http://127.0.0.1:4312/mcp
       - the transport is streamable HTTP
     routes:
@@ -151,7 +151,7 @@ questions:
   - id: where-to-run
     question: What are the ways to run Executor, and what is different about each?
     expected:
-      - hosted at v2.executor.sh, with nothing to install
+      - hosted at app.executor.sh, with nothing to install
       - local on your own machine through the command line
       - self-host in Docker on your own infrastructure
       - all three run the same apps and expose the same /mcp endpoint

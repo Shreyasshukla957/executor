@@ -3,7 +3,7 @@ import type { Query } from "../../contracts/dashboard.ts";
 import type { ComponentType } from "react";
 import type { FailureProps } from "../../contracts/dashboard.ts";
 import { AppCreateForm } from "./app-create.tsx";
-import { AsyncResult } from "effect/unstable/reactivity";
+import { AsyncResult } from "effect/reactivity";
 import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
 import { useState, type ReactNode } from "react";
 import { Option } from "effect";

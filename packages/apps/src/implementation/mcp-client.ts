@@ -1,3 +1,4 @@
+import { owned } from "@executor-js/telemetry";
 import type { ProviderError } from "../contracts/provider-error.ts";
 import type { NetworkRefused } from "../contracts/network.ts";
 /** Shared MCP pagination, wire parsing and calls. Transport owns connection lifetime. */
@@ -91,6 +92,7 @@ export function mcpClient(
       const cursors = new Set<string>();
       let cursor: string | undefined;
       do {
+        // oxlint-disable-next-line executor/authored-code-through-adapter -- MCP SDK
         const page = yield* Effect.tryPromise({
           // This session only reads metadata. listTools() also eagerly compiles
           // every output validator; mcpRouter validates the selected tool on call.
@@ -102,7 +104,7 @@ export function mcpClient(
             ),
           catch: (error) => failure("discover", error),
         }).pipe(
-          Effect.withSpan("provider.mcp.request", {
+          owned("upstream", "provider.mcp.request", {
             kind: "client",
             attributes: { "rpc.system.name": "jsonrpc", "rpc.method": "tools/list" },
           }),
@@ -145,7 +147,7 @@ export function mcpClient(
         server: Option.getOrElse(server, () => ({})),
       };
     }),
-  ).pipe(Effect.withSpan("provider.mcp.discover"));
+  ).pipe(owned("upstream", "provider.mcp.discover"));
 
   /**
    * Initialize a session and read the first page of tools, which servers that accept anonymous
@@ -153,6 +155,7 @@ export function mcpClient(
    * the account's credentials.
    */
   const check = withClient("discover", (client) =>
+    // oxlint-disable-next-line executor/authored-code-through-adapter -- MCP SDK
     Effect.tryPromise({
       try: (signal) =>
         client.request({ method: "tools/list", params: {} }, ListToolsResultSchema, {
@@ -162,17 +165,17 @@ export function mcpClient(
       catch: (error) => failure("discover", error),
     }).pipe(
       Effect.asVoid,
-      Effect.withSpan("provider.mcp.request", {
+      owned("upstream", "provider.mcp.request", {
         kind: "client",
         attributes: { "rpc.system.name": "jsonrpc", "rpc.method": "tools/list" },
       }),
     ),
-  ).pipe(Effect.withSpan("provider.mcp.check"));
+  ).pipe(owned("upstream", "provider.mcp.check"));
 
   /** Call once with one account, retaining content and MCP tool-error results. */
   const call = (name: string, input: JsonObject, context: McpToolContext) =>
     withClient("call", (client) => mcpCall(client, name, input, context, timeoutMs, failure)).pipe(
-      Effect.withSpan("provider.mcp.call", { attributes: { "mcp.tool.name": name } }),
+      owned("upstream", "provider.mcp.call", { attributes: { "mcp.tool.name": name } }),
     );
 
   return { list, check, call };

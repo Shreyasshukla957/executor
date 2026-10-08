@@ -1,4 +1,4 @@
-/** Reusable setup lifecycle. Hosts own access checks and browser links; optional targets select the saved account. */
+/** Reusable setup lifecycle. Hosts own access checks and browser links; each target selects the saved account. */
 import { Clock, type Crypto, Effect, Schema } from "effect";
 import type { ResourceLifecycle } from "../contracts/executor.ts";
 import {
@@ -95,10 +95,7 @@ export const makeAccountConnections = (
     get,
     create: (input: typeof CreateAccountConnection.Type) =>
       Effect.gen(function* () {
-        const destination =
-          input.target === undefined
-            ? { provider: input.provider, snapshot: null }
-            : yield* captureConnectionTarget(db, input.target);
+        const destination = yield* captureConnectionTarget(db, input.target);
         const resolved = yield* provider(destination.provider);
         let reconnectAccount: Account | null = null;
         if (input.account !== undefined) {
@@ -113,7 +110,7 @@ export const makeAccountConnections = (
           `con_${yield* crypto.randomUUIDv4.pipe(Effect.mapError(() => new StorageError()))}`,
         );
         const now = yield* Clock.currentTimeMillis;
-        const target = yield* Schema.encodeEffect(Schema.NullOr(StoredConnectionTarget))(
+        const target = yield* Schema.encodeEffect(StoredConnectionTarget)(
           destination.snapshot,
         ).pipe(Effect.mapError(() => new StorageError()));
         const created = {
@@ -134,10 +131,7 @@ export const makeAccountConnections = (
             revision: id,
           }),
         );
-        const shown =
-          destination.snapshot === null
-            ? undefined
-            : yield* targetProvider(db, destination.snapshot, resolved.id);
+        const shown = yield* targetProvider(db, destination.snapshot, resolved.id);
         return describe(created, shown ?? resolved, reconnectAccount);
       }).pipe(Effect.withSpan("sdk.connections.create")),
     cancel: (input: typeof GetAccountConnection.Type) =>

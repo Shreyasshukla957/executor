@@ -277,7 +277,7 @@ layer(HostedLive, { excludeTestServices: true })("OpenAPI errors", (it) => {
         const petError = (yield* Schema.decodeUnknownEffect(Failure)(invalidPet.structuredContent))
           .execution.error;
         expect(petError.message).toBe(
-          "InputInvalid (HTTP 422): Input failed validation: input.body: Expected object {petType, meow, ...} or object {petType, bark, ...}, told apart by petType. Closest is alternative 2, whose problems follow; input.body.bark: Missing key Recovery: Change the input to the shape each problem expects, then call the tool again.",
+          "InputInvalid (HTTP 422): Input failed validation: input.body: Expected object {petType, meow, ...} or object {petType, bark, ...}, told apart by petType. Closest is alternative 2, whose problems follow; input.body.bark: Missing key. Expected boolean Recovery: Change the input to the shape each problem expects, then call the tool again.",
         );
         expect(petError.message.toLowerCase()).not.toContain("dog");
         // The interpreter only exposes Error.message inside catch; its JSON envelope retains the same fields.
@@ -513,8 +513,7 @@ export default defineApp({ accounts: {} }, async () => {
           message:
             "Executor could not load this app’s tool definitions. The app threw Error: Synthetic factory failure",
           recovery: {
-            action:
-              "Try again. If this continues, fix the app code that raised this error and deploy it.",
+            action: "Try again. If this continues, investigate this error and fix its cause.",
           },
         });
         expect(JSON.stringify(discovered)).not.toContain(openapiSecretMarker);

@@ -8,6 +8,10 @@
  *
  * - Workers Custom Domains own the `100::` AAAA records of `executor.sh` (v1, wrangler) and
  *   `v2.executor.sh` (the `v2` stage).
+ *
+ * The `v2` stage's role hosts (`app.`, `mcp.`, `api.`) are declared here as proxied `100::`
+ * records, which the `v2` stage's Worker routes serve. Routes order no certificate, so these hosts
+ * use the zone's `*.executor.sh` certificate. See `src/infrastructure/role-hosts.ts`.
  * - Email Sending owns the `cf-bounce` MX, SPF and DKIM records of `executor.sh` (welcome email)
  *   and `mail-v2.executor.sh` (`authEmailInfrastructure`).
  *
@@ -20,10 +24,16 @@ import { retain } from "alchemy/RemovalPolicy";
 import { Stage } from "alchemy/Stage";
 import { Effect } from "effect";
 import { productZoneCertificateCoverage } from "./src/infrastructure/product-zone.ts";
-import { productZone } from "./src/infrastructure/stage.ts";
+import { hostRoles, productZone } from "./src/infrastructure/stage.ts";
 
 type Declared =
   | { readonly type: "CNAME" | "TXT"; readonly name: string; readonly content: string }
+  | {
+      readonly type: "AAAA";
+      readonly name: string;
+      readonly content: "100::";
+      readonly proxied: true;
+    }
   | {
       readonly type: "MX";
       readonly name: string;
@@ -156,6 +166,16 @@ const records: ReadonlyArray<
     content: '"v=DMARC1; p=reject;"',
     ttl: "1",
   },
+  // The `v2` stage's role hosts. Its API Worker serves them through zone routes.
+  ...hostRoles.map((role) => ({
+    id: `RoleHost-${role}`,
+    type: "AAAA" as const,
+    name: role,
+    content: "100::" as const,
+    proxied: true as const,
+    ttl: "1" as const,
+    comment: "Routes the v2 stage's role host to its API Worker",
+  })),
 ];
 
 export default Alchemy.Stack(
@@ -168,11 +188,16 @@ export default Alchemy.Stack(
       Effect.orDie,
     );
     if (!zone) return yield* Effect.die(new Error(`Cloudflare zone ${productZone} is missing`));
-    yield* productZoneCertificateCoverage(zone.id);
+    const hostname = (name: string) => (name === "@" ? productZone : `${name}.${productZone}`);
+    // Checked before any change, with the proxied hosts this deploy declares.
+    yield* productZoneCertificateCoverage(
+      zone.id,
+      records.flatMap((record) => ("proxied" in record ? [hostname(record.name)] : [])),
+    );
     for (const { id, name, ...record } of records) {
       yield* Cloudflare.DNS.Record(id, {
         zoneId: zone.id,
-        name: name === "@" ? productZone : `${name}.${productZone}`,
+        name: hostname(name),
         proxied: false,
         ...record,
       }).pipe(adopt(), retain());

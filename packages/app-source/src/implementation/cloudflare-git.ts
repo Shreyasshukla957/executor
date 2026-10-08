@@ -7,7 +7,7 @@ import {
   HttpClientError,
   HttpClientRequest,
   HttpMethod,
-} from "effect/unstable/http";
+} from "effect/http";
 import { captureTelemetry, pendingSpan, traceHeaders } from "@executor-js/telemetry";
 import * as Git from "isomorphic-git";
 import { Volume, createFsFromVolume } from "memfs";

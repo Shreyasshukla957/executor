@@ -38,6 +38,7 @@ the `executor apps` CLI; without one, build through `execute`. Read the
 ## Send feedback
 
 Send feedback with the Executor app's `feedback.submit` tool when Executor gets
-in your way, when you need something it cannot do, or when the user has
-feedback about it. Be specific. Never include credentials or user data. Read
-`feedback.md` in this skill for details.
+in your way, when you need something it cannot do, when something works
+especially well, or when the user has feedback about it. Before your final
+reply, check whether anything is worth reporting. Be specific. Never include
+credentials or user data. Read `feedback.md` in this skill for details.

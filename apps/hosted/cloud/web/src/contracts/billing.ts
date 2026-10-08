@@ -5,7 +5,7 @@ import { observeBrowserTransport, observeBrowserResponse } from "@executor-js/te
 import { organizationHttpClient } from "@executor-js/hosted-web/contracts/organization-reference";
 import { DashboardRuntime } from "@executor-js/hosted-web/contracts/telemetry";
 import { Data, Duration } from "effect";
-import { Atom, AtomHttpApi } from "effect/unstable/reactivity";
+import { Atom, AtomHttpApi } from "effect/reactivity";
 import { batchReads } from "@executor-js/dashboard-start/batch-browser";
 import type { OrganizationReference } from "@executor-js/hosted-server/organization";
 import { ExecutorCloudApi } from "../../../src/contracts/api.ts";

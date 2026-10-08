@@ -23,7 +23,7 @@ Read these docs with
 Commands target the local server at `http://127.0.0.1:4312` by default. It
 reads the local API key from `EXECUTOR_API_KEY`. If that variable is unset, ask
 the user to set it; do not search files for it. For hosted Executor, run
-`executor apps login --host https://v2.executor.sh` once. It signs in through
+`executor apps login --host https://api.executor.sh` once. It signs in through
 the browser. Then pass the same `--host` to every command.
 
 A new app is a directory with `index.ts` and a `package.json` that pins the
@@ -186,11 +186,18 @@ return await executor.appManagement.deploy({ path: { ...path, app: app.id }, bod
 Local has no organization: omit `path` for `framework.release` and create, and
 pass `path: { app: app.id }` to deploy.
 
-Create the app, read its working source, and save the complete file list with
-`expected: source.revision.commit` and a commit message. Deploy the returned
-`revision.commit` with `body: { commit }`, or deploy a complete file list with
-`body: { files }`. Supply exactly one. `appManagement.deploy` does not accept
-`expected` or `expectedDeployment`. Commits and Git pushes do not change the running version. A copy is another normal app with fresh Git history and no accounts or app data.
+A new app runs only once deployed; its tools and `appUi.location` answer only
+after that first deployment. Deploy the same `{ files }` straight after create,
+as above, or read `appManagement.source` and deploy the commit create saved
+with `body: { commit: source.revision.commit }`.
+
+To change the app, read its working source and save the complete file list with
+`expected: source.revision.commit` and a commit message. Deploy the
+`revision.commit` that `appManagement.commit` returns with `body: { commit }`,
+not the `expected` commit you read before editing, or deploy a complete file
+list with `body: { files }`. Supply exactly one. `appManagement.deploy` takes
+the app ID in `path` and does not accept `name`, `expected` or
+`expectedDeployment`. Commits and Git pushes do not change the running version. A copy is another normal app with fresh Git history and no accounts or app data.
 Running apps copy their deployed source and deploy the copy. Unfinished apps copy
 their working files and remain undeployed.
 
@@ -286,6 +293,11 @@ its `files` in the same execution and pass them to create or commit. For a small
 edit, replace only the affected file content and retain the other files. Check
 that the expected text exists before applying a text replacement. Do not print
 the entire app and retype it to change one style or operation.
+
+The `code-mode` skill's 65,536-character program limit counts source written
+into the program, not source it reads with `appManagement.source`. When new
+files do not fit in one program, add them over several executions: each reads
+the working source, adds some files and commits the complete list.
 
 If you have a shell and the CLI, use the local CLI path above instead of
 serializing files into tool calls. Otherwise, for locally authored files,

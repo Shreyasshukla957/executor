@@ -14,7 +14,7 @@ import {
   HttpServerRequest,
   HttpTraceContext,
   type HttpServerResponse,
-} from "effect/unstable/http";
+} from "effect/http";
 
 /** The host's request pipeline as a Web handler bound to the current outer request's services. */
 export class HostPipeline extends Context.Service<

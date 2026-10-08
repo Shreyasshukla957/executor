@@ -23,17 +23,21 @@ class Pending extends Schema.TaggedError<Pending>()("Pending", {}) {}
 const files = (label: string) => [
   {
     path: "index.ts",
-    content: `import { defineApp, defineDatabase, table, string, query, mutation, interval, object, router } from "apps";
+    content: `import { defineApp, query, mutation, interval, object, router } from "apps";
 const record = mutation({ input: object({}) }, async (ctx) => {
-  await ctx.db.runs.insert({ label: ${JSON.stringify(label)} });
+  ctx.sql.exec("INSERT INTO runs (label, created_at) VALUES (?, ?)", ${JSON.stringify(label)}, Date.now());
   return { label: ${JSON.stringify(label)} };
 });
 const labels = query({ input: object({}) }, async (ctx) =>
-  (await ctx.db.runs.withIndex("by_creation").collect()).map((run) => run.label));
-export default defineApp({ accounts: {}, database: defineDatabase({ runs: table({ label: string() }) }) }, async () => ({
+  ctx.sql.exec("SELECT label FROM runs ORDER BY rowid").toArray().map((run) => run.label));
+export default defineApp({ accounts: {} }, async () => ({
   tools: router({ record, labels }),
   schedules: { record: interval({ hours: 24 }, record, {}) },
 }));`,
+  },
+  {
+    path: "migrations/0001_runs.sql",
+    content: "CREATE TABLE runs (label TEXT NOT NULL, created_at INTEGER NOT NULL);\n",
   },
   appsManifest,
 ];
@@ -119,13 +123,26 @@ layer(HostedLive, { excludeTestServices: true })("Scheduled runs after a redeplo
             "executor.app.id": app.id,
             "executor.run.id": run ?? "",
           });
-        // The second run is the first call of the new build, so its runtime starts cold and loads it.
-        const second = yield* loads(secondRun?.id).pipe(
-          Effect.flatMap((tags) =>
-            tags.length > 0 ? Effect.succeed(tags) : Effect.fail(new Pending()),
-          ),
-          Effect.retry({ schedule: Schedule.spaced("500 millis"), times: 60 }),
-        );
+        // The deploy migrates the app's database through the new build, so that build is loaded
+        // before the second run, which may then find it warm. The new build was loaded, and every
+        // load the second run caused read it.
+        const newBuildLoads = yield* telemetry
+          .spans(buildLoadSpan, {
+            "executor.app.id": app.id,
+            "executor.build.id": secondBuild.build,
+          })
+          .pipe(
+            Effect.flatMap((tags) =>
+              tags.length > 0 ? Effect.succeed(tags) : Effect.fail(new Pending()),
+            ),
+            Effect.retry({
+              schedule: Schedule.spaced("500 millis"),
+              times: 60,
+              while: (error) => error instanceof Pending,
+            }),
+          );
+        expect(newBuildLoads.length).toBeGreaterThan(0);
+        const second = yield* loads(secondRun?.id);
         const first = yield* loads(firstRun?.id);
         yield* evidence.json("scheduled-run-build-loads.json", { first, second });
         expect(

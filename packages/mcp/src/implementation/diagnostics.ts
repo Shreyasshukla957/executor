@@ -1,6 +1,6 @@
-import { Effect, Option, Schema, SchemaAST } from "effect";
-import { HttpServerResponse } from "effect/unstable/http";
-import { McpSchema } from "effect/unstable/ai";
+import { Cause, Effect, ErrorReporter, Option, Schema, SchemaAST } from "effect";
+import { HttpServerResponse } from "effect/http";
+import { McpSchema } from "effect/ai";
 import { InputInvalid, mcpFailurePresentation, ToolCallFailed } from "@executor-js/sdk/core";
 import { UserFacingError } from "@executor-js/utils/user-facing-error";
 import {
@@ -8,7 +8,7 @@ import {
   maxApiErrorInstructionsLength,
   maxApiErrorMessageLength,
 } from "apps/contracts";
-import { CodeMode } from "@opencode-ai/codemode";
+import type { CodeMode } from "@opencode-ai/codemode";
 
 const encodeResponse = Schema.encodeSync(Schema.fromJsonString(ApiErrorResponse));
 
@@ -87,6 +87,13 @@ const identifier = (error: Error) => {
   const schema = error.constructor;
   return Schema.isSchema(schema) ? (SchemaAST.resolveIdentifier(schema.ast) ?? "Error") : "Error";
 };
+/**
+ * Report a failure an MCP tool answers with as data, as the same failure of a REST request reports.
+ * The host's reporter decides what is an incident, such as skipping client errors, and records it
+ * without the app's text.
+ */
+export const reportFailure = (error: Error): Effect.Effect<void> =>
+  ErrorReporter.report(Cause.fail(error));
 /** One line for agents: code, status, message and the declared recovery action. */
 const summary = ({ code, status, message, recovery }: typeof ApiErrorResponse.Type) =>
   `${code} (HTTP ${status}): ${message}${recovery === undefined ? "" : ` Recovery: ${recovery.action}`}`;

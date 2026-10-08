@@ -4,7 +4,7 @@
  * normally. Both run the same organization middleware,
  * so no request from outside can produce that split. Production entry points never provide it.
  */
-import { Cookies, HttpRouter } from "effect/unstable/http";
+import { Cookies, HttpRouter } from "effect/http";
 import { Effect, Schema } from "effect";
 import { InProcessReadFixture } from "@executor-js/dashboard-start/in-process";
 import { AuthenticationUnavailable } from "@executor-js/hosted-server";

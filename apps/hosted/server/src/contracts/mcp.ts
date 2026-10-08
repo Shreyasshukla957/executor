@@ -1,4 +1,4 @@
-import { Grant, GrantId, type ApprovalMode } from "@executor-js/mcp-auth";
+import { Grant, GrantId, type ApprovalMode, type ResourceOrigins } from "@executor-js/mcp-auth";
 import type {
   Connection,
   ConnectionId,
@@ -6,6 +6,7 @@ import type {
   ConnectionNotFound,
   ConnectionPolicy,
 } from "@executor-js/mcp-auth/connections";
+import type { ConnectedAgent, ConnectedAgentNotFound } from "@executor-js/mcp-auth/agents";
 import { UserFacingError, type ErrorPresentation } from "@executor-js/utils/user-facing-error";
 import { Context, Schema } from "effect";
 import type { Effect } from "effect";
@@ -20,6 +21,14 @@ export const McpAccess = Schema.Struct({
   grant: Grant,
 });
 export type McpAccess = typeof McpAccess.Type;
+
+/**
+ * The grant an MCP request authenticated with. Event subscriptions belong to it, so revoking the
+ * grant stops them. Unset outside MCP requests.
+ */
+export const CurrentMcpGrant = Context.Reference<GrantId | undefined>("hosted/CurrentMcpGrant", {
+  defaultValue: () => undefined,
+});
 
 /** Invalid/revoked bearer grants need a fresh OAuth connection. */
 export class McpUnauthorized extends Schema.TaggedError<McpUnauthorized>()("McpUnauthorized", {}) {}
@@ -69,6 +78,7 @@ export const McpForbidden = UserFacingError.define({
   tag: "McpForbidden",
   status: 403,
   fields: { reason: McpForbiddenReason },
+  recorded: ({ reason }) => forbidden[reason].description,
   presentation: ({ reason }) => forbidden[reason],
 });
 export type McpForbidden = typeof McpForbidden.Type;
@@ -101,13 +111,27 @@ export interface McpConnectionStore {
     owner: ConnectionOwner,
     id: ConnectionId,
   ) => Effect.Effect<void, ConnectionNotFound | AuthenticationUnavailable>;
+  /** The owner's authorized MCP and API clients, one per live grant. */
+  readonly agents: (
+    owner: ConnectionOwner,
+  ) => Effect.Effect<readonly ConnectedAgent[], AuthenticationUnavailable>;
+  /** Revoke one of the owner's grants and delete its access and refresh tokens. */
+  readonly revokeAgent: (
+    owner: ConnectionOwner,
+    id: GrantId,
+  ) => Effect.Effect<void, ConnectedAgentNotFound | AuthenticationUnavailable>;
 }
 
 /** Better Auth owns grant validation; each host supplies its native request lifetime. */
 export class McpAuthentication extends Context.Service<
   McpAuthentication,
   {
+    /** The browser origin: dashboard, sign-in, cookies and Origin checks. */
     readonly origin: string;
+    /** The origins of MCP and API OAuth resources; the first is canonical. They may differ from the browser origin. */
+    readonly resourceOrigins: ResourceOrigins;
+    /** The authorization server's exact issuer identifier, which discovery names. */
+    readonly issuer: string;
     readonly authenticate: (
       headers: Headers,
       mode?: ApprovalMode,

@@ -1,19 +1,25 @@
 import { localSourceFormatter } from "@executor-js/app-management/source-format";
-import { publishedSkillRoutes, readExecutorSkills } from "@executor-js/app-templates/executor";
+import {
+  publishedSkillRoutes,
+  readExecutorSkills,
+  annotateSkillRead,
+} from "@executor-js/app-templates/executor";
 import { localAppBrowserHandlers } from "./app-browser.ts";
 import { startupPhase } from "./startup-diagnostics.ts";
 import {
   startScheduleWorker,
   defaultScheduleWorkerOptions,
   ScheduleObservation,
+  deliverEvents,
 } from "@executor-js/sdk/scheduling";
 import { localScheduleHandlers } from "./schedules.ts";
 import { localMcpApproval } from "./mcp-approvals.ts";
-import { makeLocalMcpOAuth } from "./mcp-oauth.ts";
+import { makeLocalMcpOAuth, type LocalMcpOAuth } from "./mcp-oauth.ts";
+import { localEventAuthority } from "./events.ts";
 import { localMcpConnectionHandlers } from "./mcp-connections.ts";
 import { localAppManagement } from "./app-management.ts";
-import { runStartupDataSteps } from "@executor-js/app-management/data-steps";
-import { SqlClient } from "effect/unstable/sql";
+import { expireIdleAgentGrants, runStartupDataSteps } from "@executor-js/app-management/data-steps";
+import { SqlClient } from "effect/sql";
 
 /** Local host composition. The SDK owns operations; this package owns local resources and access. */
 import {
@@ -24,6 +30,7 @@ import {
   AccountNotFound,
   AppNotFound,
   createExecutor,
+  httpEventSender,
   makeDeclarationCache,
   declarationConfig,
   toEffectRuntime,
@@ -45,11 +52,11 @@ import {
   Schedule,
   Scope,
 } from "effect";
-import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
+import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 import { recordRequestRejections, requestTiming } from "@executor-js/telemetry/http";
 import { safeHttpClient } from "@executor-js/utils/safe-fetch";
 import type { HostEgress } from "@executor-js/utils/url-policy";
-import { HttpApiBuilder } from "effect/unstable/httpapi";
+import { HttpApiBuilder } from "effect/http-api";
 import type { LocalServerOptions } from "../contracts/server.ts";
 import type { ServerConfig } from "../contracts/config.ts";
 import { openStorage } from "./storage.ts";
@@ -81,8 +88,8 @@ import { localAnalytics, observeLocalExecutor, scheduleAnalytics } from "./produ
 export const localApi = (
   config: ServerConfig,
   crypto: Crypto,
-  existingAuth?: LocalAuth,
-  options: LocalServerOptions = {},
+  existingAuth: LocalAuth | undefined,
+  options: LocalServerOptions,
 ) =>
   Layer.unwrap(
     Effect.gen(function* () {
@@ -120,6 +127,8 @@ export const localApi = (
       const repositories = nativeRepositories(path.join(directory, "repositories"));
       const server = yield* Scope.Scope;
       const evaluation = yield* declarationConfig;
+      // MCP grants are checked again before each event delivery; OAuth starts after the executor.
+      const grants = yield* Deferred.make<LocalMcpOAuth>();
       const executor = yield* createExecutor({
         database: storage,
         secret: config.encryptionKey,
@@ -135,6 +144,11 @@ export const localApi = (
         },
         // Stale declarations refresh on the server's own lifetime.
         background: (work) => Effect.forkIn(work, server).pipe(Effect.as(true)),
+        events: {
+          sender: httpEventSender(egress),
+          authorize: localEventAuthority(Deferred.await(grants)),
+          allowInsecureCallbacks: config.urlPolicy.allowLoopbackHttp,
+        },
         oauth: {
           httpClient,
           clientName: "Executor Local",
@@ -147,17 +161,27 @@ export const localApi = (
       yield* Deferred.succeed(ready, executor);
       const analytics = yield* localAnalytics({
         directory,
-        product: options.product ?? "local",
+        product: options.product,
         platform: options.platform ?? { os: "unknown", arch: "unknown" },
         sql,
       });
       /** Each product surface records its own use; host-owned work uses the plain executor. */
       const observed = (source: "mcp" | "api" | "dashboard" | "app_ui") =>
         observeLocalExecutor(executor, analytics, source);
+      // Data steps revoke idle OAuth grants, so the provider exists before they run.
+      const oauth = yield* makeLocalMcpOAuth(config, auth, crypto);
       // Before background work, the Executor app's regeneration and serving; the data lock is held.
-      yield* runStartupDataSteps({ executor, blobs }, "private_local").pipe(
-        Effect.provideService(SqlClient.SqlClient, sql),
-        startupPhase("data-steps"),
+      yield* runStartupDataSteps(
+        { executor, blobs, agentGrants: oauth.agentGrants },
+        "private_local",
+      ).pipe(Effect.provideService(SqlClient.SqlClient, sql), startupPhase("data-steps"));
+      // Once the idle grant step has applied, revoke grants that became idle since, daily.
+      yield* Effect.forkScoped(
+        expireIdleAgentGrants(oauth.agentGrants, "private_local").pipe(
+          Effect.provideService(SqlClient.SqlClient, sql),
+          Effect.catch(() => Effect.logWarning("Idle agent grant expiry failed")),
+          Effect.repeat(Schedule.spaced("1 day")),
+        ),
       );
       yield* Effect.forkScoped(
         executor[RepositoryHost].recover.pipe(
@@ -217,7 +241,8 @@ export const localApi = (
           return yield* httpEffect;
         }),
       );
-      const oauth = yield* makeLocalMcpOAuth(config, auth, crypto);
+      yield* Deferred.succeed(grants, oauth);
+      yield* Effect.forkScoped(deliverEvents(executor));
       const mcp = yield* localMcp(observed("mcp"), config.mcp, config, oauth);
       const api = observed("api");
       const programmatic = Layer.mergeAll(
@@ -230,12 +255,17 @@ export const localApi = (
           Layer.provide(
             executorHandlers({
               ...api,
+              // The Executor app's skills.read tool reads here, not through the MCP skills tool.
+              skills: {
+                ...api.skills,
+                read: (input) => api.skills.read(input).pipe(Effect.tap(annotateSkillRead)),
+              },
               accountConnections: {
                 ...api.accountConnections,
                 create: (input) => {
                   if (input.account === managed.account)
                     return Effect.fail(new AccountNotFound({ account: input.account }));
-                  if (input.target?.app === managed.app)
+                  if (input.target.app === managed.app)
                     return Effect.fail(new AppNotFound({ app: input.target.app }));
                   return executor.accountConnections.create(input);
                 },
@@ -387,14 +417,12 @@ export const localApi = (
         HttpRouter.add("GET", "/apps/:app/setup", web.document),
         HttpRouter.add("GET", "/apps/:app/open", web.document),
         HttpRouter.add("GET", "/apps/:app/delete", web.document),
-        HttpRouter.add("GET", "/accounts/add", web.document),
         HttpRouter.add("GET", "/connect", web.document),
         HttpRouter.add("GET", "/approvals", web.document),
         HttpRouter.add("GET", "/approvals/:run", web.document),
         HttpRouter.add("GET", "/account-connect/:connection", web.document),
         HttpRouter.add("GET", "/accounts", web.document),
         HttpRouter.add("GET", "/accounts/:account", web.document),
-        HttpRouter.add("GET", "/accounts/:account/credentials", web.document),
         HttpRouter.add("GET", "/accounts/:account/disconnect", web.document),
         // Manual webhook setup links issued to agents open this dashboard page.
         HttpRouter.add("GET", "/webhooks/:app/:subscription", web.document),

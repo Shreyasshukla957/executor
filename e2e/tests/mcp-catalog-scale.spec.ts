@@ -911,13 +911,13 @@ return { items: [...small.items, ...large.items] };`;
             return account;
           });
         /** Replace an account's stored credential; its ID and selection stay. */
-        const reconnect = (actor: Session, account: string, token: string) =>
+        const reconnect = (actor: Session, profile: string, account: string, token: string) =>
           Effect.gen(function* () {
-            const response = yield* api.request(
-              actor,
-              "POST",
-              `${prefix}/accounts/${account}/connections`,
-            );
+            const response = yield* api.request(actor, "POST", `${path}/connections`, {
+              profile,
+              requirement: "service",
+              account,
+            });
             expect(response.status).toBe(200);
             expect(yield* submit(actor, (yield* body(Resource, response)).id, token)).toBe(account);
           });
@@ -1017,7 +1017,7 @@ return { items: [...small.items, ...large.items] };`;
         );
 
         // A reconnected account: same account, new stored credential.
-        yield* reconnect(actors.owner, accounts.at(-1)!.id, "rotated");
+        yield* reconnect(actors.owner, ownerProfile, accounts.at(-1)!.id, "rotated");
         seen.push(
           yield* evaluated(
             owner,

@@ -5,7 +5,7 @@
  */
 import { expect, layer } from "@effect/vitest";
 import { Effect, Schema } from "effect";
-import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
+import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 import { randomUUID } from "node:crypto";
 import { Actors } from "../support/actors.ts";
 import { Api, body } from "../support/api.ts";
@@ -16,15 +16,12 @@ import { createProfile } from "../support/profiles.ts";
 import { oauthMcpAppFiles } from "../support/authored-templates.ts";
 import { Target } from "../support/platform.ts";
 import { serverControl } from "../support/server-control.ts";
-import { scenarios } from "../test-plan.ts";
+import { oauthRelayCallback as configuredCallback, scenarios } from "../test-plan.ts";
 
 /** The address the scenario's operator setting publishes; the issuer maps it to the product. */
 const publicOrigin = "https://executor.example";
 const documentPath = "/oauth/client-metadata.json";
 const clientId = `${publicOrigin}${documentPath}`;
-/** The operator's relay callback, written in a valid form other than its serialization. */
-const configuredCallback =
-  scenarios.oauthClientMetadataDocument.serverEnvironment.EXECUTOR_OAUTH_CALLBACK_URL;
 const SignIn = Schema.Struct({ authorizationUrl: Schema.String });
 const Setup = Schema.Struct({ mode: Schema.String });
 

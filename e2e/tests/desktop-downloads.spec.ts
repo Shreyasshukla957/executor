@@ -83,12 +83,6 @@ layer(HostedLive, { excludeTestServices: true })("Desktop downloads", (it) => {
       context,
       Effect.gen(function* () {
         const browser = yield* Browser;
-        yield* browser.use("Skip the first-visit preview", (page) =>
-          page.addInitScript(() =>
-            localStorage.setItem("executor-v2-early-preview-dismissed", "true"),
-          ),
-        );
-
         yield* browser.use("Make the public release list unavailable", (page) =>
           page.route(releasesApi, (route) =>
             route.fulfill({ status: 403, contentType: "application/json", body: "{}" }),

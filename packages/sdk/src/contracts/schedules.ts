@@ -3,7 +3,7 @@ import { ApiError } from "@executor-js/utils/api-error";
 import { ProfileErrors, ProfileRevision } from "./profiles.ts";
 /** Installed schedule controls and run review; timing and arguments remain authored app source. */
 import { Schema } from "effect";
-import { HttpApiEndpoint, HttpApiGroup } from "effect/unstable/httpapi";
+import { HttpApiEndpoint, HttpApiGroup } from "effect/http-api";
 import { OperationSchedule, ScheduleTiming } from "apps/contracts";
 import {
   AppId,

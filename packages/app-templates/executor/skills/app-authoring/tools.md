@@ -164,7 +164,11 @@ loads a site's `/.well-known/agent-skills/index.json`. Its directory index is
 `{skills: [{name, version?, files: ["SKILL.md", "references/example.md"]}]}`.
 Files live beneath the named directory beside that index. Helpers return complete
 UTF-8 text bundles and refuse redirects. Limits are
-1,000 files, 2 MB per response, and 20 MB total.
+1,000 files, 2 MB per response, and 20 MB total. With `cache: ctx.cache`, a
+catalog older than `freshFor` (default 5 minutes) is never served unchecked: one
+request (the index, or the ref's commit) confirms it or loads the new publication
+first. Give every index entry a `version` that changes with its files, or each
+check reloads them. A check that fails or takes over 5 s fails the read.
 
 Omit `skills` to load packaged `skills/<name>/SKILL.md` and its text resources.
 An explicit `skills` value replaces that default; `skills: []` disables it.
@@ -265,7 +269,9 @@ Use `ctx.cache.get({ key, schema, freshFor, staleFor, load })` for shared JSON.
 Put every result dependency in the key. Use `ctx.cache.forAccount(account)` for
 private results; the host also scopes entries to current credentials. Use the
 loader's `fetch`, `signal`, and `cache` so stale refreshes can finish after the
-request. Errors are not cached. `invalidate(key)` also fences pending loaders.
+request. Pass `stale: "revalidate"` to await the load past `freshFor` instead of
+serving the old value; the loader can `read(key, schema)` the old value to confirm
+it cheaply. Errors are not cached. `invalidate(key)` also fences pending loaders.
 
 Use `dynamicRouter({ list, resolve })` for large or remote catalogs. List tool
 metadata separately from resolving one query or mutation. `accountRouter`

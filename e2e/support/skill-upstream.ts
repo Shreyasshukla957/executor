@@ -1,13 +1,8 @@
 /** Mutable publication fixture outside the real Executor server and isolated app runtime. */
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { Effect, FileSystem, Layer, Ref, Schema, Stream } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
-import {
-  HttpRouter,
-  HttpServer,
-  HttpServerRequest,
-  HttpServerResponse,
-} from "effect/unstable/http";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { HttpRouter, HttpServer, HttpServerRequest, HttpServerResponse } from "effect/http";
 import { createServer } from "node:http";
 
 type FileFailure = "oversized" | "encoding" | "redirect";
@@ -57,7 +52,7 @@ export const skillUpstream = Effect.gen(function* () {
       yield* git(["add", "skills"]);
       yield* git(["commit", "--quiet", "--allow-empty", "-m", `Publish ${version}`]);
       const commit = yield* Schema.decodeUnknownEffect(
-        Schema.String.check(Schema.isPattern(/^[a-f0-9]{40}$/)),
+        Schema.String.check(Schema.isPattern(/^[a-f0-9]{40}$/u)),
       )((yield* git(["rev-parse", "HEAD"])).toString("utf8").trim());
       yield* Ref.update(versions, (current) => new Map([...current, [commit, version]]));
       return commit;

@@ -7,7 +7,7 @@
 import { AccountId } from "@executor-js/sdk/core";
 import { permitsApp } from "@executor-js/authorization";
 import { Effect, Layer, Schema } from "effect";
-import { HttpRouter, type HttpServerResponse } from "effect/unstable/http";
+import { HttpRouter, type HttpServerResponse } from "effect/http";
 import {
   AccountTargets,
   RequireAccountDelete,

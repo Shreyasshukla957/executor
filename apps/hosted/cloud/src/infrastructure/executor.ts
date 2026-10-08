@@ -4,22 +4,29 @@ import * as BrowserCrypto from "@effect/platform-browser/BrowserCrypto";
 import { makeRegistryStorage } from "@executor-js/app-registry";
 import { clientMetadataSetting, hostedOAuthClientName } from "@executor-js/hosted-server";
 import { hostedResourceLifecycle } from "@executor-js/hosted-server/resource-lifecycle";
-import { createExecutor, StorageError, makeExecutorStorage } from "@executor-js/sdk/core";
+import {
+  createExecutor,
+  httpEventSender,
+  StorageError,
+  makeExecutorStorage,
+} from "@executor-js/sdk/core";
+import { hostedEventAuthority } from "@executor-js/hosted-server/events";
+import { SqlClient } from "effect/sql";
 import { makeExecutionMemo } from "alchemy/Runtime/ExecutionMemo";
 import * as Cloudflare from "alchemy/Cloudflare";
-import { Effect, FiberSet, Option } from "effect";
-import { FetchHttpClient, HttpClient } from "effect/unstable/http";
+import { Context, Effect, FiberSet, Option } from "effect";
+import { FetchHttpClient, HttpClient } from "effect/http";
 import { cachedDeploymentSources } from "../implementation/deployment-source-cache.ts";
-import { cloudAppSources } from "./source.ts";
+import type { AppSources } from "./source.ts";
 import { isolateDeclarations } from "./isolate-memory.ts";
-import type { ArtifactsTokens } from "@executor-js/app-source/cloudflare";
 import { cloudBlobs } from "./blobs.ts";
-import { cloudWorkflows } from "./workflows.ts";
+import { cloudWorkflows } from "./workflow-runtime.ts";
 import { cloudRuntime } from "./runtime.ts";
 import { durableDeclarations } from "./durable-declarations.ts";
 import { InvocationDatabase } from "./invocation-database.ts";
 import { cloudSecrets } from "./secrets.ts";
-import { cloudOrigin } from "./stage.ts";
+import { cloudOrigin, cloudResourceOrigins } from "./stage.ts";
+import { accountOAuthStatePrefix } from "../contracts/edge-paths.ts";
 import type { AppDataSupervisor } from "./app-data.ts";
 
 /**
@@ -34,8 +41,8 @@ export const cloudEgress = Effect.gen(function* () {
 });
 
 /**
- * Build the executor from cloud inputs. Callers select the API-owned token coordinator
- * explicitly, including across Workers. The event's SQL client comes from
+ * Build the executor from cloud inputs. Callers choose the app source backend: Git through the
+ * API-owned token coordinator, or none where no source is read. The event's SQL client comes from
  * {@link InvocationDatabase}, shared with Better Auth. Its SQL.PostgresLayer currently returns a
  * lazy proxy: FumaDB's synchronous Statement.join cannot inspect those deferred fragments, so the
  * native client is resolved before composing ORM queries, through Alchemy's execution memo rather
@@ -43,18 +50,20 @@ export const cloudEgress = Effect.gen(function* () {
  */
 export const cloudExecutor = Effect.fn(function* (
   databases: Cloudflare.DurableObject<AppDataSupervisor>,
-  tokens: ArtifactsTokens,
+  appSources: AppSources,
 ) {
   // Resolve during initialization so Alchemy binds every value into the Worker environment.
   const secrets = yield* cloudSecrets.pipe(Effect.orDie);
   const origin = yield* cloudOrigin.pipe(Effect.orDie);
+  // New app webhooks register on the canonical API origin (`api.` once it is canonical); every
+  // origin keeps delivering, so existing subscriptions keep the URL they stored.
+  const webhookOrigin = (yield* cloudResourceOrigins.pipe(Effect.orDie)).api[0];
   const egress = yield* cloudEgress;
   // Deployed stages bind this to their own document; see `clientMetadataBinding`.
   const clientMetadata = yield* clientMetadataSetting(origin).pipe(Effect.orDie);
   const makeRuntime = yield* cloudRuntime(origin);
   const workflows = yield* cloudWorkflows;
   const blobs = yield* cloudBlobs;
-  const appSources = yield* cloudAppSources(tokens);
   // App storage, hosted permission checks and Better Auth share the event's client.
   const database = (yield* InvocationDatabase).pipe(Effect.mapError(() => new StorageError()));
   const executor = yield* makeExecutionMemo(
@@ -87,6 +96,7 @@ export const cloudExecutor = Effect.fn(function* (
         database: storage,
         secret: key,
         origin,
+        webhookOrigin,
         git: appSources(background),
         blobs: yield* cachedDeploymentSources(origin, blobs),
         runtime: yield* makeRuntime,
@@ -98,6 +108,8 @@ export const cloudExecutor = Effect.fn(function* (
           clientName: hostedOAuthClientName,
           urlPolicy: egress.policy,
           ...(Option.isSome(clientMetadata) ? { clientMetadataUrl: clientMetadata.value.url } : {}),
+          // v1's edge forwards `executor.sh/api/oauth/callback` to v2 by this state prefix.
+          statePrefix: accountOAuthStatePrefix,
         },
         cache: {
           // One store per isolate, shared by every executor built in it.
@@ -108,6 +120,15 @@ export const cloudExecutor = Effect.fn(function* (
         // A tool listing nobody waits for runs until the event's background work ends, and is
         // remembered as timed out if it has not finished by then.
         background,
+        events: {
+          sender: httpEventSender(egress),
+          // The same event's client, which hosted permission checks already share.
+          authorize: hostedEventAuthority(
+            Effect.succeed(Context.get(services, SqlClient.SqlClient)),
+          ),
+          // Deployed Workers cannot reach loopback; the local development Worker can.
+          allowInsecureCallbacks: egress.policy.allowLoopbackHttp,
+        },
       }).pipe(Effect.provide(BrowserCrypto.layer));
     }).pipe(
       Effect.mapError(() => new StorageError()),

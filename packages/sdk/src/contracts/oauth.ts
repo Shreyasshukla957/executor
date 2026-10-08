@@ -13,7 +13,7 @@ import {
 } from "apps/contracts";
 import { Account } from "./account.ts";
 export { OAuthClientAuth } from "apps/contracts";
-import type { HttpClient } from "effect/unstable/http";
+import type { HttpClient } from "effect/http";
 import { AccountId, HttpUrl, JsonObject, OwnerId, ProviderId } from "./shared.ts";
 
 /** A sign-in URL and its expiry. No account exists until completion succeeds. */
@@ -42,6 +42,11 @@ export const OAuthClientSetup = Schema.Union([
     grant: Schema.Literal("authorization_code"),
     /** Omitted when the provider does not declare one; the client secret is then optional. */
     tokenEndpointAuthMethod: Schema.optional(OAuthClientAuth),
+    /**
+     * Permissions requested for the signed-in user's own token through Slack's `user_scope`
+     * authorization parameter, beside `scopes`. Omitted when the provider sends none.
+     */
+    userScopes: Schema.optional(Schema.Array(Schema.String)),
   }),
   Schema.Struct({
     ...clientSetup,
@@ -65,6 +70,8 @@ export const OAuthClientUnavailable = ApiError.define({
   fields: { provider: ProviderId, method: AuthMethodName },
   message: ({ method }) =>
     `The “${method}” OAuth method needs a client configured on this host before an account can connect.`,
+  recorded: () =>
+    "The OAuth method needs a client configured on this host before an account can connect",
 });
 export type OAuthClientUnavailable = typeof OAuthClientUnavailable.Type;
 
@@ -119,6 +126,20 @@ export const OAuthFailureCause = Schema.Struct({
 });
 export type OAuthFailureCause = typeof OAuthFailureCause.Type;
 
+/** The protocol evidence of a failure: closed stages, codes and fields, and the HTTP status. */
+const causeEvidence = (cause: OAuthFailureCause) =>
+  `OAuth ${cause.stage} stage${cause.status === undefined ? "" : `, HTTP ${cause.status}`}${
+    cause.providerError === undefined ? "" : `, provider error ${cause.providerError}`
+  }${cause.field === undefined ? "" : `, response field ${cause.field}`}.`;
+
+/** What telemetry records for an OAuth failure: its kind, reason and protocol evidence. */
+const oauthRecorded = (
+  failure: string,
+  reason: string | undefined,
+  cause: OAuthFailureCause | undefined,
+) =>
+  `${failure}${reason === undefined ? "" : ` (${reason})`}${cause === undefined ? "" : `. ${causeEvidence(cause)}`}`;
+
 /** The longest `error` code Executor keeps from a service's error response, in characters. */
 export const maxOAuthServiceErrorLength = 128;
 /**
@@ -166,9 +187,7 @@ const withProtocolCause = (
   cause: OAuthFailureCause | undefined,
 ) => {
   if (cause === undefined) return presentation;
-  const evidence = `OAuth ${cause.stage} stage${cause.status === undefined ? "" : `, HTTP ${cause.status}`}${
-    cause.providerError === undefined ? "" : `, provider error ${cause.providerError}`
-  }${cause.field === undefined ? "" : `, response field ${cause.field}`}.`;
+  const evidence = causeEvidence(cause);
   return {
     ...presentation,
     recovery: {
@@ -287,6 +306,11 @@ export interface OAuthOptions {
   /** Host transport policy for callbacks, discovery and every token request. */
   readonly urlPolicy: UrlPolicy;
   readonly clientMetadataUrl?: string;
+  /**
+   * A fixed prefix for every sign-in's OAuth `state`, so a proxy in front of a shared callback
+   * URL can tell this host's callbacks apart without a lookup. The random part is unchanged.
+   */
+  readonly statePrefix?: string;
 }
 
 /**
@@ -325,6 +349,7 @@ export const OAuthSetupFailed = UserFacingError.define({
     serviceError: Schema.optional(OAuthServiceError),
     retryAfter: RetryAfter,
   },
+  recorded: ({ reason, cause }) => oauthRecorded("OAuth setup failed", reason, cause),
   presentation: ({ reason, callbackUrl, cause, serviceError, retryAfter }) => {
     // Forms that open client entry already show the callback, so only the fix prompt repeats it.
     const callback = callbackUrl === undefined ? "" : ` Executor’s callback URL is ${callbackUrl}.`;
@@ -546,6 +571,7 @@ export const OAuthCompletionFailed = UserFacingError.define({
     serviceError: Schema.optional(OAuthServiceError),
     retryAfter: RetryAfter,
   },
+  recorded: ({ reason, cause }) => oauthRecorded("Sign-in completion failed", reason, cause),
   presentation: ({ reason, cause, serviceError, retryAfter }) =>
     withCause(
       (
@@ -595,7 +621,7 @@ export const OAuthCompletionFailed = UserFacingError.define({
             description:
               "The account being reconnected was removed or edited, so nothing was saved.",
             recovery: {
-              action: "Open Accounts and start the connection again.",
+              action: "Open the app’s Accounts tab and reconnect the account again.",
               instructions:
                 "Check whether the reconnected account still exists with the same provider and sign-in method. Start a fresh connection for the intended account.",
             },
@@ -740,7 +766,7 @@ export const OAuthCompletionFailed = UserFacingError.define({
  * - `restart`: start the same connection again.
  * - `client`: the service rejected the OAuth client; correct its details.
  * - `configuration`: retrying will not help until the app or instance changes.
- * - `account`: the account being reconnected changed; start from Accounts.
+ * - `account`: the account being reconnected changed; start again from the app's Accounts tab.
  * - `cancelled`: the user declined; nothing is wrong.
  */
 export type OAuthCompletionRecovery =
@@ -793,6 +819,7 @@ export const OAuthReconnectRequired = UserFacingError.define({
     reason: Schema.optional(Schema.Literals(["renewal_interrupted"])),
     cause: Schema.optional(OAuthFailureCause),
   },
+  recorded: ({ reason, cause }) => oauthRecorded("An account needs to reconnect", reason, cause),
   presentation: ({ reason, cause }) =>
     withCause(
       {
@@ -802,7 +829,8 @@ export const OAuthReconnectRequired = UserFacingError.define({
             ? "Executor stopped while renewing this account’s access, before it could save the result. The service no longer accepts the saved sign-in, most likely because that renewal had already replaced it."
             : "The saved sign-in can no longer be used for this account.",
         recovery: {
-          action: "Open Accounts and reconnect the affected account, then return to Tools.",
+          action:
+            "Open the app’s Accounts tab and reconnect the affected account, then return to Tools.",
           instructions:
             "Identify the selected account whose OAuth grant needs renewal. Guide the user through the supported reconnect flow for that same account. Preserve its identity and profile bindings, then verify tool discovery. Do not replace the account or switch authentication methods as a workaround.",
         },
@@ -840,6 +868,8 @@ export const OAuthRenewalFailed = UserFacingError.define({
     cause: Schema.optional(OAuthFailureCause),
     retryAfter: RetryAfter,
   },
+  recorded: ({ reason, cause }) =>
+    oauthRecorded("Renewing an account's access failed", reason, cause),
   presentation: ({ reason, cause, retryAfter }) =>
     withCause(
       (
@@ -886,7 +916,7 @@ export const OAuthRenewalFailed = UserFacingError.define({
               "The service refused Executor’s request to renew this account’s access without saying the sign-in has ended. The saved sign-in is kept, and Executor tries again the next time the account is used.",
             recovery: {
               action:
-                "Try again in a moment. If this continues, reconnect the account from Accounts.",
+                "Try again in a moment. If this continues, reconnect the account from the app’s Accounts tab.",
               instructions:
                 "The account’s saved OAuth grant is intact. Inspect the recorded provider error code and HTTP status. Retry a temporary refusal. If the service keeps refusing, reconnect this same account; do not replace the account or change its authentication method.",
             },

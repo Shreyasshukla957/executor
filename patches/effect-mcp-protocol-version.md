@@ -1,6 +1,6 @@
 # MCP protocol version header and transport rejections
 
-The Effect snapshot pinned at `c7d1ffff` rejects a legacy session request that
+Effect 4.0.1 rejects a legacy session request that
 omits `MCP-Protocol-Version` with an empty `400`, even though the session already
 records the version negotiated at `initialize`. The [2025-11-25 transport][header]
 says a server that receives no header and can identify the version, for example
@@ -8,7 +8,7 @@ from initialization, uses that version. Only an invalid or unsupported header
 must be rejected. Its other transport rejections also had empty bodies, which
 clients such as the MCP TypeScript SDK print as a bare `Error POSTing to endpoint:`.
 
-`effect@c7d1ffff.patch` changes `internal/mcpRuntime` and `McpServer` in source
+`effect@4.0.1.patch` changes `ai/internal/mcpRuntime` and `ai/McpServer` in source
 and distributed JavaScript:
 
 - A session request without the header uses the session's negotiated version.

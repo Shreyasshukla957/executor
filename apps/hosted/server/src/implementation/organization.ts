@@ -24,12 +24,12 @@ import { requireOrganizationAdmin } from "./access.ts";
 import { CurrentPrincipal, CurrentUserId } from "../contracts/auth.ts";
 import { APIError } from "better-auth/api";
 import { ErrorReporter, Effect, Layer, Schema } from "effect";
-import { HttpApiBuilder } from "effect/unstable/httpapi";
+import { HttpApiBuilder } from "effect/http-api";
 import type { OwnerId } from "@executor-js/sdk/core";
 import { HostedApi } from "../contracts/api.ts";
 import { HostedCatalog } from "../contracts/catalog.ts";
 import { HostedExecutor } from "../contracts/executor.ts";
-import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
+import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 import {
   ApiAuthentication,
   Authentication,
@@ -183,6 +183,7 @@ export const requireOrganizationLive = Layer.effect(
   Effect.gen(function* () {
     const auth = yield* Authentication;
     const api = yield* ApiAuthentication;
+    const tombstones = yield* OrganizationTombstones;
     return (response, { endpoint, group }) =>
       withOrganizationRequest(
         () => {
@@ -203,8 +204,14 @@ export const requireOrganizationLive = Layer.effect(
       ).pipe(
         Effect.provideService(Authentication, auth),
         Effect.provideService(ApiAuthentication, api),
+        Effect.provideService(OrganizationTombstones, tombstones),
       );
   }),
+);
+
+/** A host that cannot remove organizations, such as self-host: every organization it serves is live. */
+export const noOrganizationRemovals = Layer.succeed(OrganizationTombstones, () =>
+  Effect.succeed(false),
 );
 
 /** List organization metadata through the SDK without evaluating app code. */

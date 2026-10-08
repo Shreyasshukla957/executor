@@ -144,11 +144,24 @@ function renderableSchema(input: Tool.JsonSchema): Tool.JsonSchema {
       ? {}
       : {
           $defs: Object.fromEntries(
-            Object.entries(input.$defs).map(([name, schema]) => [name, renderableSchema(schema)]),
+            Object.entries(input.$defs).map(([name, schema]) => [name, renderedDefinition(schema)]),
           ),
         }),
   });
 }
+/**
+ * Rendered `$defs` entries by definition. A kept listing's tools share one object per distinct
+ * definition, so each renders once, and listings are never mutated. A boolean schema is no key.
+ */
+const renderedDefinitions = new WeakMap<Tool.JsonSchema, Tool.JsonSchema>();
+const renderedDefinition = (schema: Tool.JsonSchema) => {
+  if (typeof schema !== "object" || schema === null) return renderableSchema(schema);
+  const known = renderedDefinitions.get(schema);
+  if (known !== undefined) return known;
+  const rendered = renderableSchema(schema);
+  renderedDefinitions.set(schema, rendered);
+  return rendered;
+};
 
 // Codemode treats dots as namespace separators. Leave ordinary names readable;
 // only escape characters needed to distinguish inaccessible/reserved segments.
@@ -844,6 +857,10 @@ function catalog(backend: McpBackend<Error>, progress: ExecutionProgress) {
       });
     const timedOut = (app: AppId, at: number) =>
       new AppDiscoveryTimedOut({ app, elapsedMs: at - (started.get(app) ?? at) });
+    // The agent reads a failed listing in the response; it reports as the same REST read would.
+    // Discovery giving up on an app is its own wait bound, not a failure: the listing keeps running.
+    const unloaded = (error: Error) =>
+      Schema.is(AppDiscoveryTimedOut)(error) ? Effect.void : recordFailure(progress, error);
     // A listing holds a permit while it runs and stops with the rest of its app. Once an app is
     // given up on, its queued listings fail without running.
     const discover = <A, E, R>(name: string, app: AppId, work: Effect.Effect<A, E, R>) =>
@@ -914,6 +931,7 @@ function catalog(backend: McpBackend<Error>, progress: ExecutionProgress) {
                       // timed out. Give up on the app now, as discovery would after waiting,
                       // rather than wait for its other listings again.
                       if (Schema.is(ToolListingTimedOut)(error)) yield* stop(app.id);
+                      yield* unloaded(error);
                       return { target, catalog: undefined, error: diagnostic(error) };
                     }),
                   ),
@@ -922,7 +940,9 @@ function catalog(backend: McpBackend<Error>, progress: ExecutionProgress) {
             ),
           ),
           Effect.map((targets) => ({ targets, error: undefined })),
-          Effect.catch((error) => Effect.succeed({ targets: [], error: diagnostic(error) })),
+          Effect.catch((error) =>
+            unloaded(error).pipe(Effect.as({ targets: [], error: diagnostic(error) })),
+          ),
         );
       });
 
@@ -1113,11 +1133,17 @@ function catalog(backend: McpBackend<Error>, progress: ExecutionProgress) {
           names === "all"
             ? discovered
             : discovered.filter(({ app }) => names.some((name) => within(name, app.slug)));
-        yield* load(selected).pipe(Effect.withSpan("mcp.search.discovery"));
-        return selected
+        yield* load(selected);
+        const entries = selected
           .flatMap(({ app }) => (unique(app) ? (listed.get(app.slug) ?? []) : []))
           .sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0));
-      });
+        // Like the program's catalog, the size this search's CPU grows with.
+        yield* Effect.annotateCurrentSpan({
+          "executor.discovery.apps": selected.length,
+          "executor.discovery.tools": entries.length,
+        });
+        return entries;
+      }).pipe(Effect.withSpan("mcp.search.discovery"));
     const reachable = (reach: ReadonlySet<string> | "all") =>
       reach === "all" ? discovered : discovered.filter(({ app }) => reach.has(app.slug));
     return { tools, namespaces, load, reachable, searchable, unavailableApps };
@@ -1140,13 +1166,23 @@ export type ExecutionProgress = {
   /** `program` once discovery has finished and program code may run. */
   phase: "discovery" | "program";
   unavailableApps: ReadonlyArray<typeof UnavailableApp.Type>;
+  /**
+   * Failures to report. The program outlives the request that started it, so the request driving
+   * it when they happen reports them, with its own reporter and trace.
+   */
+  readonly failures: Array<Error>;
 };
 export const executionProgress = (): ExecutionProgress => ({
   calls: [],
   callFibers: new Map(),
   phase: "discovery",
   unavailableApps: [],
+  failures: [],
 });
+const recordFailure = (progress: ExecutionProgress, error: Error) =>
+  Effect.sync(() => {
+    progress.failures.push(error);
+  });
 
 /**
  * A call into an app that failed to load is not an unknown tool: report why the app is unavailable.
@@ -1347,10 +1383,19 @@ export function executeProgram(
         toolCalls: reportedCalls(progress),
       });
       if (timedOut) yield* Effect.annotateCurrentSpan("executor.timeout.phase", "program");
+      // Signatures cost CPU per reachable tool; a program renders them only by searching.
+      yield* Effect.annotateCurrentSpan(
+        "executor.codemode.signatures_rendered",
+        runtime.signaturesRendered(),
+      );
       yield* Effect.annotateCurrentSpan("executor.outcome", execution.ok ? "completed" : "failed");
       return { execution, unavailableApps: prepared.unavailableApps() };
     }).pipe(
-      Effect.catch((error) => Effect.succeed(failure("ExecutionFailure", diagnostic(error)))),
+      Effect.catch((error) =>
+        recordFailure(progress, error).pipe(
+          Effect.as(failure("ExecutionFailure", diagnostic(error))),
+        ),
+      ),
     );
   });
 }

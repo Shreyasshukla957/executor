@@ -10,9 +10,9 @@ import {
 import type { OrganizationReference } from "@executor-js/hosted-server/organization";
 import type { AppId, AppSlug, DeploymentId } from "@executor-js/sdk";
 import { Cause, Data, Effect, Match, Option, Schedule, Schema, Stream } from "effect";
-import { Atom, AtomHttpApi } from "effect/unstable/reactivity";
-import type { HttpApiEndpoint } from "effect/unstable/httpapi";
-import type { HttpClientError } from "effect/unstable/http";
+import { Atom, AtomHttpApi } from "effect/reactivity";
+import type { HttpApiEndpoint } from "effect/http-api";
+import type { HttpClientError } from "effect/http";
 import { DashboardRuntime } from "./telemetry.ts";
 import { batchReads } from "@executor-js/dashboard-start/batch-browser";
 

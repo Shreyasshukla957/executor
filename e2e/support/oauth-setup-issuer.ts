@@ -1,15 +1,17 @@
 /** A scoped external OAuth issuer for setup checks; Executor still uses its real HTTP and storage paths. */
 import { createServer } from "node:http";
 import { Socket } from "node:net";
-import { createHash, generateKeyPairSync, type KeyObject, randomUUID, sign } from "node:crypto";
+import {
+  createHash,
+  createHmac,
+  generateKeyPairSync,
+  type KeyObject,
+  randomUUID,
+  sign,
+} from "node:crypto";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { Deferred, Effect, Layer, Schema } from "effect";
-import {
-  HttpRouter,
-  HttpServer,
-  HttpServerRequest,
-  HttpServerResponse,
-} from "effect/unstable/http";
+import { HttpRouter, HttpServer, HttpServerRequest, HttpServerResponse } from "effect/http";
 import { tokenRequestParameters } from "./client-credentials-issuer.ts";
 
 type TokenAuth = "client_secret_basic" | "client_secret_post" | "none";
@@ -72,12 +74,31 @@ export const oauthSetupIssuer = Effect.gen(function* () {
   let issuePublicClients = false;
   let nonceRequested: boolean | undefined;
   let idTokenAlgorithms: readonly string[] | undefined;
+  /**
+   * OpenID Connect Discovery's ID token algorithms, served beside OAuth metadata that omits them,
+   * as Miro does. Its client authentication methods disagree with the OAuth metadata's.
+   */
+  let openidAlgorithms: readonly string[] | undefined;
+  /**
+   * How the OpenID metadata location answers when it has algorithms to serve. The trailing-slash
+   * and uppercase-scheme issuers name the same URL as the OAuth metadata's but not the same string.
+   */
+  let openidMetadata:
+    | "served"
+    | "redirect"
+    | "unavailable"
+    | "another-issuer"
+    | "issuer-trailing-slash"
+    | "issuer-uppercase-scheme" = "served";
   let includeIdToken = false;
   let invalidNonce = false;
   /** The ID token `iss`; Google names its sign-in host rather than the token endpoint origin. */
   let idTokenIssuer: string | undefined;
-  /** Google signs RS256; a declared server advertises no algorithms, so RS256 is the only default. */
-  let idTokenAlgorithm: "ES256" | "RS256" | "none" = "ES256";
+  /**
+   * Google signs RS256; a declared server advertises no algorithms, so RS256 is the only default.
+   * HS256 signs with the client secret, as Miro does.
+   */
+  let idTokenAlgorithm: "ES256" | "RS256" | "HS256" | "none" = "ES256";
   let refreshTokens = false;
   /** Replace the refresh token on every refresh, as rotating services do. */
   let rotateRefreshTokens = false;
@@ -196,6 +217,8 @@ export const oauthSetupIssuer = Effect.gen(function* () {
   let scopes = ["read"];
   /** A narrower scope requirement advertised by the resource's Bearer challenge. */
   let challengeScopes: readonly string[] | undefined;
+  /** Scopes the issuer grants separately but refuses together, as `invalid_scope`. */
+  let exclusiveScopes: readonly string[] | undefined;
   /** An exact metadata override models OIDC published away from its declared issuer. */
   let metadataOverrideIssuer: string | undefined;
   let metadataOverrideStatus = 200;
@@ -279,6 +302,21 @@ export const oauthSetupIssuer = Effect.gen(function* () {
           : { error: { code: -32601, message: "Method not found" } }),
     });
   }).pipe(Effect.orDie);
+  /** OpenID Connect Discovery for `issuer`, whose client authentication differs from OAuth's. */
+  const openidDocument = (issuer: string, algorithms: readonly string[]) =>
+    Effect.gen(function* () {
+      const origin = yield* Deferred.await(address);
+      return yield* HttpServerResponse.json({
+        issuer,
+        authorization_endpoint: `${origin}/authorize`,
+        token_endpoint: `${origin}/token`,
+        jwks_uri: `${origin}/jwks`,
+        response_types_supported: ["code"],
+        subject_types_supported: ["public"],
+        id_token_signing_alg_values_supported: algorithms,
+        token_endpoint_auth_methods_supported: ["client_secret_post"],
+      });
+    });
   const routes = Layer.mergeAll(
     HttpRouter.add(
       "GET",
@@ -314,11 +352,17 @@ export const oauthSetupIssuer = Effect.gen(function* () {
         const code = randomUUID();
         nonceRequested = params.get("nonce") !== null;
         authorizationScope = params.get("scope");
+        const requested = authorizationScope?.split(" ") ?? [];
+        const refusal =
+          authorizeError ??
+          (requested.filter((scope) => exclusiveScopes?.includes(scope)).length > 1
+            ? "invalid_scope"
+            : undefined);
         const callback = new URL(redirect);
-        if (authorizeError === undefined) {
+        if (refusal === undefined) {
           codes.set(code, { clientId, redirect, challenge, nonce: params.get("nonce") });
           callback.searchParams.set("code", code);
-        } else callback.searchParams.set("error", authorizeError);
+        } else callback.searchParams.set("error", refusal);
         callback.searchParams.set("state", params.get("state") ?? "");
         if (callbackIssuer !== undefined) callback.searchParams.set("iss", callbackIssuer);
         // The managed host advertises a separate callback relay; model its browser return.
@@ -419,6 +463,7 @@ export const oauthSetupIssuer = Effect.gen(function* () {
           };
         if (
           clientId === undefined ||
+          client === undefined ||
           !Object.values(refreshing ? refreshChecks : tokenChecks).every(Boolean)
         )
           return yield* HttpServerResponse.json({ error: "invalid_grant" }, { status: 400 });
@@ -443,16 +488,21 @@ export const oauthSetupIssuer = Effect.gen(function* () {
         const signature =
           idTokenAlgorithm === "none"
             ? ""
-            : idTokenAlgorithm === "ES256"
-              ? sign("sha256", Buffer.from(jwt), {
-                  key: keyPair.privateKey,
-                  dsaEncoding: "ieee-p1363",
-                }).toString("base64url")
-              : sign(
-                  "sha256",
-                  Buffer.from(jwt),
-                  (rsaKey ??= generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey),
-                ).toString("base64url");
+            : idTokenAlgorithm === "HS256"
+              ? // A public client shares no secret to sign with.
+                client.secret === null
+                ? ""
+                : createHmac("sha256", client.secret).update(jwt).digest("base64url")
+              : idTokenAlgorithm === "ES256"
+                ? sign("sha256", Buffer.from(jwt), {
+                    key: keyPair.privateKey,
+                    dsaEncoding: "ieee-p1363",
+                  }).toString("base64url")
+                : sign(
+                    "sha256",
+                    Buffer.from(jwt),
+                    (rsaKey ??= generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey),
+                  ).toString("base64url");
         const accessToken = refreshing
           ? `synthetic-refreshed-token-${refreshes}`
           : "synthetic-access-token";
@@ -602,6 +652,40 @@ export const oauthSetupIssuer = Effect.gen(function* () {
       Effect.suspend(() =>
         postChallenge ? Effect.succeed(HttpServerResponse.empty({ status: 404 })) : resource,
       ),
+    ),
+    HttpRouter.add(
+      "GET",
+      "/.well-known/openid-configuration",
+      Effect.gen(function* () {
+        discoveryRequests.push("/.well-known/openid-configuration");
+        if (openidAlgorithms === undefined) return HttpServerResponse.empty({ status: 404 });
+        const origin = yield* Deferred.await(address);
+        // The target serves the same algorithms, so only a client that follows redirects uses them.
+        if (openidMetadata === "redirect")
+          return HttpServerResponse.empty({
+            status: 302,
+            headers: { location: `${origin}/redirected/openid-configuration` },
+          });
+        if (openidMetadata === "unavailable") return HttpServerResponse.empty({ status: 503 });
+        return yield* openidDocument(
+          openidMetadata === "another-issuer"
+            ? `${origin}/another-issuer`
+            : openidMetadata === "issuer-trailing-slash"
+              ? `${origin}/`
+              : openidMetadata === "issuer-uppercase-scheme"
+                ? origin.replace(/^http:/, "HTTP:")
+                : origin,
+          openidAlgorithms,
+        );
+      }),
+    ),
+    HttpRouter.add(
+      "GET",
+      "/redirected/openid-configuration",
+      Effect.gen(function* () {
+        discoveryRequests.push("/redirected/openid-configuration");
+        return yield* openidDocument(yield* Deferred.await(address), openidAlgorithms ?? []);
+      }),
     ),
     HttpRouter.add(
       "GET",
@@ -790,7 +874,11 @@ export const oauthSetupIssuer = Effect.gen(function* () {
       readonly omitSecretExpiry?: boolean;
       /** Register every client as public, replacing the requested token endpoint method. */
       readonly issuePublicClients?: boolean;
-      readonly idTokenAlgorithms?: readonly string[];
+      /** Advertised ID token algorithms; null omits them from OAuth metadata. */
+      readonly idTokenAlgorithms?: readonly string[] | null;
+      /** Serve OpenID Connect Discovery with these ID token algorithms; null serves none. */
+      readonly openidAlgorithms?: readonly string[] | null;
+      readonly openidMetadata?: typeof openidMetadata;
       readonly includeIdToken?: boolean;
       readonly idTokenIssuer?: string | null;
       readonly idTokenAlgorithm?: typeof idTokenAlgorithm;
@@ -817,6 +905,8 @@ export const oauthSetupIssuer = Effect.gen(function* () {
       readonly pathDiscovery?: typeof pathDiscovery;
       readonly scopes?: readonly string[];
       readonly challengeScopes?: readonly string[] | null;
+      /** Refuse an authorization request naming more than one of these; null accepts any. */
+      readonly exclusiveScopes?: readonly string[] | null;
       readonly metadataOverrideIssuer?: string | null;
       readonly metadataOverrideStatus?: number;
       readonly authMethods?: readonly string[];
@@ -852,7 +942,12 @@ export const oauthSetupIssuer = Effect.gen(function* () {
         if (input.serveMcp !== undefined) serveMcp = input.serveMcp;
         if (input.postChallenge !== undefined) postChallenge = input.postChallenge;
         if (input.challenge !== undefined) challenge = input.challenge;
-        if (input.idTokenAlgorithms !== undefined) idTokenAlgorithms = input.idTokenAlgorithms;
+        if (input.idTokenAlgorithms !== undefined)
+          idTokenAlgorithms =
+            input.idTokenAlgorithms === null ? undefined : input.idTokenAlgorithms;
+        if (input.openidAlgorithms !== undefined)
+          openidAlgorithms = input.openidAlgorithms === null ? undefined : input.openidAlgorithms;
+        if (input.openidMetadata !== undefined) openidMetadata = input.openidMetadata;
         if (input.includeIdToken !== undefined) includeIdToken = input.includeIdToken;
         if (input.idTokenIssuer !== undefined)
           idTokenIssuer = input.idTokenIssuer === null ? undefined : input.idTokenIssuer;
@@ -886,6 +981,8 @@ export const oauthSetupIssuer = Effect.gen(function* () {
         if (input.scopes !== undefined) scopes = [...input.scopes];
         if (input.challengeScopes !== undefined)
           challengeScopes = input.challengeScopes === null ? undefined : input.challengeScopes;
+        if (input.exclusiveScopes !== undefined)
+          exclusiveScopes = input.exclusiveScopes === null ? undefined : input.exclusiveScopes;
         if (input.metadataOverrideIssuer !== undefined)
           metadataOverrideIssuer =
             input.metadataOverrideIssuer === null ? undefined : input.metadataOverrideIssuer;

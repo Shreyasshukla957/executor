@@ -9,7 +9,7 @@ import {
 } from "@executor-js/local-server/account-connections";
 import { HttpUrl } from "@executor-js/sdk";
 import { Data, Effect, Schema } from "effect";
-import { Atom, AtomHttpApi } from "effect/unstable/reactivity";
+import { Atom, AtomHttpApi } from "effect/reactivity";
 
 /** Only a connection grant authenticates these calls; no dashboard session is needed. */
 export class ConnectionClient extends AtomHttpApi.Service<ConnectionClient>()("ConnectionClient", {

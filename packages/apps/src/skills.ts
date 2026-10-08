@@ -54,12 +54,19 @@ export const folderSkills = (options: FolderSkillsOptions) =>
 
 /**
  * Read files for a custom remote skill loader, such as one for GitLab. Reads share one byte
- * budget and reject with the same safe SkillLoadFailed errors as githubSkills, naming `service`.
+ * budget and reject with the same safe SkillLoadFailed errors as githubSkills, naming `service`,
+ * or with `NetworkRefused` when Executor's network refuses a request.
  */
 export const skillReader = (options: SkillReaderOptions) => {
   const service = Schema.decodeUnknownSync(SkillServiceName)(options.service);
   const remote = Effect.runSync(reader(options));
-  const run = <A>(effect: Effect.Effect<A, import("./contracts/skills.ts").SkillLoadFailed>) =>
+  const run = <A>(
+    effect: Effect.Effect<
+      A,
+      | import("./contracts/skills.ts").SkillLoadFailed
+      | import("./contracts/network.ts").NetworkRefused
+    >,
+  ) =>
     Effect.runPromise(
       effect.pipe(withService(service)),
       options.signal === undefined ? {} : { signal: options.signal },

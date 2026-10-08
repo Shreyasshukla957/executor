@@ -12,7 +12,8 @@ import {
   SkillRevision,
 } from "@executor-js/sdk/core";
 import { Schema } from "effect";
-import { Tool as McpTool } from "effect/unstable/ai";
+import { Tool as McpTool } from "effect/ai";
+import { RecordedMessage } from "@executor-js/utils/recorded-message";
 import { UnavailableApp } from "./execute.ts";
 
 const absent = Schema.optionalKey(Schema.Never);
@@ -77,6 +78,10 @@ export class SkillAccessFailed extends Schema.TaggedError<SkillAccessFailed>()(
   override get message() {
     return this.reason;
   }
+  // The reason can quote an app's own error, which only its caller receives.
+  get [RecordedMessage]() {
+    return "Executor could not read the app's skills";
+  }
 }
 /** No authorized app has the requested slug. */
 export class SkillAppNotFound extends Schema.TaggedError<SkillAppNotFound>()("SkillAppNotFound", {
@@ -84,6 +89,10 @@ export class SkillAppNotFound extends Schema.TaggedError<SkillAppNotFound>()("Sk
 }) {
   override get message() {
     return `No visible app has the slug ${this.app}. Call skills with {} to list apps and their slugs.`;
+  }
+  // The requested slug is the caller's text.
+  get [RecordedMessage]() {
+    return "No visible app has the requested slug";
   }
 }
 /** Several authorized apps share the requested slug. */
@@ -94,6 +103,9 @@ export class SkillAppSlugAmbiguous extends Schema.TaggedError<SkillAppSlugAmbigu
   override get message() {
     return `Several visible apps share the slug ${this.app}. Rename one app, then retry.`;
   }
+  get [RecordedMessage]() {
+    return "Several visible apps share the requested slug";
+  }
 }
 /** The app has several profiles and the caller did not choose one. */
 export class SkillProfileRequired extends Schema.TaggedError<SkillProfileRequired>()(
@@ -103,6 +115,9 @@ export class SkillProfileRequired extends Schema.TaggedError<SkillProfileRequire
   override get message() {
     return `${this.app} has several account profiles. Pass profile as one of: ${this.profiles.join(", ")}.`;
   }
+  get [RecordedMessage]() {
+    return "The app has several account profiles and the call chose none";
+  }
 }
 /** The app requires accounts and the caller has no profile for it. */
 export class SkillAccountRequired extends Schema.TaggedError<SkillAccountRequired>()(
@@ -111,6 +126,9 @@ export class SkillAccountRequired extends Schema.TaggedError<SkillAccountRequire
 ) {
   override get message() {
     return `${this.app} needs a connected account before its skills can be read. Connect one through Executor's account connection tool, then retry.`;
+  }
+  get [RecordedMessage]() {
+    return "The app needs a connected account before its skills can be read";
   }
 }
 export const SkillsFailure = Schema.Union([

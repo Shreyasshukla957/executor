@@ -1,12 +1,7 @@
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { Effect, JsonSchema, Layer, Schema, SchemaRepresentation, Stream } from "effect";
-import {
-  HttpRouter,
-  HttpServer,
-  HttpServerRequest,
-  HttpServerResponse,
-} from "effect/unstable/http";
-import { HttpApi, HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi";
+import { HttpRouter, HttpServer, HttpServerRequest, HttpServerResponse } from "effect/http";
+import { HttpApi, HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/http-api";
 import { createServer } from "node:http";
 
 /** Private response content must never be copied into an agent diagnostic. */

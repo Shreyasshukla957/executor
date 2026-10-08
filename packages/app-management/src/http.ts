@@ -13,14 +13,14 @@ export {
 } from "./implementation/framework.ts";
 /** Product-authorized app authoring, release discovery, and ordinary Git access. */
 import { Context, Effect, Layer, Schema } from "effect";
-import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
+import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 import {
   HttpApi,
   HttpApiBuilder,
   HttpApiEndpoint,
   HttpApiGroup,
   HttpApiMiddleware,
-} from "effect/unstable/httpapi";
+} from "effect/http-api";
 import { AppGitProtocol } from "./contracts/git.ts";
 import {
   AppId,
@@ -56,6 +56,22 @@ export class AppManagementHost extends Context.Service<
     StorageError
   >
 >()("apps/ManagementHost") {}
+/**
+ * The origins where the host serves {@link gitRoutes}, canonical first. Clone URLs use the
+ * canonical one; the others keep earlier remotes working. A host that serves Git on the origin
+ * it was called on reads that origin from the request.
+ */
+export class AppGitOrigins extends Context.Service<
+  AppGitOrigins,
+  (request: HttpServerRequest.HttpServerRequest) => readonly [string, ...string[]]
+>()("apps/GitOrigins") {}
+/** The clone URL of an app, on the host's canonical Git origin. */
+const gitRemote = (scope: string, app: App) =>
+  Effect.gen(function* () {
+    const [origin] = (yield* AppGitOrigins)(yield* HttpServerRequest.HttpServerRequest);
+    const path = `/git/${encodeURIComponent(scope)}/${app.slug}.git`;
+    return { path, url: origin + path };
+  });
 /** Cookies never authorize Git. The host validates the explicit scoped Git credential. */
 export class AppGitAccess extends Context.Service<
   AppGitAccess,
@@ -122,12 +138,14 @@ const authoring = (id: AppId) =>
     const { publishing } = yield* host.executor.publications
       .status()
       .pipe(Effect.mapError(() => new StorageError()));
+    const remote = yield* gitRemote(identity.scope, app);
     return {
       app,
       host,
       metadata: {
         namespace: identity.namespace,
-        gitPath: `/git/${encodeURIComponent(identity.scope)}/${app.slug}.git`,
+        gitPath: remote.path,
+        gitUrl: remote.url,
         canEdit,
         canPublish: canEdit && publishing && identity.namespace !== null,
       },
@@ -281,7 +299,7 @@ export const appManagementHandlers = <I extends HttpApiMiddleware.AnyId, S, Id e
           const identity = yield* AppIdentity;
           const host = yield* Effect.flatten(AppManagementHost);
           const { app } = yield* ownedSource(host, identity, params.app);
-          return { path: `/git/${encodeURIComponent(identity.scope)}/${app.slug}.git` };
+          return yield* gitRemote(identity.scope, app);
         }),
       )
       .handle("history", ({ params }) =>

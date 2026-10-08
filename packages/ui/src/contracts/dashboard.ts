@@ -20,7 +20,7 @@ import type {
   DeploymentDisplay,
   SourceDisplayFile,
 } from "@executor-js/app-management/contracts/source-display";
-import type { Atom, AsyncResult } from "effect/unstable/reactivity";
+import type { Atom, AsyncResult } from "effect/reactivity";
 import { Schema, type Cause } from "effect";
 import type { ComponentType, ReactNode } from "react";
 

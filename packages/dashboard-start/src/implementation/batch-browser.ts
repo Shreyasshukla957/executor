@@ -6,7 +6,7 @@
  * each from the streamed reply. The client still decodes each answer with its endpoint's schemas.
  */
 import { Effect, Exit, Option, Request, RequestResolver, Result, Schema, Stream } from "effect";
-import { HttpApi, type HttpApiGroup } from "effect/unstable/httpapi";
+import { HttpApi, type HttpApiGroup } from "effect/http-api";
 import {
   FindMyWay,
   HttpClient,
@@ -15,7 +15,8 @@ import {
   HttpClientResponse,
   HttpTraceContext,
   Url,
-} from "effect/unstable/http";
+} from "effect/http";
+import { isConnectionFailure } from "@executor-js/utils/connection-failure";
 import {
   BatchAnswer,
   batchable,
@@ -82,6 +83,15 @@ const send = (entries: ReadonlyArray<Request.Entry<Read>>) =>
       return;
     }
     const waiting = new Map(entries.map((entry, id) => [id, entry]));
+    // A batch that got no response fails each read it carried the same way, so each read reports
+    // the lost connection instead of a reply the server cut short.
+    let lost: unknown;
+    const failed = (request: HttpClientRequest.HttpClientRequest) =>
+      lost === undefined
+        ? unanswered(request)
+        : new HttpClientError.HttpClientError({
+            reason: new HttpClientError.TransportError({ request, cause: lost }),
+          });
     yield* first.request.client
       .execute(
         HttpClientRequest.post(dashboardBatchPath).pipe(
@@ -91,6 +101,11 @@ const send = (entries: ReadonlyArray<Request.Entry<Read>>) =>
         ),
       )
       .pipe(
+        Effect.tapError((error) =>
+          Effect.sync(() => {
+            if (isConnectionFailure(error)) lost = error.reason.cause;
+          }),
+        ),
         Effect.flatMap(HttpClientResponse.filterStatusOk),
         Effect.flatMap((response) =>
           response.stream.pipe(
@@ -112,7 +127,7 @@ const send = (entries: ReadonlyArray<Request.Entry<Read>>) =>
         Effect.ensuring(
           Effect.sync(() => {
             for (const entry of waiting.values())
-              entry.completeUnsafe(Exit.fail(unanswered(entry.request.request)));
+              entry.completeUnsafe(Exit.fail(failed(entry.request.request)));
           }),
         ),
         Effect.exit,

@@ -1,8 +1,8 @@
 /** Hosted organization groups. Account and app grants are separate later capabilities. */
 import { Context, Effect, Schema } from "effect";
 import { ApiError } from "@executor-js/utils/api-error";
-import type { SqlClient } from "effect/unstable/sql";
-import { HttpApiEndpoint, HttpApiGroup } from "effect/unstable/httpapi";
+import type { SqlClient } from "effect/sql";
+import { HttpApiEndpoint, HttpApiGroup } from "effect/http-api";
 import {
   OrganizationReference,
   OrganizationForbidden,
@@ -69,6 +69,7 @@ export const GroupConflict = ApiError.define({
   status: 409,
   fields: { reason: Schema.Literals(["changed", "name_taken", "members_changed"]) },
   message: ({ reason }) => groupConflicts[reason],
+  recorded: ({ reason }) => groupConflicts[reason],
 });
 export type GroupConflict = typeof GroupConflict.Type;
 /** Storage failures contain no raw database details. */

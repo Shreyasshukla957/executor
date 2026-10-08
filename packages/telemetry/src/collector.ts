@@ -1,7 +1,7 @@
 /** Effect owns the bundled Motel workerd process and restarts it after unexpected exits. */
 import { createRequire } from "node:module";
 import { Deferred, Effect, FileSystem, Path, Schema, Stream } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 /** workerd's control message once the collector socket accepts connections. */
 const Listening = Schema.Struct({

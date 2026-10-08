@@ -9,7 +9,7 @@
 import { RegistryContext, scheduleTask, useAtomValue } from "@effect/atom-react";
 import type { AnyRouter } from "@tanstack/react-router";
 import { Cause } from "effect";
-import { AsyncResult, Atom, AtomRegistry, Hydration } from "effect/unstable/reactivity";
+import { AsyncResult, Atom, AtomRegistry, Hydration } from "effect/reactivity";
 import { createContext, useContext, useSyncExternalStore, type ReactNode } from "react";
 
 interface DehydratedAtoms {

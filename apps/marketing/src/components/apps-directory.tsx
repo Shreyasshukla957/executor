@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { RegistryProvider, useAtomValue } from "@effect/atom-react";
 import { Cause, Option } from "effect";
-import { AsyncResult } from "effect/unstable/reactivity";
+import { AsyncResult } from "effect/reactivity";
 import {
   registryPublicationPath,
   type Publication,

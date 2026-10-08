@@ -1,6 +1,6 @@
 /** Restart the runner-owned product through its loopback-only test control plane. */
 import { Config, Effect, Schema } from "effect";
-import { HttpClient, HttpClientRequest } from "effect/unstable/http";
+import { HttpClient, HttpClientRequest } from "effect/http";
 import { Target } from "./platform.ts";
 import { Evidence } from "./evidence.ts";
 import type { OperatorSettings } from "./managed-server.ts";

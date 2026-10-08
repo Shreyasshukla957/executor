@@ -44,7 +44,7 @@ export class GraphqlError extends Schema.TaggedError<GraphqlError>()("GraphqlErr
   status: Schema.optional(Schema.Number),
 }) {}
 
-const Name = Schema.String.check(Schema.isPattern(/^[_A-Za-z][_0-9A-Za-z]*$/));
+const Name = Schema.String.check(Schema.isPattern(/^[_A-Za-z][_0-9A-Za-z]*$/u));
 const Kind = Schema.Literals([
   "SCALAR",
   "OBJECT",

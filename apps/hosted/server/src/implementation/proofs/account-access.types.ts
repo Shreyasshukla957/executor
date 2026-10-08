@@ -1,7 +1,7 @@
 /** Compile-only checks: an account use case runs only on a target declared for its action. */
 import { AccountId, type OwnerId } from "@executor-js/sdk/core";
 import { Effect, Schema } from "effect";
-import { HttpApiEndpoint } from "effect/unstable/httpapi";
+import { HttpApiEndpoint } from "effect/http-api";
 import {
   AccountTargets,
   requireAccount,
@@ -10,13 +10,8 @@ import {
   type AccountTarget,
 } from "../../contracts/account-grants.ts";
 import type { AccountAccess } from "../../contracts/resource-access.ts";
-import {
-  checkAccount,
-  disconnectAccount,
-  getAccount,
-  reconnectAccount,
-  updateAccount,
-} from "../accounts.ts";
+import { checkAccount, disconnectAccount, getAccount, updateAccount } from "../accounts.ts";
+import { AccountGrants } from "./account-access.ts";
 
 declare const owner: OwnerId;
 declare const account: AccountId;
@@ -34,7 +29,10 @@ const targeted = <X, E, R>(
 export const allowed = [
   targeted(getAccount.pipe(Effect.provideService(AccountTargets.inspect, { account }))),
   targeted(checkAccount.pipe(Effect.provideService(AccountTargets.use, { account }))),
-  targeted(reconnectAccount.pipe(Effect.provideService(AccountTargets.reconnect, { account }))),
+  // App connections check a reconnect's account here.
+  targeted(
+    AccountGrants.reconnect.pipe(Effect.provideService(AccountTargets.reconnect, { account })),
+  ),
   targeted(disconnectAccount.pipe(Effect.provideService(AccountTargets.delete, { account }))),
   targeted(
     updateAccount({ label: "Renamed" }).pipe(
@@ -53,7 +51,7 @@ export const rejected = [
   // @ts-expect-error Reconnecting replaces credentials; it does not permit renaming.
   targeted(updateAccount({}).pipe(Effect.provideService(AccountTargets.reconnect, { account }))),
   // @ts-expect-error Using credentials does not permit replacing them.
-  targeted(reconnectAccount.pipe(Effect.provideService(AccountTargets.use, { account }))),
+  targeted(AccountGrants.reconnect.pipe(Effect.provideService(AccountTargets.use, { account }))),
   // @ts-expect-error Each target serves only its own action, even where the policy is wider.
   targeted(getAccount.pipe(Effect.provideService(AccountTargets.delete, { account }))),
 ];

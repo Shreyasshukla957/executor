@@ -1,7 +1,7 @@
 /** Serve the hosted Client ID Metadata Document from host configuration alone. */
 import { httpsOnlyUrlPolicy, parseDestination } from "@executor-js/utils/url-policy";
 import { Config, Effect, Option } from "effect";
-import { HttpServerResponse } from "effect/unstable/http";
+import { HttpServerResponse } from "effect/http";
 import { Authentication } from "../contracts/auth.ts";
 import {
   type ClientMetadataDocument,

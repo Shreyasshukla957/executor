@@ -5,13 +5,15 @@ import { cloudSentry } from "../implementation/error-reporting.ts";
 import { cloudAnalytics, recordBackgroundUsage } from "../implementation/product-analytics.ts";
 import { ScheduleObservation } from "@executor-js/sdk/scheduling";
 import { previewLifetime } from "./test-stage-expiry.ts";
+import { EventCleanup } from "./event-cleanup.ts";
 import { ProfileHost } from "@executor-js/sdk/core";
 import { scheduleRecoveryMilliseconds } from "../contracts/schedules.ts";
 /** Native alarms wake one coordinator; authoritative schedule/run state remains in Postgres. */
 import * as Cloudflare from "alchemy/Cloudflare";
 import { RuntimeContext } from "alchemy";
+import { makeExecutionMemo } from "alchemy/Runtime/ExecutionMemo";
 import { Config, Clock, Effect, Exit, Layer, Schema, Semaphore } from "effect";
-import { FetchHttpClient, HttpClient } from "effect/unstable/http";
+import { FetchHttpClient, HttpClient } from "effect/http";
 import { HostedExecutor, ScheduledAuthority, ScheduleWakeup } from "@executor-js/hosted-server";
 import { defaultScheduleWorkerOptions } from "@executor-js/sdk/scheduling";
 import { cloudProduct } from "./product.ts";
@@ -145,15 +147,26 @@ const makePlacedScheduleCoordinator = Effect.gen(function* () {
       provide(
         Effect.gen(function* () {
           const executor = yield* Effect.flatten(HostedExecutor);
-          const next = yield* executor.scheduler.nextWake;
-          // Requested profile setup keeps its wake: deleting it would leave the change to the
-          // cron heartbeat, up to a minute later.
+          // Event deliveries due for a retry wake this coordinator too.
+          const [schedule, delivery] = yield* Effect.all([
+            executor.scheduler.nextWake,
+            executor.events.nextWake,
+          ]);
+          const next =
+            schedule === null || delivery === null
+              ? (schedule ?? delivery)
+              : schedule < delivery
+                ? schedule
+                : delivery;
+          // Requested profile setup keeps its wake: deleting it, or moving it to a later
+          // schedule, would leave the change to that schedule or the minute heartbeat.
           const soonest =
             (yield* Clock.currentTimeMillis) + defaultScheduleWorkerOptions.pollMilliseconds;
-          const planned =
-            next === null && !(yield* dispatch.requested)
+          const planned = (yield* dispatch.requested)
+            ? soonest
+            : next === null
               ? undefined
-              : Math.max(next?.getTime() ?? 0, soonest);
+              : Math.max(next.getTime(), soonest);
           // A pending re-arm of the retired heartbeat keeps an alarm for its retry.
           const stored = yield* state.storage.get<number>(restoreKey);
           const retry = stored === undefined ? undefined : Math.max(stored, soonest);
@@ -198,6 +211,11 @@ const makePlacedScheduleCoordinator = Effect.gen(function* () {
                   pool.withPermitsIfAvailable(1)(operation).pipe(Effect.asVoid),
               }),
             );
+            // Each emit attempts its deliveries at once; this retries the ones still due.
+            yield* executor.events.deliver({ maxDeliveries: 64 }).pipe(
+              Effect.withSpan("events.dispatch"),
+              Effect.catch(() => Effect.logError("Cloud event delivery failed")),
+            );
             yield* arm;
           }),
         ).pipe(
@@ -240,9 +258,13 @@ const makePlacedScheduleCoordinator = Effect.gen(function* () {
             Effect.gen(function* () {
               // Profile changes wake the coordinator; the request outlives a pass already running.
               yield* dispatch.request;
-              yield* state.storage.setAlarm(
-                (yield* Clock.currentTimeMillis) + defaultScheduleWorkerOptions.pollMilliseconds,
-              );
+              // A wake only brings the alarm in. Wakes arrive from every write in every
+              // organization; when each one moved the alarm a second out, wakes under a second
+              // apart kept it from ever firing, and due runs waited up to a minute for a lull.
+              const due =
+                (yield* Clock.currentTimeMillis) + defaultScheduleWorkerOptions.pollMilliseconds;
+              const pending = yield* state.storage.getAlarm();
+              if (pending === null || pending > due) yield* state.storage.setAlarm(due);
             }),
           );
         }),
@@ -377,17 +399,32 @@ export const cloudSchedules = Effect.gen(function* () {
   const coordinator = yield* PlacedScheduleCoordinator;
   const report = yield* cloudSentry;
   const lifetime = yield* previewLifetime;
+  const cleanup = yield* EventCleanup;
   // The namespace binding only exists at runtime, so resolve the stub when the wake runs.
   const wake = (source: WakeSource) =>
     Effect.scoped(report(Effect.suspend(() => coordinator.getByName(coordinatorName).wake()))).pipe(
       Effect.withSpan("schedule.wake", { attributes: { "executor.schedule.wake": source } }),
       Effect.provide(RuntimeContext.phantom),
     );
+  const change = wake("change").pipe(
+    Effect.catch(() => Effect.logError("Schedule coordinator wake failed")),
+  );
+  // A request answers once its change is committed, and wakes the coordinator after the
+  // response, once per event however many of its writes ask. A busy coordinator answers wakes
+  // late: while many new organizations were set up at once, waiting for it held a connection
+  // submit for 12 s, and a profile write past its client's minute.
+  const afterResponse = yield* makeExecutionMemo(
+    Effect.gen(function* () {
+      const deadline = yield* cleanup.deadline;
+      yield* Effect.addFinalizer(() =>
+        deadline.within(change, { max: "5 seconds" }).pipe(Effect.asVoid),
+      );
+    }),
+  );
   return {
-    layer: Layer.succeed(
-      ScheduleWakeup,
-      wake("change").pipe(Effect.catch(() => Effect.logError("Schedule coordinator wake failed"))),
-    ),
+    layer: Layer.succeed(ScheduleWakeup, afterResponse),
+    /** Wakes before returning, for work that already runs after its event's response. */
+    immediateLayer: Layer.succeed(ScheduleWakeup, change),
     /** The `schedule-wake` job. Its failure fails the job, so a forwarding caller retries. */
     wake: wake("job").pipe(lifetime.background),
   };

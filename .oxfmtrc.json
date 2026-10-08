@@ -16,6 +16,8 @@
     "**/routeTree.gen.ts",
     "**/browser-scripts.gen.ts",
     "**/executor-intro.gen.ts",
-    "apps/docs/content"
+    "**/executor-skill-digests.gen.ts",
+    "apps/docs/content",
+    "packages/apps/protocols/[0-9]*.json"
   ]
 }

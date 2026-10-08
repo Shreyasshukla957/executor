@@ -15,14 +15,14 @@ import {
 import { AlchemyContext } from "alchemy/AlchemyContext";
 import * as Cloudflare from "alchemy/Cloudflare";
 import { Stage } from "alchemy/Stage";
-import { Config, DateTime, Duration, Effect, Schema, Stream } from "effect";
-import { HttpClient, HttpClientRequest } from "effect/unstable/http";
+import { Config, DateTime, Duration, Effect, FileSystem, Option, Schema, Stream } from "effect";
+import { HttpClient, HttpClientRequest } from "effect/http";
+import {
+  McpSessionReleaseBlocked,
+  ReleaseRefusal,
+  releaseRefusalReport,
+} from "../contracts/release-guard.ts";
 import { telemetryDatasets } from "./telemetry.ts";
-
-export class McpSessionReleaseBlocked extends Schema.TaggedError<McpSessionReleaseBlocked>()(
-  "McpSessionReleaseBlocked",
-  { message: Schema.String },
-) {}
 
 const Bindings = Schema.Array(
   Schema.Struct({
@@ -196,6 +196,15 @@ const sessionTraffic = (since: DateTime.Utc) =>
  * initializing and calling tools through `McpSession` with none reaching `McpSessions`. Deleting
  * the class earlier fails requests from API isolates that still forward to it.
  */
+/** Lets the test-stage command that started this deploy tell the refusal from a failure. */
+const reportRefusal = (refusal: McpSessionReleaseBlocked) =>
+  Effect.gen(function* () {
+    const report = yield* Config.String(releaseRefusalReport).pipe(Config.option);
+    if (Option.isNone(report)) return;
+    const fs = yield* FileSystem.FileSystem;
+    yield* fs.writeFileString(report.value, yield* Schema.encodeEffect(ReleaseRefusal)(refusal));
+  });
+
 export const mcpSessionRetirementGate = Effect.gen(function* () {
   if ((yield* AlchemyContext).dev) return;
   const { accountId, workers } = yield* stageWorkers;
@@ -244,4 +253,4 @@ export const mcpSessionRetirementGate = Effect.gen(function* () {
     return yield* blocked(
       `MCP traffic since ${DateTime.formatIso(since)} does not yet show McpSession serving initialize and tools/call (${traffic.sessions} McpSession invocations, ${traffic.initialize} initialize, ${traffic.toolCalls} tools/call).`,
     );
-});
+}).pipe(Effect.tapErrorTag("McpSessionReleaseBlocked", reportRefusal));

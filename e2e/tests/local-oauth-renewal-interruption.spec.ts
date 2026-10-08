@@ -4,7 +4,7 @@
  */
 import { expect, layer } from "@effect/vitest";
 import { Effect, Exit, Fiber, Redacted, Schedule, Schema } from "effect";
-import { FetchHttpClient, HttpClient } from "effect/unstable/http";
+import { FetchHttpClient, HttpClient } from "effect/http";
 import { randomUUID } from "node:crypto";
 import { Api, body, type Session } from "../support/api.ts";
 import { TestLive, withCase } from "../support/case.ts";

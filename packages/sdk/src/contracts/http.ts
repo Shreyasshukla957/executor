@@ -1,5 +1,5 @@
 /** The single HTTP contract, composed from each area and projected into Executor. */
-import { HttpApi } from "effect/unstable/httpapi";
+import { HttpApi } from "effect/http-api";
 import { AccountConnectionsGroup } from "./account-connection.ts";
 import { AppProfilesGroup } from "./profiles.ts";
 import { AccountsGroup } from "./account.ts";

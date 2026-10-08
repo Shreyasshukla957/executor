@@ -1,16 +1,18 @@
+import { owned } from "@executor-js/telemetry";
 import { loadSwaggerClient } from "./swagger-client.ts";
 import { httpProviderError, accountProviderError } from "./provider-error.ts";
 import { NetworkRefused } from "../contracts/network.ts";
 import { failOnNetworkRefusal } from "./network.ts";
 import { ProviderError } from "../contracts/provider-error.ts";
 /** Swagger constructs requests; Effect owns HTTP policy and bounded results. */
-import { Effect, Encoding, Option, Schema, Stream } from "effect";
+import { Effect, Option, Schema, Stream } from "effect";
+import { Base64 } from "effect/encoding";
 import {
   FetchHttpClient,
   HttpClient,
   HttpClientRequest,
   type HttpClientResponse,
-} from "effect/unstable/http";
+} from "effect/http";
 import {
   OpenapiResponseError,
   ApiErrorRecovery,
@@ -264,6 +266,7 @@ export function createRequest(config: {
     const operation = { method: op.method, path: op.path };
     return Effect.scoped(
       Effect.gen(function* () {
+        // oxlint-disable-next-line executor/authored-code-through-adapter -- dynamic import
         const swagger = yield* Effect.promise(loadSwaggerClient);
         const prepared = yield* Effect.try({
           try: () => {
@@ -411,7 +414,7 @@ export function createRequest(config: {
             duration: defaultOpenapiResponseLimits.readTimeoutMs,
             orElse: () => Effect.fail(unreadable),
           }),
-          Effect.withSpan("provider.http.response.read"),
+          owned("upstream", "provider.http.response.read"),
         );
         const data = new Uint8Array(chunks.reduce((size, chunk) => size + chunk.length, 0));
         let offset = 0;
@@ -419,8 +422,7 @@ export function createRequest(config: {
           data.set(chunk, offset);
           offset += chunk.length;
         }
-        if (!isOpenapiTextMedia(contentType))
-          return { base64: Encoding.encodeBase64(data), contentType };
+        if (!isOpenapiTextMedia(contentType)) return { base64: Base64.encode(data), contentType };
         const text = new TextDecoder().decode(data);
         return contentType.includes("json") && !isOpenapiJsonSequence(contentType)
           ? yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Json))(text).pipe(
@@ -429,7 +431,7 @@ export function createRequest(config: {
           : text;
       }),
     ).pipe(
-      Effect.withSpan("provider.openapi.call", {
+      owned("upstream", "provider.openapi.call", {
         attributes: { "executor.tool.name": op.name, "http.request.method": op.method },
       }),
       Effect.provideService(FetchHttpClient.RequestInit, { redirect: "manual" }),

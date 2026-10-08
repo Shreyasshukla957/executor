@@ -19,14 +19,14 @@ import {
   Semaphore,
   Stream,
 } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import {
   HttpClient,
   HttpRouter,
   HttpServer,
   HttpServerRequest,
   HttpServerResponse,
-} from "effect/unstable/http";
+} from "effect/http";
 import type { Target } from "./platform.ts";
 import { startAnalyticsCollector } from "./analytics-collector.ts";
 import {
@@ -41,6 +41,8 @@ class ServerFailed extends Schema.TaggedError<ServerFailed>()("ServerFailed", {
   message: Schema.String,
 }) {}
 
+/** The furthest a scenario may move a stopped product's clock; `wall-clock.mjs` enforces it too. */
+const maxClockOffset = 40 * 86_400_000;
 /** Operator settings a scenario may turn on between product generations. */
 export const OperatorSettings = Schema.Struct({
   EXECUTOR_OAUTH_CLIENT_METADATA_URL: Schema.NonEmptyString,
@@ -261,7 +263,7 @@ export const startManagedServer = (
               Schema.decodeUnknownEffect(
                 Schema.Struct({
                   milliseconds: Schema.Int.check(
-                    Schema.isBetween({ minimum: 1, maximum: 86_400_000 }),
+                    Schema.isBetween({ minimum: 1, maximum: maxClockOffset }),
                   ),
                 }),
               ),
@@ -271,7 +273,7 @@ export const startManagedServer = (
             Effect.gen(function* () {
               if (current !== undefined) return HttpServerResponse.empty({ status: 409 });
               const offset = Number(env.EXECUTOR_TEST_CLOCK_OFFSET_MS) + body.milliseconds;
-              if (offset > 86_400_000) return HttpServerResponse.empty({ status: 400 });
+              if (offset > maxClockOffset) return HttpServerResponse.empty({ status: 400 });
               env.EXECUTOR_TEST_CLOCK_OFFSET_MS = String(offset);
               return HttpServerResponse.jsonUnsafe({ offset });
             }),
@@ -333,9 +335,7 @@ export const startManagedServer = (
           // Only scenarios that declare this in the reviewed test plan may write rows directly.
           const declared = Object.values(scenarios).some(
             (scenario) =>
-              scenario.title === target.scenarioLabel &&
-              "legacyStorage" in scenario &&
-              scenario.legacyStorage === true,
+              scenario.title === target.scenarioLabel && scenario.legacyStorage === true,
           );
           if (!declared || target.metadata.target === "cloud")
             return HttpServerResponse.empty({ status: 403 });

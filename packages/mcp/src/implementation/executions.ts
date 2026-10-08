@@ -3,6 +3,7 @@ import type { ExecutionRejected } from "../contracts/execute.ts";
 import type { CodeMode } from "@opencode-ai/codemode";
 import {
   ElicitationFailed,
+  toolCallSpan,
   ToolInputs,
   type ToolCallResult,
   type ToolPending,
@@ -42,6 +43,7 @@ import {
 } from "../contracts/execute.ts";
 import type { BrowserApprovalView, BrowserApprovalAcknowledgement } from "../contracts/browser.ts";
 import { programScheduler } from "./program-scheduler.ts";
+import { reportFailure } from "./diagnostics.ts";
 import {
   executeProgram,
   executionProgress,
@@ -346,6 +348,10 @@ export const makeExecutions = (
         listApps: (input) => exchange((backend) => backend.listApps(input)),
         listTargets: (input) => exchange((backend) => backend.listTargets(input)),
         listTools: (input, options) => exchange((backend) => backend.listTools(input, options)),
+        eventDefinitions: (input) => exchange((backend) => backend.eventDefinitions(input)),
+        findEventSubscription: (key) => exchange((backend) => backend.findEventSubscription(key)),
+        subscribeEvent: (input) => exchange((backend) => backend.subscribeEvent(input)),
+        unsubscribeEvent: (input) => exchange((backend) => backend.unsubscribeEvent(input)),
         callTool: (input) =>
           Effect.flatMap(Effect.fiberId, (fiber) => {
             const call = run.progress.callFibers.get(fiber);
@@ -356,7 +362,7 @@ export const makeExecutions = (
                     elicitation: elicitation(run, operation, interactionTool(input)),
                   })
                   .pipe(
-                    Effect.withSpan("mcp.tool.call", {
+                    toolCallSpan("mcp.tool.call", {
                       attributes: {
                         "executor.app.id": input.app,
                         "executor.tool.name": input.tool,
@@ -386,6 +392,18 @@ export const makeExecutions = (
       };
     };
 
+    // The program runs only while a request drives it, and that request reports what it found:
+    // the request that started the program may have ended, and its reporter with it.
+    // Taking and reporting are one uninterruptible step: cancellation, a client disconnect or the
+    // timeout race could otherwise stop the batch after taking it, and the finalizer would find no
+    // failures left. Reporters run synchronously and only buffer, so the step is bounded.
+    const report = (run: Run) =>
+      Effect.uninterruptible(
+        Effect.suspend(() =>
+          Effect.forEach(run.progress.failures.splice(0), reportFailure, { discard: true }),
+        ),
+      );
+
     const drive = (
       run: Run,
       backend: McpBackend<Error>,
@@ -400,6 +418,7 @@ export const makeExecutions = (
           yield* wake(run);
           while (true) {
             const event = yield* Queue.take(run.events);
+            yield* report(run);
             if (run.closed)
               return expired(run)
                 ? yield* timedOut(run)
@@ -453,6 +472,7 @@ export const makeExecutions = (
           Effect.onInterrupt(() => stop(run)),
           Effect.ensuring(
             Effect.gen(function* () {
+              yield* report(run);
               run.remainingMs -= Math.max(0, (yield* Clock.currentTimeMillis) - started);
               run.busy = false;
               // A run that parked as its budget ran out must not resume before its timer fires.
@@ -634,7 +654,8 @@ export const makeExecutions = (
                     ),
                   })
                   .pipe(
-                    Effect.withSpan("mcp.tool.resume", {
+                    // The approved call runs here, so this span carries its Executor time.
+                    toolCallSpan("mcp.tool.resume", {
                       attributes: {
                         "executor.app.id": pending.request.invocation.app,
                         "executor.tool.name": pending.request.invocation.tool,

@@ -1,7 +1,7 @@
 /** Drive the real `executor apps` CLI against the managed local server. */
 import { expect, layer } from "@effect/vitest";
 import { Config, Effect, FileSystem, Option, Path, Redacted, Schema, Stream } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { scenarios } from "../test-plan.ts";
 import { Api } from "../support/api.ts";
 import { TestLive, withCase } from "../support/case.ts";
@@ -102,7 +102,7 @@ layer(TestLive, { excludeTestServices: true })("Local apps CLI", (it) => {
         yield* evidence.json("signed-out.json", signedOut);
         expect(signedOut.code).toBe(1);
         expect(signedOut.stderr).toContain(
-          "run executor apps login --host https://v2.executor.sh and pass the same --host",
+          "run executor apps login --host https://api.executor.sh and pass the same --host",
         );
         expect(signedOut.stderr).toContain(
           "For a local server (default http://127.0.0.1:4312), set EXECUTOR_API_KEY",

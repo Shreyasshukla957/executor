@@ -4,6 +4,9 @@ import {
   allowedValues,
   echoableKey,
   maxAlternativeKeys,
+  missingKey,
+  importedSchemaKeys,
+  missingKeyText,
   objectShape,
   unionShape,
 } from "./schema.ts";
@@ -83,19 +86,38 @@ const memberSelector = (members: readonly SchemaAST.AST[]) => {
  * members' shapes. The native message lists literals without a bound and describes objects by
  * their types rather than their keys.
  */
-const expectedUnion = (ast: SchemaAST.Union) => {
+const unionExpectation = (ast: SchemaAST.Union) => {
   const members = unionMembers(ast);
   const fixed = members.map(fixedValues);
   const values = fixed.flatMap((memberValues) => (memberValues === undefined ? [] : memberValues));
   const others = members.filter((_, index) => fixed[index] === undefined);
-  if (others.length === 0) return `Expected ${allowedValues(values)}`;
-  return `Expected ${unionShape(
+  if (others.length === 0) return allowedValues(values);
+  return unionShape(
     [
       ...(values.length === 0 ? [] : [allowedValues(values)]),
       ...new Set(others.map(describeMember)),
     ],
     memberSelector(members),
-  )}`;
+  );
+};
+const expectedUnion = (ast: SchemaAST.Union) => `Expected ${unionExpectation(ast)}`;
+
+/**
+ * What a declared key expects, as a missing key's problem states it. Undefined when its schema
+ * is described by neither values, a type nor keys, such as an imported JSON Schema.
+ */
+const expectedValue = (ast: SchemaAST.AST): string | undefined => {
+  const encoded = SchemaAST.toEncoded(ast);
+  const values = fixedValues(encoded);
+  if (values !== undefined) return allowedValues(values);
+  const members = unionMembers(encoded);
+  const [only] = members;
+  if (only === undefined) return undefined;
+  if (members.length > 1 && SchemaAST.isUnion(encoded)) return unionExpectation(encoded);
+  if (SchemaAST.isObjects(only) && only.propertySignatures.length > 0)
+    return nativeObjectShape(only);
+  const described = describeMember(only);
+  return described === "a value with other constraints" ? undefined : described;
 };
 
 // Reported input only exists when a parser opts in; never render it either way.
@@ -122,31 +144,70 @@ const format = SchemaIssue.makeFormatterStandardSchemaV1({ leafHook, checkHook }
 interface Located {
   readonly path: readonly PropertyKey[];
   readonly message: string;
+  /**
+   * For a missing key, whether the schema of the object that misses it may accept a key as its
+   * own. Undefined when that schema is not known, and no other place in the input is suggested.
+   */
+  readonly accepts?: (key: string) => boolean;
 }
+
+/** The schema an object declares for one key, when `parent` is an object that declares it. */
+const declaredKey = (parent: SchemaAST.AST | undefined, key: PropertyKey | undefined) =>
+  parent !== undefined && SchemaAST.isObjects(parent)
+    ? parent.propertySignatures.find(({ name }) => name === key)?.type
+    : undefined;
+
+/** Whether an object schema may accept a key as its own: it declares it or has a record's keys. */
+const nativeKeys = (parent: SchemaAST.Objects) => (key: string) =>
+  parent.indexSignatures.length > 0 || parent.propertySignatures.some(({ name }) => name === key);
 
 /**
  * Problems by path, as the Standard Schema formatter flattens them, except that a union no member
- * applied to is described by {@link expectedUnion}.
+ * applied to is described by {@link expectedUnion} and a missing key states what it expects.
+ * `parent` is the schema of the object whose issues are being located.
  */
-const located = (issue: SchemaIssue.Issue, path: readonly PropertyKey[]): readonly Located[] =>
+const located = (
+  issue: SchemaIssue.Issue,
+  path: readonly PropertyKey[],
+  parent?: SchemaAST.AST,
+): readonly Located[] =>
   Match.value(issue).pipe(
-    Match.tag("Pointer", (pointer) => located(pointer.issue, [...path, ...pointer.path])),
-    Match.tag("Composite", ({ issues }) => issues.flatMap((issue) => located(issue, path))),
+    Match.tag("Pointer", (pointer) => {
+      const declared =
+        pointer.issue._tag === "MissingKey" && pointer.path.length === 1
+          ? declaredKey(parent, pointer.path[0])
+          : undefined;
+      return declared === undefined || parent === undefined || !SchemaAST.isObjects(parent)
+        ? located(pointer.issue, [...path, ...pointer.path])
+        : [
+            {
+              path: [...path, ...pointer.path],
+              message: missingKey(expectedValue(declared)),
+              accepts: nativeKeys(parent),
+            },
+          ];
+    }),
+    Match.tag("Composite", ({ ast, issues }) =>
+      issues.flatMap((issue) => located(issue, path, ast)),
+    ),
     Match.tag("Encoding", (encoding) => located(encoding.issue, path)),
     Match.tag("AnyOf", ({ ast, issues }) =>
       issues.length === 0
         ? [{ path, message: expectedUnion(ast) }]
         : issues.flatMap((issue) => located(issue, path)),
     ),
-    Match.orElse((issue) =>
-      format(issue).issues.map((problem) => ({
+    Match.orElse((issue) => {
+      // An imported schema's problems come from its check, which knows the keys it may accept.
+      const accepts = issue._tag === "Filter" ? importedSchemaKeys(issue.filter) : undefined;
+      return format(issue).issues.map((problem) => ({
         path: [
           ...path,
           ...(problem.path ?? []).map((key) => (typeof key === "object" ? key.key : key)),
         ],
         message: problem.message,
-      })),
-    ),
+        ...(accepts === undefined ? {} : { accepts }),
+      }));
+    }),
   );
 
 // Field names and indexes locate the problem; keys that could carry supplied data are not echoed.
@@ -157,17 +218,76 @@ const segment = (key: PropertyKey) =>
       ? `.${key}`
       : "[key]";
 
+const rendered = (path: readonly PropertyKey[]) => `input${path.map(segment).join("")}`;
+
+const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+/** The supplied value at a path, when every segment names an own key or an array index. */
+const valueAt = (input: unknown, path: readonly PropertyKey[]): unknown =>
+  path.reduce<unknown>(
+    (value, key) =>
+      Array.isArray(value) && typeof key === "number"
+        ? value[key]
+        : isRecord(value) && typeof key === "string" && Object.hasOwn(value, key)
+          ? value[key]
+          : undefined,
+    input,
+  );
+
+/** Spellings agents mix up for one key: `policy_id`, `policyId` and `PolicyID`. */
+const spelling = (key: string) => key.toLowerCase().replace(/[-_]/g, "");
+
+/**
+ * Where the supplied input may have a key its schema requires elsewhere: under another spelling in
+ * the same object, or nested one object too deep. Agents most often miss a key that way, and the
+ * problem can ask about the place it may have come from. A key the object's schema may accept,
+ * per `accepts`, is legitimately where it is, and neither it nor its value is suggested: in a
+ * recursive schema a declared child holds the same key. An enclosing object is not searched for
+ * the same reason. Names a supplied key only when it is a plain identifier, and never a value.
+ */
+const suppliedElsewhere = (
+  input: unknown,
+  path: readonly PropertyKey[],
+  accepts: (key: string) => boolean,
+): string | undefined => {
+  const key = path.at(-1);
+  if (typeof key !== "string" || !echoableKey(key)) return undefined;
+  const at = path.slice(0, -1);
+  const holder = valueAt(input, at);
+  if (!isRecord(holder)) return undefined;
+  const candidates = Object.keys(holder).filter((name) => echoableKey(name) && !accepts(name));
+  const respelled = candidates.find((name) => name !== key && spelling(name) === spelling(key));
+  const deeper = candidates.find((name) => {
+    const child = holder[name];
+    return isRecord(child) && Object.hasOwn(child, key);
+  });
+  const found =
+    respelled !== undefined
+      ? [...at, respelled]
+      : deeper !== undefined
+        ? [...at, deeper, key]
+        : undefined;
+  return found === undefined
+    ? undefined
+    : `The input has ${String(found.at(-1))} at ${rendered(found)}; did you mean ${rendered(path)}?`;
+};
+
 /**
  * Failing input paths and what each expects, from a schema decode failure, without supplied
  * values. An expected object names its keys, so a caller can correct nesting from the problem.
+ * A missing key also asks about a place where `input`, the rejected input, may have that key.
  */
-export const inputInvalid = (error: unknown): HostInputInvalid => {
+export const inputInvalid = (error: unknown, input: unknown): HostInputInvalid => {
   if (!Schema.isSchemaError(error)) return new HostInputInvalid();
   const problems = located(error.issue, [])
     .slice(0, maxInputProblems)
-    .map(({ path, message }) => {
-      const location = path.map(segment);
-      return `${location.length === 0 ? "input" : `input${location.join("")}`}: ${message}`.slice(
+    .map(({ path, message, accepts }) => {
+      const elsewhere =
+        accepts !== undefined && message.startsWith(missingKeyText)
+          ? suppliedElsewhere(input, path, accepts)
+          : undefined;
+      return `${rendered(path)}: ${message}${elsewhere === undefined ? "" : `. ${elsewhere}`}`.slice(
         0,
         512,
       );

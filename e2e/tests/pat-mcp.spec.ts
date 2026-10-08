@@ -461,6 +461,88 @@ layer(HostedLive, { excludeTestServices: true })("PAT MCP", (it) => {
       }).pipe(Effect.provide(McpClient.layer)),
     ),
   );
+  it.effect(scenarios.patMcpResumeAcrossSessions.title, (context) =>
+    withHostedCase(
+      context,
+      Effect.gen(function* () {
+        const { mcp, organization, owner, other, member, receipt, code, ownerClient } =
+          yield* patFixture;
+        const paused = yield* ownerClient.use(
+          "Pause an approval-gated tool in the first MCP session",
+          (client, signal) =>
+            client.callTool({ name: "execute", arguments: { code: code("approved") } }, undefined, {
+              signal,
+            }),
+        );
+        const pending = yield* Schema.decodeUnknownEffect(Pending)(paused.structuredContent);
+        // Some clients open a new MCP session for every tool call, so each resume below uses one.
+        const resume = (
+          label: string,
+          key: typeof owner.key,
+          name: string,
+          mode?: "model" | "browser",
+        ) =>
+          Effect.gen(function* () {
+            const session = yield* mcp.connect(key, name, {
+              organization,
+              ...(mode === undefined ? {} : { mode }),
+            });
+            const result = yield* session.use(label, (client, signal) =>
+              client.callTool(
+                {
+                  name: "resume",
+                  arguments:
+                    mode === "browser"
+                      ? { requestId: pending.requestId }
+                      : { requestId: pending.requestId, response: { action: "accept" } },
+                },
+                undefined,
+                { signal },
+              ),
+            );
+            return yield* Schema.decodeUnknownEffect(Schema.Struct({ status: Schema.String }))(
+              result.structuredContent,
+            ).pipe(Effect.map(({ status }) => ({ status, result })));
+          });
+        expect(
+          (yield* resume("Another user's PAT cannot resume", member.key, "pat-resume-member"))
+            .status,
+        ).toBe("unavailable");
+        expect(
+          (yield* resume(
+            "Another PAT of the same user cannot resume",
+            other.key,
+            "pat-resume-other",
+          )).status,
+        ).toBe("unavailable");
+        expect(
+          (yield* resume(
+            "The same PAT in browser mode cannot answer a model-mode approval",
+            owner.key,
+            "pat-resume-browser",
+            "browser",
+          )).status,
+        ).toBe("unavailable");
+        const resumed = yield* resume(
+          "The same PAT resumes from a new MCP session",
+          owner.key,
+          "pat-resume-next",
+        );
+        expect(resumed.status).toBe("completed");
+        expect(
+          (yield* Schema.decodeUnknownEffect(Completed)(resumed.result.structuredContent))
+            .execution,
+        ).toEqual({ ok: true, value: { receipt } });
+        expect(
+          (yield* resume(
+            "A replayed resume from yet another session is unavailable",
+            owner.key,
+            "pat-resume-replay",
+          )).status,
+        ).toBe("unavailable");
+      }).pipe(Effect.provide(McpClient.layer)),
+    ),
+  );
   it.effect(scenarios.patMcpRenamedOrganization.title, (context) =>
     withHostedCase(
       context,

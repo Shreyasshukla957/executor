@@ -6,7 +6,7 @@ export { AppSlug, appSlug } from "./app-slug.ts";
 /** Apps own deployed code and declared requirements. Profiles hold account selections. */
 import { Schema } from "effect";
 import { StorageError } from "./shared.ts";
-import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi";
+import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/http-api";
 import { AccountId, AppCodeId, AppId, DeploymentId, OwnerId, ProviderId } from "./shared.ts";
 import {
   AccountFieldsInput,
@@ -51,11 +51,19 @@ export type AccountRequirement = typeof AccountRequirement.Type;
 /** App-wide requirements, extracted from the deployed app's declaration. */
 export const AppRequirements = Schema.Struct({
   capabilities: DeclaredRequirements.fields.capabilities,
+  /** The document store of apps built before `sql`. Their retained builds still use it. */
   database: DeclaredRequirements.fields.database,
+  sql: DeclaredRequirements.fields.sql,
   accounts: Schema.Record(Schema.NonEmptyString, AccountRequirement),
+  /** The events the app emits, read without evaluating it. */
+  events: DeclaredRequirements.fields.events,
 });
 
 export type AppRequirements = typeof AppRequirements.Type;
+
+/** Whether the app owns a database, so its calls run in its data facet. */
+export const ownsDatabase = (requirements: Pick<AppRequirements, "database" | "sql">) =>
+  requirements.sql === true || requirements.database !== undefined;
 
 /** Saved slot -> account ID or account IDs. Empty arrays explicitly select zero for many(). */
 export const SelectedAccounts = Schema.Record(
@@ -69,7 +77,7 @@ export type SelectedAccounts = typeof SelectedAccounts.Type;
 export const AppName = Schema.String.check(
   Schema.isMinLength(1),
   Schema.isMaxLength(120),
-  Schema.isPattern(/\S/),
+  Schema.isPattern(/\S/u),
 );
 
 /** Informational origin captured when a copy is made. It never grants access or drives updates. */
@@ -192,6 +200,7 @@ export const AppSlugTaken = ApiError.define({
     existing === undefined
       ? `Another app already uses the address “${slug}”, which this name also produces. Choose a different name.`
       : `The app “${existing.name}” (${existing.app}) already uses the address “${slug}”, which this name also produces. Choose a different name, or deploy to that app by its ID.`,
+  recorded: () => "Another app already uses the address this name produces",
 });
 export type AppSlugTaken = typeof AppSlugTaken.Type;
 

@@ -1,7 +1,7 @@
 /** Working-source reads follow every kind of write, including when Cloud has stored the old source. */
 import { expect, layer } from "@effect/vitest";
 import { Effect, FileSystem, Redacted, Schema } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { randomUUID } from "node:crypto";
 import { scenarios } from "../test-plan.ts";
 import { Actors } from "../support/actors.ts";

@@ -121,6 +121,69 @@ export const pinnedOnly = (workspace: SourceFiles, running: SourceFiles): boolea
   );
 };
 
+/** A JSON value with object keys sorted, so equal documents compare equal whatever their key order. */
+const canonical = (value: unknown): unknown =>
+  Array.isArray(value)
+    ? value.map(canonical)
+    : typeof value === "object" && value !== null
+      ? Object.fromEntries(
+          Object.entries(value)
+            .toSorted(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+            .map(([key, entry]) => [key, canonical(entry)]),
+        )
+      : value;
+
+/**
+ * Whether `workspace` is a framework pin commit on `deployed`, a deployment's source, and nothing
+ * else. Member setup upgrades an untouched Executor app by deploying the host's template, which
+ * never writes Git, so `main` keeps the pin these steps committed on the source it replaced: the
+ * running source's own files, or, when `main` was behind, an earlier deployment's. Every file but
+ * `package.json` must match `deployed` byte for byte. The manifests must be equal JSON once
+ * `dependencies.apps` is removed from both, where `main` declares exactly a release these steps
+ * write, and once `name` is removed from `deployed` where `main` has none, as the template only
+ * named its package later. A source with no `package.json` matches only when `main` holds exactly
+ * the manifest these steps write from nothing. Any other difference is someone's work.
+ */
+export const pinnedBeforeDeploy = (workspace: SourceFiles, deployed: SourceFiles): boolean => {
+  const rest = (files: SourceFiles) => files.filter((file) => file.path !== "package.json");
+  const kept = new Map(rest(deployed).map((file) => [file.path, file.content]));
+  if (
+    rest(workspace).length !== kept.size ||
+    !rest(workspace).every((file) => kept.get(file.path) === file.content)
+  )
+    return false;
+  // A source without a manifest gets the one the pin writes from nothing, byte for byte.
+  if (manifestOf(deployed) === undefined)
+    return [frameworkPinRelease, frameworkPinCatchUpRelease].some((release) => {
+      const created = pinManifest(undefined, release);
+      return created.kind === "pin" && manifestOf(workspace) === created.content;
+    });
+  const decode = (files: SourceFiles) =>
+    Schema.decodeUnknownOption(Schema.fromJsonString(JsonObject))(manifestOf(files));
+  const saved = decode(workspace);
+  const current = decode(deployed);
+  if (Option.isNone(saved) || Option.isNone(current)) return false;
+  const savedDependencies = Schema.decodeUnknownOption(Dependencies)(saved.value.dependencies);
+  const currentDependencies = Schema.decodeUnknownOption(Dependencies)(current.value.dependencies);
+  if (Option.isNone(savedDependencies) || Option.isNone(currentDependencies)) return false;
+  const pin = savedDependencies.value.apps;
+  if (pin !== frameworkPinRelease && pin !== frameworkPinCatchUpRelease) return false;
+  const unpinned = (
+    manifest: typeof saved.value,
+    dependencies: Readonly<Record<string, string>>,
+    dropName: boolean,
+  ) => {
+    const { apps: _apps, ...others } = dependencies;
+    const { name: _name, ...fields } = manifest;
+    return canonical({ ...(dropName ? fields : manifest), dependencies: others });
+  };
+  const named = Object.hasOwn(saved.value, "name");
+  return (
+    JSON.stringify(unpinned(saved.value, savedDependencies.value, false)) ===
+    JSON.stringify(unpinned(current.value, currentDependencies.value, !named))
+  );
+};
+
 /**
  * Classify one app and, when applying, commit its pin on top of the revision that was read.
  * A working branch behind the running deployment receives the running source with the pin, so

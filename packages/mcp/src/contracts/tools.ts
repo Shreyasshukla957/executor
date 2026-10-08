@@ -1,6 +1,6 @@
 /** Compose the public MCP surface from its area contracts. */
 import type { Effect } from "effect";
-import { Toolkit } from "effect/unstable/ai";
+import { Toolkit } from "effect/ai";
 import type { BrowserDelivery } from "./browser.ts";
 import { BrowserExecuteTool, BrowserResumeTool } from "./browser-tools.ts";
 import type { McpBackend } from "./backend.ts";
@@ -11,7 +11,7 @@ import {
   type McpLimits,
   type ExecutionRejected,
 } from "./execute.ts";
-import { SkillsTool } from "./skills.ts";
+import { SkillsTool, type SkillDocument } from "./skills.ts";
 
 /** Public MCP tools and their handler requirements. Declaring them performs no I/O. */
 export const McpToolkit = Toolkit.make(ExecuteTool, ResumeTool, SkillsTool);
@@ -28,9 +28,14 @@ export interface McpOptions {
   /** Admit each new program once. Resumes never call this hook. */
   readonly beforeExecute?: Effect.Effect<void, ExecutionRejected>;
   readonly browser?: BrowserDelivery;
-  /** Additional product identity partition. The validated HTTP MCP session ID is included when the protocol has sessions. */
-  readonly caller?: Effect.Effect<string>;
+  /** Authenticated principal that owns model and native executions across its MCP sessions. Browser approvals also include the session ID. */
+  readonly caller: Effect.Effect<string>;
   /** Sent as the server instructions when a client connects. Hosts send the Executor app's intro. */
   readonly instructions: string;
   readonly limits: McpLimits;
+  /**
+   * Record a document the skills tool read on the current span. Hosts name only the Executor app's
+   * own skills; any other app's skill names are customer data and stay out of telemetry.
+   */
+  readonly annotateSkillRead: (document: typeof SkillDocument.Type) => Effect.Effect<void>;
 }

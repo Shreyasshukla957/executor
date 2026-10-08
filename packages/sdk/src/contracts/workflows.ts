@@ -3,7 +3,7 @@ import { SelectedAccounts } from "./apps.ts";
 import { ProfileErrors, ProfileRevision } from "./profiles.ts";
 /** App-scoped workflow discovery and run management share one HTTP contract. */
 import { Schema } from "effect";
-import { HttpApiEndpoint, HttpApiGroup } from "effect/unstable/httpapi";
+import { HttpApiEndpoint, HttpApiGroup } from "effect/http-api";
 import {
   HostedWorkflow,
   WorkflowRun,

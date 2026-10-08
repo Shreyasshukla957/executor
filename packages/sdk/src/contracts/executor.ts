@@ -2,7 +2,7 @@ import { ProfileHost, type ProfileDispatcher } from "./profiles.ts";
 import { WorkflowHost, type WorkflowRuntime } from "./workflow-runtime.ts";
 /** The shared Executor interface and remote client options; projected from ExecutorApi. */
 import { type Effect, type Redacted, type Stream, Schema } from "effect";
-import type { HttpApi, HttpApiEndpoint, HttpApiGroup } from "effect/unstable/httpapi";
+import type { HttpApi, HttpApiEndpoint, HttpApiGroup } from "effect/http-api";
 import type { WebhookSetupApi } from "./webhook-setup.ts";
 import type { ExecutorApi } from "./http.ts";
 import { StorageHost, type Credentials } from "./storage.ts";
@@ -30,10 +30,15 @@ export interface AccountConnectionCompletion {
 }
 /** Product metadata participates in the resource transaction; hooks must perform no external I/O. */
 export interface ResourceLifecycle {
-  /** Recheck the saved subject before any profile-backed execution, including background work. */
+  /**
+   * Recheck the saved subject before any profile-backed execution, including background work,
+   * together with the selected accounts `accountsResolving` would check for that subject. Returns
+   * the IDs of the accounts the product still authorizes; the SDK refuses the others.
+   */
   readonly profileResolving?: (
     profile: import("./profiles.ts").Profile,
-  ) => Effect.Effect<void, StorageError>;
+    accounts: readonly Account[],
+  ) => Effect.Effect<ReadonlySet<AccountId>, StorageError>;
   /**
    * Recheck product authority before acquiring account credentials, and again after any renewal.
    * Returns the IDs of the accounts the product still authorizes; the SDK refuses the others.
@@ -67,8 +72,13 @@ export interface ExecutorCache {
 export interface ExecutorInputs {
   /** Executor tables, app data and the catalog live here. Migrated by the host before use. */
   readonly database: ExecutorDatabase;
-  /** Public origin: webhook callbacks and the address of a stored catalog. */
+  /** Public origin: the address of a stored catalog, and of webhook callbacks by default. */
   readonly origin?: string;
+  /**
+   * Origin new webhook subscriptions register their callbacks on; defaults to `origin`.
+   * Existing subscriptions keep the callback URL they stored.
+   */
+  readonly webhookOrigin?: string;
   /** The Git backend behind app source. The executor derives revision storage from it. */
   readonly git: RepositoryBackend;
   readonly blobs: BlobStorage;
@@ -79,8 +89,9 @@ export interface ExecutorInputs {
   /** Optional product-owned metadata lifecycle. Failures roll back the resource write. */
   readonly hooks?: ResourceLifecycle;
   readonly workflows?: WorkflowRuntime;
-  readonly appData?: import("@executor-js/app-data").AppDatabases;
   readonly cache?: ExecutorCache;
+  /** Outbound delivery and authorization for app events. Without it, subscribing is unavailable. */
+  readonly events?: import("./events.ts").EventOptions;
   /**
    * Revalidates stale declarations and revokes deleted accounts' OAuth grants after the response.
    * Without it, stale declarations revalidate first and revocation runs inline.
@@ -188,6 +199,8 @@ export type Executor = Omit<
   readonly [RepositoryHost]: RepositoryHost;
   readonly [StorageHost]: StorageHost;
   readonly scheduler: import("./scheduler.ts").ScheduleDispatcher;
+  /** Host-only: products authorize every event operation before calling it. */
+  readonly events: import("./events.ts").ExecutorEvents;
 };
 
 type Promisify<T> = T extends (...args: infer Args) => Effect.Effect<infer A, infer _E, never>
@@ -203,5 +216,6 @@ export type PromiseExecutor = Promisify<
     | typeof RepositoryHost
     | typeof StorageHost
     | "scheduler"
+    | "events"
   >
 >;

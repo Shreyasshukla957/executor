@@ -1,7 +1,8 @@
 import { hostedAppCapabilities } from "@executor-js/hosted-server/app-management";
 import { executorSelfHostApiDocument } from "../contracts/api.ts";
-import { AppManagementHost } from "@executor-js/app-management";
-import { runStartupDataSteps } from "@executor-js/app-management/data-steps";
+import { AppGitOrigins, AppManagementHost } from "@executor-js/app-management";
+import { expireIdleAgentGrants, runStartupDataSteps } from "@executor-js/app-management/data-steps";
+import { SelfHostAuth, selfHostAuth } from "../auth.ts";
 /** Self-host SDK uses the same PGlite connection as Better Auth. */
 import type { HostEgress } from "@executor-js/utils/url-policy";
 import {
@@ -14,6 +15,7 @@ import {
   declarationConfig,
   hostedExecutorOrigin,
   remoteRegistry,
+  httpEventSender,
   type Executor,
   type RepositoryBackend,
 } from "@executor-js/sdk/core";
@@ -25,19 +27,23 @@ import {
   makeOrganizationIcons,
   OrganizationDefaults,
   organizationDefaults,
+  noOrganizationRemovals,
   lazyHostedApiDocument,
   clientMetadataSetting,
   hostedOAuthClientName,
   withExecutorAnalytics,
+  executorDefaultRedeployed,
 } from "@executor-js/hosted-server";
 import { hostedResourceLifecycle } from "@executor-js/hosted-server/resource-lifecycle";
+import { hostedEventAuthority } from "@executor-js/hosted-server/events";
+import { deliverEvents } from "@executor-js/sdk/scheduling";
 import * as BrowserCrypto from "@effect/platform-browser/BrowserCrypto";
 import { HostedAppRuntime } from "@executor-js/hosted-server/app-ui/contracts";
 import { workerdHostHandler } from "@executor-js/sdk/workerd";
 import type { AppRuntime, BlobStorage, WorkflowRuntime } from "@executor-js/sdk/core";
 import { Config, Effect, Layer, Option, Deferred, Schedule, Context, Scope } from "effect";
 import { GroupDatabase } from "@executor-js/hosted-server/groups";
-import { SqlClient } from "effect/unstable/sql";
+import { SqlClient } from "effect/sql";
 
 /** Native resources supplied at the self-host composition boundary. */
 export interface SelfHostPlatform {
@@ -95,10 +101,32 @@ export const selfHostExecutorServices = <E, R>(
         },
         // Stale declarations refresh on the server's own lifetime.
         background: (work) => Effect.forkIn(work, server).pipe(Effect.as(true)),
+        events: {
+          sender: httpEventSender(egress),
+          authorize: hostedEventAuthority(Effect.succeed(yield* SqlClient.SqlClient)),
+          allowInsecureCallbacks: egress.policy.allowLoopbackHttp,
+        },
       }).pipe(Effect.provide(BrowserCrypto.layer));
       yield* Deferred.succeed(ready, executor);
+      yield* Effect.forkScoped(deliverEvents(executor));
       // The schema is current and nothing serves or builds yet; the caller holds the data lock.
-      yield* runStartupDataSteps({ executor, blobs }, "private_hosted");
+      const auth = yield* selfHostAuth;
+      yield* runStartupDataSteps(
+        {
+          executor,
+          blobs,
+          agentGrants: auth.agentGrants,
+          executorAppRedeployed: executorDefaultRedeployed,
+        },
+        "private_hosted",
+      );
+      // Once the idle grant step has applied, revoke grants that became idle since, daily.
+      yield* Effect.forkScoped(
+        expireIdleAgentGrants(auth.agentGrants, "private_hosted").pipe(
+          Effect.catch(() => Effect.logWarning("Idle agent grant expiry failed")),
+          Effect.repeat(Schedule.spaced("1 day")),
+        ),
+      );
       yield* Effect.forkScoped(
         executor[RepositoryHost].recover.pipe(
           Effect.catch(() => Effect.logWarning("App repository recovery failed")),
@@ -126,9 +154,12 @@ export const selfHostExecutorServices = <E, R>(
       });
       return Layer.mergeAll(
         Layer.succeed(SelfHostWorkflowRequests, workflowRequests),
+        Layer.succeed(SelfHostAuth, auth),
         Layer.succeed(ScheduledAuthority, scheduleAuthority),
         Layer.succeed(GroupDatabase, Effect.succeed(groupDatabase)),
         Layer.succeed(OrganizationIcons, makeOrganizationIcons(blobs)),
+        // Self-host serves Git, like everything else, on its one origin.
+        Layer.succeed(AppGitOrigins, () => [new URL(origin).origin]),
         Layer.succeed(
           AppManagementHost,
           Effect.succeed({
@@ -140,6 +171,8 @@ export const selfHostExecutorServices = <E, R>(
         Layer.succeed(HostedExecutor, Effect.succeed(withExecutorAnalytics(executor))),
         Layer.succeed(OrganizationDefaults, initialize),
         Layer.succeed(HostedAppRuntime, toEffectRuntime(runtime, blobs)),
+        // Self-host cannot remove an organization.
+        noOrganizationRemovals,
       );
     }),
   );

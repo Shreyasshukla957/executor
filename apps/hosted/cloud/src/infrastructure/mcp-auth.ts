@@ -3,6 +3,7 @@ import {
   AuthenticationUnavailable,
   McpAuthentication,
   authOptions,
+  type HostedOAuthOrigins,
   mcpBrowserGrantError,
   mcpBearerAccess,
   mcpConnectionStore,
@@ -11,21 +12,28 @@ import { BetterAuthApiError, isAPIErrorLike } from "@alchemy.run/better-auth";
 import { RuntimeContext } from "alchemy";
 import { betterAuth } from "better-auth";
 import { Effect, Layer, Option, Redacted } from "effect";
-import type { SqlClient } from "effect/unstable/sql";
+import type { SqlClient } from "effect/sql";
 import { cloudSessionCookiePrefix } from "../contracts/browser.ts";
 import { organizationTables } from "./app-sessions.ts";
 import { AuthDatabase, type AuthDatabaseService } from "./auth-database.ts";
 import { invocationSql } from "./invocation-database.ts";
 import { cloudSecrets } from "./secrets.ts";
-import { cloudOrigin } from "./stage.ts";
+import { cloudHosts } from "./stage.ts";
 
 /**
  * Better Auth with the shared grant, API key and admin plugins and the organization columns the
  * grant checks read. The dashboard's instance adds sign-in, email and billing to the same
  * plugins and writes the same rows; none of its additions take part in a grant check.
  */
-const mcpGrantAuth = (origin: string, database: AuthDatabaseService, secret: string) => {
-  const base = authOptions({ url: origin, oauthRedirectUri: Option.none() }, ["cf-connecting-ip"]);
+const mcpGrantAuth = (
+  { origin, resourceOrigins, issuer }: HostedOAuthOrigins,
+  database: AuthDatabaseService,
+  secret: string,
+) => {
+  const base = authOptions(
+    { url: origin, resourceOrigins, issuer, oauthRedirectUri: Option.none() },
+    ["cf-connecting-ip"],
+  );
   return betterAuth({
     ...base,
     plugins: [...base.plugins, organizationTables],
@@ -50,6 +58,8 @@ type McpGrantApi = Pick<
   | "createMcpConnection"
   | "updateMcpConnection"
   | "revokeMcpConnection"
+  | "listMcpAgents"
+  | "revokeMcpAgent"
 >;
 
 /**
@@ -58,7 +68,7 @@ type McpGrantApi = Pick<
  * with the calling invocation's pool. Every check uses the caller's connections.
  */
 export const mcpAuthentication = (
-  origin: string,
+  origins: HostedOAuthOrigins,
   bound: Effect.Effect<readonly [{ readonly api: McpGrantApi }, <A>(run: () => A) => A]>,
   withSql: <A, E>(effect: Effect.Effect<A, E, SqlClient.SqlClient>) => Effect.Effect<A, E>,
 ) =>
@@ -66,9 +76,12 @@ export const mcpAuthentication = (
     McpAuthentication,
     Effect.gen(function* () {
       return McpAuthentication.of({
-        origin,
+        ...origins,
         authenticate: (headers, mode, organization) =>
-          withSql(mcpBearerAccess(origin, { headers, mode, organization })).pipe(
+          withSql(mcpBearerAccess(origins, { headers, mode, organization })).pipe(
+            Effect.tap(({ access }) =>
+              Effect.annotateCurrentSpan("executor.organization.id", access.organization),
+            ),
             Effect.withSpan("auth.authenticate"),
           ),
         browserGrant: (headers, id) =>
@@ -113,15 +126,20 @@ export const mcpAuthentication = (
  * browser grants and connections is per isolate, like the dashboard's, and holds no request state.
  */
 export const cloudMcpIdentity = Effect.gen(function* () {
-  const origin = yield* cloudOrigin.pipe(Effect.orDie);
+  const hosts = yield* cloudHosts.pipe(Effect.orDie);
+  const origins = {
+    origin: hosts.browser,
+    resourceOrigins: hosts.resourceOrigins,
+    issuer: hosts.issuer,
+  };
   const secrets = yield* cloudSecrets.pipe(Effect.orDie);
   const database = yield* AuthDatabase;
   let instance: ReturnType<typeof mcpGrantAuth> | undefined;
   const native = secrets.authSecret.pipe(
-    Effect.map((secret) => (instance ??= mcpGrantAuth(origin, database, Redacted.value(secret)))),
+    Effect.map((secret) => (instance ??= mcpGrantAuth(origins, database, Redacted.value(secret)))),
   );
   return mcpAuthentication(
-    origin,
+    origins,
     Effect.all([native, database.bind]).pipe(Effect.provide(RuntimeContext.phantom)),
     yield* invocationSql,
   );

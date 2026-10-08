@@ -1,6 +1,6 @@
 /** Wait until a deployed stage answers only from its real API Worker. */
 import { Console, Effect, Schema } from "effect";
-import { HttpClient } from "effect/unstable/http";
+import { HttpClient } from "effect/http";
 import { TestStageFailed } from "../contracts/test-stage-lifetime.ts";
 
 const Health = Schema.Struct({ status: Schema.Literal("ok") });

@@ -1,6 +1,7 @@
 /** Immutable deployments, source files and expected build errors. */
 import { Schema } from "effect";
 import { ApiError } from "@executor-js/utils/api-error";
+import { RecordedMessage } from "@executor-js/utils/recorded-message";
 import { UserFacingError } from "@executor-js/utils/user-facing-error";
 import { AppCodeId, AppId, BuildId, DeploymentId, OwnerId } from "./shared.ts";
 import { SourceCommit, SourceFiles } from "./source.ts";
@@ -95,6 +96,8 @@ export const BuildStage = Schema.Literals([
   "compile",
   "declaration",
   "retain",
+  /** Applying the app's SQL migrations to its database, before activation. */
+  "migrate",
 ]);
 
 /** The build did not complete; nothing was retained, created or changed. */
@@ -116,7 +119,14 @@ export class DeploymentBuildFailed extends Schema.TaggedError<DeploymentBuildFai
     description:
       "The build failed: no deployment was retained, no new app was created, and an existing app's active deployment is unchanged. Identified by (owner, name) because a first deploy has no app id yet. `message` describes the failing stage, source location and underlying error, such as compiler output or the error the app raised while declaring its requirements. Builds bind no accounts, so it holds no credentials.",
   },
-) {}
+) {
+  /** The name is the deployer's and the message quotes their source; telemetry records the stage. */
+  get [RecordedMessage]() {
+    return this.stage === undefined
+      ? "The build failed"
+      : `The build failed at its ${this.stage} stage`;
+  }
+}
 
 /** The compiler exhausted its memory before a new deployment could be activated. */
 export const BuildMemoryExceeded = UserFacingError.define({

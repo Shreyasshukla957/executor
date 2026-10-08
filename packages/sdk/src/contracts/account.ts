@@ -3,7 +3,7 @@ import { ApiError } from "@executor-js/utils/api-error";
 /** Saved reusable accounts. Products decide access; pending setup lives in account-connection.ts. */
 import { Schema } from "effect";
 import { StorageError, CredentialsError } from "./shared.ts";
-import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi";
+import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/http-api";
 import { AccountInfo } from "apps/contracts";
 import type { UiAccountProblem } from "apps/ui/contracts";
 import type { App, SelectedAccounts } from "./apps.ts";
@@ -59,6 +59,8 @@ export const AccountAppHealth = Schema.Struct({
       status: AccountCheckStatus,
       checkedAt: Schema.Date,
       current: Schema.Boolean,
+      /** Why the check failed, as the app or host explained it. Absent when it gave no reason. */
+      message: Schema.optionalKey(Schema.String),
     }),
   ),
 });
@@ -153,6 +155,7 @@ export const AccountFieldsInvalid = ApiError.define({
   fields: { provider: ProviderId, method: AuthMethodName },
   message: ({ method }) =>
     `The submitted account fields do not match the “${method}” method's declared fields.`,
+  recorded: () => "The submitted account fields do not match the method's declared fields",
 });
 export type AccountFieldsInvalid = typeof AccountFieldsInvalid.Type;
 
