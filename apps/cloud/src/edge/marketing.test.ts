@@ -7,7 +7,6 @@ import {
   marketingProxyRequest,
   parseV2Edge,
   v2EdgeResponse,
-  type V2Edge,
   type V2Service,
 } from "./marketing";
 
@@ -186,14 +185,26 @@ describe("isSignUpPath", () => {
 describe("parseV2Edge", () => {
   const service: V2Service = { fetch: () => Promise.resolve(new Response(null)) };
 
-  it("needs both the binding and an absolute sign-up URL", () => {
-    expect(parseV2Edge(undefined, "https://v2.executor.sh/login?mode=signup")).toBeNull();
-    expect(parseV2Edge(service, undefined)).toBeNull();
-    expect(parseV2Edge(service, "/login?mode=signup")).toBeNull();
-    expect(parseV2Edge(service, "javascript:alert(1)")).toBeNull();
-    expect(parseV2Edge(service, "https://v2.executor.sh/login?mode=signup")?.signUpUrl.href).toBe(
-      "https://v2.executor.sh/login?mode=signup",
+  it("is off when neither setting is present", () => {
+    expect(parseV2Edge(undefined, undefined)).toBeNull();
+  });
+
+  it("refuses a binding or sign-up URL set without the other", () => {
+    expect(typeof parseV2Edge(undefined, "https://v2.executor.sh/login?mode=signup")).toBe(
+      "string",
     );
+    expect(typeof parseV2Edge(service, undefined)).toBe("string");
+  });
+
+  it("refuses a sign-up URL that is not absolute http(s)", () => {
+    expect(typeof parseV2Edge(service, "/login?mode=signup")).toBe("string");
+    expect(typeof parseV2Edge(service, "javascript:alert(1)")).toBe("string");
+  });
+
+  it("parses both settings", () => {
+    const edge = parseV2Edge(service, "https://v2.executor.sh/login?mode=signup");
+    if (edge === null || typeof edge === "string") return expect.unreachable("settings must parse");
+    expect(edge.signUpUrl.href).toBe("https://v2.executor.sh/login?mode=signup");
   });
 });
 
@@ -212,18 +223,11 @@ describe("v2EdgeResponse", () => {
     return { received, service };
   };
 
-  const edgeWith = (service: V2Service): V2Edge => {
-    const edge = parseV2Edge(service, SIGN_UP_URL);
-    if (edge === null) return expect.unreachable("edge settings must parse");
-    return edge;
-  };
-
   it("redirects sign-up to v2's configured sign-up page, ignoring the query", async () => {
     const { received, service } = recordingService(() => new Response(null));
-    const edge = edgeWith(service);
 
     for (const url of ["https://executor.sh/sign-up", "https://executor.sh/signup?ref=docs"]) {
-      const response = await v2EdgeResponse(new Request(url), edge);
+      const response = await v2EdgeResponse(new Request(url), service, SIGN_UP_URL);
       expect(response?.status).toBe(302);
       expect(response?.headers.get("location")).toBe(SIGN_UP_URL);
     }
@@ -231,38 +235,71 @@ describe("v2EdgeResponse", () => {
   });
 
   it("follows the configured sign-up URL", async () => {
-    const edge = parseV2Edge(
+    const response = await v2EdgeResponse(
+      new Request("https://executor.sh/signup"),
       { fetch: () => Promise.resolve(new Response(null)) },
       "https://app.executor.sh/sign-up",
     );
-    if (edge === null) return expect.unreachable("edge settings must parse");
-
-    const response = await v2EdgeResponse(new Request("https://executor.sh/signup"), edge);
     expect(response?.headers.get("location")).toBe("https://app.executor.sh/sign-up");
   });
 
   it("leaves non-GET sign-up requests with v1", () => {
-    const edge = edgeWith(recordingService(() => new Response(null)).service);
+    const { service } = recordingService(() => new Response(null));
     expect(
-      v2EdgeResponse(new Request("https://executor.sh/sign-up", { method: "POST" }), edge),
+      v2EdgeResponse(
+        new Request("https://executor.sh/sign-up", { method: "POST" }),
+        service,
+        SIGN_UP_URL,
+      ),
+    ).toBeNull();
+  });
+
+  it("answers edge requests with a 500 on a broken setting and leaves other paths with v1", async () => {
+    const { received, service } = recordingService(() => new Response(null));
+    const response = await v2EdgeResponse(
+      new Request("https://executor.sh/sign-up"),
+      service,
+      "/relative",
+    );
+    expect(response?.status).toBe(500);
+    expect(
+      v2EdgeResponse(new Request("https://executor.sh/acme/mcp"), service, "/relative"),
+    ).toBeNull();
+    expect(received).toHaveLength(0);
+  });
+
+  it("is off without settings", () => {
+    expect(
+      v2EdgeResponse(new Request("https://executor.sh/sign-up"), undefined, undefined),
     ).toBeNull();
   });
 
   it("only acts on executor.sh", () => {
-    const edge = edgeWith(recordingService(() => new Response(null)).service);
-    expect(v2EdgeResponse(new Request("http://executor-cloud.localhost/sign-up"), edge)).toBeNull();
+    const { service } = recordingService(() => new Response(null));
     expect(
-      v2EdgeResponse(new Request("https://v2.executor.sh/api/auth/callback/google"), edge),
+      v2EdgeResponse(new Request("http://executor-cloud.localhost/sign-up"), service, SIGN_UP_URL),
+    ).toBeNull();
+    expect(
+      v2EdgeResponse(
+        new Request("https://v2.executor.sh/api/auth/callback/google"),
+        service,
+        SIGN_UP_URL,
+      ),
     ).toBeNull();
   });
 
   it("leaves v1 paths with v1", () => {
     const { received, service } = recordingService(() => new Response(null));
-    const edge = edgeWith(service);
     expect(
-      v2EdgeResponse(new Request("https://executor.sh/api/auth/callback?code=c"), edge),
+      v2EdgeResponse(
+        new Request("https://executor.sh/api/auth/callback?code=c"),
+        service,
+        SIGN_UP_URL,
+      ),
     ).toBeNull();
-    expect(v2EdgeResponse(new Request("https://executor.sh/gitlab/x/info/refs"), edge)).toBeNull();
+    expect(
+      v2EdgeResponse(new Request("https://executor.sh/gitlab/x/info/refs"), service, SIGN_UP_URL),
+    ).toBeNull();
     expect(received).toHaveLength(0);
   });
 
@@ -277,7 +314,8 @@ describe("v2EdgeResponse", () => {
 
     const response = await v2EdgeResponse(
       new Request("https://executor.sh/api/auth/callback/google?code=c&state=s"),
-      edgeWith(service),
+      service,
+      SIGN_UP_URL,
     );
 
     expect(response?.status).toBe(302);
@@ -302,7 +340,8 @@ describe("v2EdgeResponse", () => {
           "x-forwarded-proto": "http",
         },
       }),
-      edgeWith(service),
+      service,
+      SIGN_UP_URL,
     );
 
     const forwarded = received[0];
@@ -323,7 +362,8 @@ describe("v2EdgeResponse", () => {
 
     const response = await v2EdgeResponse(
       new Request("https://executor.sh/git/acme/tools/info/refs"),
-      edgeWith(service),
+      service,
+      SIGN_UP_URL,
     );
 
     expect(response).toBe(upstream);
@@ -362,7 +402,8 @@ describe("v2EdgeResponse", () => {
         // @ts-expect-error -- Node's fetch needs `duplex` for a stream body; workerd does not.
         duplex: "half",
       }),
-      edgeWith(service),
+      service,
+      SIGN_UP_URL,
     );
 
     expect(received[0]?.method).toBe("POST");
