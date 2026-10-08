@@ -7,6 +7,7 @@ import {
   marketingProxyRequest,
   parseV2Edge,
   v2EdgeResponse,
+  type V2EdgeEnv,
   type V2Service,
 } from "./marketing";
 
@@ -151,8 +152,9 @@ describe("isV2Path", () => {
     "/github",
     "/.well-known/agent-skills",
     "/.well-known/agent-skillset/index.json",
-    // Not yet: connected-account callback and marketing.
+    // The connected-account callback goes by its state, not its path.
     "/api/oauth/callback",
+    // Not yet: marketing.
     "/pricing",
     // v1 dashboard, org pages and MCP, including org slugs that look similar.
     "/",
@@ -184,32 +186,59 @@ describe("isSignUpPath", () => {
 
 describe("parseV2Edge", () => {
   const service: V2Service = { fetch: () => Promise.resolve(new Response(null)) };
+  const settings = {
+    V2: service,
+    V2_SIGN_UP_URL: "https://app.executor.sh/login?mode=signup",
+    V2_OAUTH_STATE_PREFIX: "x2.",
+  };
 
-  it("is off when neither setting is present", () => {
-    expect(parseV2Edge(undefined, undefined)).toBeNull();
+  it("is off when no setting is present", () => {
+    expect(parseV2Edge({})).toBeNull();
   });
 
-  it("refuses a binding or sign-up URL set without the other", () => {
-    expect(typeof parseV2Edge(undefined, "https://v2.executor.sh/login?mode=signup")).toBe(
-      "string",
-    );
-    expect(typeof parseV2Edge(service, undefined)).toBe("string");
+  it("refuses any setting set without the others", () => {
+    expect(typeof parseV2Edge({ ...settings, V2: undefined })).toBe("string");
+    expect(typeof parseV2Edge({ ...settings, V2_SIGN_UP_URL: undefined })).toBe("string");
+    expect(typeof parseV2Edge({ ...settings, V2_OAUTH_STATE_PREFIX: undefined })).toBe("string");
+    expect(typeof parseV2Edge({ V2_OAUTH_STATE_PREFIX: "x2." })).toBe("string");
   });
 
   it("refuses a sign-up URL that is not absolute http(s)", () => {
-    expect(typeof parseV2Edge(service, "/login?mode=signup")).toBe("string");
-    expect(typeof parseV2Edge(service, "javascript:alert(1)")).toBe("string");
+    expect(typeof parseV2Edge({ ...settings, V2_SIGN_UP_URL: "/login?mode=signup" })).toBe(
+      "string",
+    );
+    expect(typeof parseV2Edge({ ...settings, V2_SIGN_UP_URL: "javascript:alert(1)" })).toBe(
+      "string",
+    );
   });
 
-  it("parses both settings", () => {
-    const edge = parseV2Edge(service, "https://v2.executor.sh/login?mode=signup");
+  // v1's states are base64url (raw, or the org-wrapped JSON encoding), so a
+  // prefix made only of base64url characters could claim a v1 callback.
+  it("refuses a state prefix that a v1 state could start with", () => {
+    for (const prefix of ["", "x2", "x2-", "x2_", "eyJ", "x2 .", "x2.%", "x2./"]) {
+      expect(typeof parseV2Edge({ ...settings, V2_OAUTH_STATE_PREFIX: prefix })).toBe("string");
+    }
+  });
+
+  it("parses all settings", () => {
+    const edge = parseV2Edge(settings);
     if (edge === null || typeof edge === "string") return expect.unreachable("settings must parse");
-    expect(edge.signUpUrl.href).toBe("https://v2.executor.sh/login?mode=signup");
+    expect(edge.signUpUrl.href).toBe("https://app.executor.sh/login?mode=signup");
+    expect(edge.oauthStatePrefix).toBe("x2.");
+    expect(typeof parseV2Edge({ ...settings, V2_OAUTH_STATE_PREFIX: "v2~" })).toBe("object");
   });
 });
 
 describe("v2EdgeResponse", () => {
   const SIGN_UP_URL = "https://v2.executor.sh/login?mode=signup";
+  const STATE_PREFIX = "x2.";
+
+  /** The edge's settings with `service` as v2's Worker. */
+  const settings = (service: V2Service, signUpUrl = SIGN_UP_URL): V2EdgeEnv => ({
+    V2: service,
+    V2_SIGN_UP_URL: signUpUrl,
+    V2_OAUTH_STATE_PREFIX: STATE_PREFIX,
+  });
 
   /** A v2 service that records what it receives and answers with `respond`. */
   const recordingService = (respond: (request: Request) => Promise<Response> | Response) => {
@@ -227,7 +256,7 @@ describe("v2EdgeResponse", () => {
     const { received, service } = recordingService(() => new Response(null));
 
     for (const url of ["https://executor.sh/sign-up", "https://executor.sh/signup?ref=docs"]) {
-      const response = await v2EdgeResponse(new Request(url), service, SIGN_UP_URL);
+      const response = await v2EdgeResponse(new Request(url), settings(service));
       expect(response?.status).toBe(302);
       expect(response?.headers.get("location")).toBe(SIGN_UP_URL);
     }
@@ -237,8 +266,10 @@ describe("v2EdgeResponse", () => {
   it("follows the configured sign-up URL", async () => {
     const response = await v2EdgeResponse(
       new Request("https://executor.sh/signup"),
-      { fetch: () => Promise.resolve(new Response(null)) },
-      "https://app.executor.sh/sign-up",
+      settings(
+        { fetch: () => Promise.resolve(new Response(null)) },
+        "https://app.executor.sh/sign-up",
+      ),
     );
     expect(response?.headers.get("location")).toBe("https://app.executor.sh/sign-up");
   });
@@ -248,8 +279,7 @@ describe("v2EdgeResponse", () => {
     expect(
       v2EdgeResponse(
         new Request("https://executor.sh/sign-up", { method: "POST" }),
-        service,
-        SIGN_UP_URL,
+        settings(service),
       ),
     ).toBeNull();
   });
@@ -258,32 +288,28 @@ describe("v2EdgeResponse", () => {
     const { received, service } = recordingService(() => new Response(null));
     const response = await v2EdgeResponse(
       new Request("https://executor.sh/sign-up"),
-      service,
-      "/relative",
+      settings(service, "/relative"),
     );
     expect(response?.status).toBe(500);
     expect(
-      v2EdgeResponse(new Request("https://executor.sh/acme/mcp"), service, "/relative"),
+      v2EdgeResponse(new Request("https://executor.sh/acme/mcp"), settings(service, "/relative")),
     ).toBeNull();
     expect(received).toHaveLength(0);
   });
 
   it("is off without settings", () => {
-    expect(
-      v2EdgeResponse(new Request("https://executor.sh/sign-up"), undefined, undefined),
-    ).toBeNull();
+    expect(v2EdgeResponse(new Request("https://executor.sh/sign-up"), {})).toBeNull();
   });
 
   it("only acts on executor.sh", () => {
     const { service } = recordingService(() => new Response(null));
     expect(
-      v2EdgeResponse(new Request("http://executor-cloud.localhost/sign-up"), service, SIGN_UP_URL),
+      v2EdgeResponse(new Request("http://executor-cloud.localhost/sign-up"), settings(service)),
     ).toBeNull();
     expect(
       v2EdgeResponse(
         new Request("https://v2.executor.sh/api/auth/callback/google"),
-        service,
-        SIGN_UP_URL,
+        settings(service),
       ),
     ).toBeNull();
   });
@@ -293,12 +319,11 @@ describe("v2EdgeResponse", () => {
     expect(
       v2EdgeResponse(
         new Request("https://executor.sh/api/auth/callback?code=c"),
-        service,
-        SIGN_UP_URL,
+        settings(service),
       ),
     ).toBeNull();
     expect(
-      v2EdgeResponse(new Request("https://executor.sh/gitlab/x/info/refs"), service, SIGN_UP_URL),
+      v2EdgeResponse(new Request("https://executor.sh/gitlab/x/info/refs"), settings(service)),
     ).toBeNull();
     expect(received).toHaveLength(0);
   });
@@ -314,8 +339,7 @@ describe("v2EdgeResponse", () => {
 
     const response = await v2EdgeResponse(
       new Request("https://executor.sh/api/auth/callback/google?code=c&state=s"),
-      service,
-      SIGN_UP_URL,
+      settings(service),
     );
 
     expect(response?.status).toBe(302);
@@ -340,8 +364,7 @@ describe("v2EdgeResponse", () => {
           "x-forwarded-proto": "http",
         },
       }),
-      service,
-      SIGN_UP_URL,
+      settings(service),
     );
 
     const forwarded = received[0];
@@ -362,8 +385,7 @@ describe("v2EdgeResponse", () => {
 
     const response = await v2EdgeResponse(
       new Request("https://executor.sh/git/acme/tools/info/refs"),
-      service,
-      SIGN_UP_URL,
+      settings(service),
     );
 
     expect(response).toBe(upstream);
@@ -402,12 +424,150 @@ describe("v2EdgeResponse", () => {
         // @ts-expect-error -- Node's fetch needs `duplex` for a stream body; workerd does not.
         duplex: "half",
       }),
-      service,
-      SIGN_UP_URL,
+      settings(service),
     );
 
     expect(received[0]?.method).toBe("POST");
     expect(received[0]?.headers.get("content-type")).toBe("application/x-git-receive-pack-request");
     expect(await response?.text()).toBe("first-pack-chunk|second-pack-chunk|true");
+  });
+});
+
+// v1 and v2 share `/api/oauth/callback` on executor.sh. v2 starts its state
+// with a fixed prefix; the edge reads only the query's `state` to decide.
+describe("v2EdgeResponse connected-account callback", () => {
+  const settings = (service: V2Service): V2EdgeEnv => ({
+    V2: service,
+    V2_SIGN_UP_URL: "https://app.executor.sh/login?mode=signup",
+    V2_OAUTH_STATE_PREFIX: "x2.",
+  });
+
+  const recordingService = () => {
+    const received: Request[] = [];
+    const service: V2Service = {
+      fetch: async (request) => {
+        received.push(request);
+        return new Response(null, {
+          status: 302,
+          headers: { location: `https://app.executor.sh${new URL(request.url).search}` },
+        });
+      },
+    };
+    return { received, service };
+  };
+
+  it("forwards a callback whose state carries v2's prefix, query unchanged", async () => {
+    const { received, service } = recordingService();
+    const callback = "https://executor.sh/api/oauth/callback?code=c&state=x2.abc123";
+
+    const response = await v2EdgeResponse(
+      new Request(callback, { headers: { cookie: "wos-session=sealed" } }),
+      settings(service),
+    );
+
+    expect(response?.status).toBe(302);
+    expect(received).toHaveLength(1);
+    expect(received[0]?.url).toBe(callback);
+    expect(received[0]?.redirect).toBe("manual");
+    expect(received[0]?.headers.has("cookie")).toBe(false);
+  });
+
+  it("reads a percent-encoded prefix as the prefix", async () => {
+    const { received, service } = recordingService();
+
+    await v2EdgeResponse(
+      new Request("https://executor.sh/api/oauth/callback?state=x2%2Eabc&code=c"),
+      settings(service),
+    );
+
+    expect(received).toHaveLength(1);
+  });
+
+  it("forwards v2's provider errors, which carry the state but no code", async () => {
+    const { received, service } = recordingService();
+
+    await v2EdgeResponse(
+      new Request("https://executor.sh/api/oauth/callback?error=access_denied&state=x2.abc"),
+      settings(service),
+    );
+
+    expect(received).toHaveLength(1);
+  });
+
+  const v1Callbacks = [
+    // v1's raw state and its org-wrapped base64url JSON state.
+    "https://executor.sh/api/oauth/callback?code=c&state=Q2xpZW50U3RhdGUxMjM0NTY3ODkw",
+    "https://executor.sh/api/oauth/callback?code=c&state=eyJzdGF0ZSI6InMiLCJvcmdTbHVnIjoiYWNtZSJ9",
+    // No state, or an empty one.
+    "https://executor.sh/api/oauth/callback?code=c",
+    "https://executor.sh/api/oauth/callback?code=c&state=",
+    "https://executor.sh/api/oauth/callback",
+    // Lookalikes: the prefix without its dot, another case, inside the
+    // value, or in another parameter.
+    "https://executor.sh/api/oauth/callback?code=c&state=x2abc",
+    "https://executor.sh/api/oauth/callback?code=c&state=x2-abc",
+    "https://executor.sh/api/oauth/callback?code=c&state=X2.abc",
+    "https://executor.sh/api/oauth/callback?code=c&state=ax2.abc",
+    "https://executor.sh/api/oauth/callback?code=c&state=%20x2.abc",
+    "https://executor.sh/api/oauth/callback?code=x2.abc&state=v1state",
+    "https://executor.sh/api/oauth/callback?code=c&xstate=x2.abc",
+    // Only the first state counts.
+    "https://executor.sh/api/oauth/callback?state=v1state&state=x2.abc",
+    // Other paths with a v2 state.
+    "https://executor.sh/api/oauth/callback/?state=x2.abc",
+    "https://executor.sh/api/oauth/callbacks?state=x2.abc",
+    "https://executor.sh/api/oauth/callback/extra?state=x2.abc",
+    "https://executor.sh/acme/api/oauth/callback?state=x2.abc",
+  ];
+  for (const url of v1Callbacks) {
+    it(`leaves ${new URL(url).pathname}${new URL(url).search} with v1`, () => {
+      const { received, service } = recordingService();
+      expect(v2EdgeResponse(new Request(url), settings(service))).toBeNull();
+      expect(received).toHaveLength(0);
+    });
+  }
+
+  it("decides from the query without reading a posted body", () => {
+    const { received, service } = recordingService();
+    const body = new ReadableStream<Uint8Array>({
+      pull: () => expect.unreachable("the edge must not read the body"),
+    });
+
+    expect(
+      v2EdgeResponse(
+        new Request("https://executor.sh/api/oauth/callback", {
+          method: "POST",
+          headers: { "content-type": "application/x-www-form-urlencoded" },
+          body,
+          // @ts-expect-error -- Node's fetch needs `duplex` for a stream body; workerd does not.
+          duplex: "half",
+        }),
+        settings(service),
+      ),
+    ).toBeNull();
+    expect(received).toHaveLength(0);
+  });
+
+  it("only acts on executor.sh", () => {
+    const { received, service } = recordingService();
+    expect(
+      v2EdgeResponse(
+        new Request("https://v2.executor.sh/api/oauth/callback?state=x2.abc"),
+        settings(service),
+      ),
+    ).toBeNull();
+    expect(received).toHaveLength(0);
+  });
+
+  it("leaves every callback with v1 when the settings are absent or broken", () => {
+    const { received, service } = recordingService();
+    const request = () => new Request("https://executor.sh/api/oauth/callback?state=x2.abc");
+
+    expect(v2EdgeResponse(request(), {})).toBeNull();
+    expect(v2EdgeResponse(request(), { ...settings(service), V2_SIGN_UP_URL: "/x" })).toBeNull();
+    expect(
+      v2EdgeResponse(request(), { ...settings(service), V2_OAUTH_STATE_PREFIX: "x2" }),
+    ).toBeNull();
+    expect(received).toHaveLength(0);
   });
 });
