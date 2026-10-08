@@ -823,15 +823,9 @@ describe("v2EdgeResponse marketing", () => {
       new Request("https://executor.sh/api/fedcba9876543210/submit", { method: "POST" }),
       settings(service),
     );
-    await v2EdgeResponse(
-      new Request("https://executor.sh/api/0123456789abcdef"),
-      settings(service),
-    );
-
     expect(received.map((request) => request.url)).toEqual([
       "https://executor.sh/api/0123456789abcdef/e/?ip=1",
       "https://executor.sh/api/fedcba9876543210/submit",
-      "https://executor.sh/api/0123456789abcdef",
     ]);
     expect(received[0]?.method).toBe("POST");
     expect(received[0]?.headers.has("cookie")).toBe(false);
@@ -842,6 +836,8 @@ describe("v2EdgeResponse marketing", () => {
     // Another 16-hex root, and v1's own PostHog proxy (8 hex).
     "https://executor.sh/api/aaaaaaaaaaaaaaaa/e/",
     "https://executor.sh/api/aaaaaaaaaaaaaaaa/submit",
+    // The analytics proxy is forwarded below its root, not the root itself.
+    "https://executor.sh/api/0123456789abcdef",
     // The error tunnel is forwarded exactly: not its root or other subpaths.
     "https://executor.sh/api/fedcba9876543210",
     "https://executor.sh/api/fedcba9876543210/",
