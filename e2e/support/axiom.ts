@@ -100,8 +100,12 @@ const standard = `pack(${recognizedAttributes
   .map((name) => `'${name}', column_ifexists('attributes.${name}', dynamic(null))`)
   .join(", ")})`;
 
-/** Span names, attribute names and attribute values a search may put into its query. */
-const Term = Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_.:-]+$/u));
+/**
+ * Span names, attribute names and attribute values a search may put into its quoted query terms.
+ * `/` admits URL paths such as `url.path`; quotes and backslashes stay out, so no term can end
+ * or escape its literal.
+ */
+const Term = Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_.:/-]+$/u));
 /** The column that holds a delivered attribute, see `recognizedAttributes`. */
 const attributeColumn = (name: string) =>
   (recognizedAttributes as ReadonlyArray<string>).includes(name)
