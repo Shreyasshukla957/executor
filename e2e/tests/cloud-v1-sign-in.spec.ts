@@ -107,7 +107,9 @@ layer(TestLive, { excludeTestServices: true })("Cloud v1 sign-in", (it) => {
         yield* stopPage;
         const entry = yield* browser.use("Read the stop page", (page) =>
           Promise.all([
-            page.getByRole("link", { name: "Sign in to Executor v1", exact: true }).getAttribute("href"),
+            page
+              .getByRole("link", { name: "Sign in to Executor v1", exact: true })
+              .getAttribute("href"),
             page.getByRole("button", { name: "Sign out", exact: true }).count(),
             page.getByLabel("Team name", { exact: true }).count(),
             Promise.resolve(new URL(page.url()).pathname),

@@ -282,6 +282,18 @@ const postHogProxy = (settings: Effect.Effect<Settings | undefined>) =>
   });
 
 /** Capture the Alchemy runtime accessor during initialization, then read bindings per request. */
+export const cloudHeroFlag = Effect.gen(function* () {
+  const context = yield* CurrentRuntimeContext;
+  const settings = readSettings(
+    context ? context.get<unknown>("EXECUTOR_POSTHOG") : Effect.succeed(undefined),
+  );
+  return (visitor: string) =>
+    Effect.flatMap(settings, (config) =>
+      config === undefined ? Effect.succeed(undefined) : evaluateHeroFlag(config, visitor),
+    );
+});
+
+/** Capture the Alchemy runtime accessor during initialization, then read bindings per request. */
 export const cloudAnalytics = Effect.gen(function* () {
   const context = yield* CurrentRuntimeContext;
   const settings = readSettings(

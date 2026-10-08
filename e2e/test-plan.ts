@@ -119,6 +119,15 @@ export const scenarios = plan({
       local: na("Local does not serve the marketing site."),
     },
   },
+  marketingIsolation: {
+    file: "marketing-isolation.spec.ts",
+    title: "Cloud serves marketing documents and assets without regional API placement",
+    targets: {
+      cloud: { status: "scheduled", runtime: "attached" },
+      "self-host": na("Self-host does not serve the marketing site."),
+      local: na("Local does not deploy Cloudflare Workers or have regional placement."),
+    },
+  },
   cloudApiHostClients: {
     fixtures: "actors",
     file: "cloud-api-host-clients.spec.ts",
@@ -5777,7 +5786,7 @@ export type CloudMode =
 
 const cloudRuntimeReasons = {
   managed: "Requires the managed local Cloud target and its local collectors.",
-  attached: "Requires a deployed Cloud target with Cloudflare's memory limit.",
+  attached: "Requires a deployed Cloud target with Cloudflare's placement and runtime limits.",
   "rate-limited":
     "Requires a managed local Cloud with the per-address auth limit on: e2e:cloud --auth-rate-limit.",
   "rolled-back":

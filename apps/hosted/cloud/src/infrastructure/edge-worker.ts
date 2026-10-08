@@ -2,7 +2,7 @@
 import * as Cloudflare from "alchemy/Cloudflare";
 
 /**
- * Forwards the requests v1's edge on `executor.sh` forwards to v2 (`edge-paths.ts`), through a
- * service binding with their original URL, as v1 does. Only test stages deploy it.
+ * Forwards the requests v1's edge on `executor.sh` forwards to v2 (`edge-paths.ts`) to the
+ * marketing gateway with their original URL, as v1 does. Only test stages deploy it.
  */
 export class Edge extends Cloudflare.Worker<Edge, {}>()("Edge") {}

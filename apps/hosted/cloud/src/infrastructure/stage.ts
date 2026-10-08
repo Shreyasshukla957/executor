@@ -11,9 +11,8 @@ export const testStagePrefix = "test-";
 export const productionStage = "v2";
 
 /**
- * Production's API Worker script name, pinned to the name Alchemy generated for it. v1's edge
- * binds to the Worker by this name, so it must not follow a change in Alchemy's generator.
- * Changing it replaces the Worker, and v1's binding must change in the same cutover.
+ * Production's API Worker script name, retained from the original edge binding. Keep the
+ * existing Worker identity when the public site moves to its separate marketing gateway.
  */
 export const productionApiWorkerName = "executor-next-hosted-api-v2-qs32brgjwvt7ytx4";
 

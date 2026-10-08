@@ -18,6 +18,8 @@ import AppDataLive from "./src/app-data.ts";
 import ArtifactsCredentialsLive from "./src/artifacts-credentials.ts";
 import McpServerLive from "./src/mcp-server.ts";
 import EdgeLive from "./src/edge.ts";
+import MarketingLive from "./src/marketing.ts";
+import { Marketing } from "./src/infrastructure/marketing-worker.ts";
 import { Edge } from "./src/infrastructure/edge-worker.ts";
 import { McpServer } from "./src/infrastructure/mcp-server-worker.ts";
 import { mcpSessionRetirementGate } from "./src/infrastructure/mcp-session-release.ts";
@@ -52,6 +54,7 @@ export const cloudWorkers = Layer.mergeAll(
   AppDomainControllerLive,
   InvocationTelemetryLive,
   EdgeLive,
+  MarketingLive,
 );
 
 export default Alchemy.Stack(
@@ -86,6 +89,7 @@ export default Alchemy.Stack(
     yield* authEmailInfrastructure.pipe(Effect.orDie);
     const api = yield* Api;
     if (!(yield* AlchemyContext).dev) {
+      yield* Marketing;
       yield* testStageRoleHostRecords;
       // A test stage plays v1's edge itself; production's edge is v1's.
       if (Option.isSome(yield* testStageEdge)) yield* Edge;

@@ -17,6 +17,7 @@ export type WorkerName =
   | "dashboard"
   | "formatter"
   | "compiler"
+  | "marketing"
   | "edge";
 
 /**
@@ -33,6 +34,7 @@ const uploadBudgets: Record<WorkerName, number> = {
   dashboard: 3_900_000,
   formatter: 2_000_000,
   compiler: 1_700_000,
+  marketing: 1_000_000,
   // A test stage's forwarding Worker: routing and a service binding call.
   edge: 400_000,
 };

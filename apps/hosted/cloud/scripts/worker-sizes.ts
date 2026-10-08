@@ -45,6 +45,7 @@ import AppPages from "../src/app-ui.ts";
 import { Api } from "../src/main.ts";
 import { previewSlug } from "../src/contracts/pr-preview.ts";
 import { McpServer } from "../src/infrastructure/mcp-server-worker.ts";
+import { Marketing } from "../src/infrastructure/marketing-worker.ts";
 import { productionStage, testStagePrefix } from "../src/infrastructure/stage.ts";
 import { uploadedModulesPlugin } from "../src/infrastructure/worker-build.ts";
 import {
@@ -220,6 +221,7 @@ const budgetedWorkers = Alchemy.Stack(
     yield* Api;
     yield* AppPages;
     yield* McpServer;
+    yield* Marketing;
   }).pipe(Effect.provide(cloudWorkers)),
 );
 
