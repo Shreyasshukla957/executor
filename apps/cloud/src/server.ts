@@ -308,16 +308,6 @@ const cloudflareHandler = {
   fetch: async (request, env, ctx) => {
     isolateRequestSeq += 1;
 
-    // Public pages must not enter TanStack Start: its first-request dynamic
-    // import loads the entire React + Effect server graph and can take seconds
-    // on a cold isolate. Classify and service-bind marketing at the Worker
-    // entry, before telemetry or fetchHandler touches that graph.
-    // Everything that returns before the app-plane dispatch below leaves the
-    // graph unevaluated for the next request; warm it in the background.
-    if (!servedByAppPlane(new URL(request.url).pathname, request.method)) {
-      prewarmAppPlane(ctx);
-    }
-
     // On `executor.sh`, v2 answers marketing (including `/docs` and its
     // telemetry proxies), sign-up, the fixed list of v2 paths and v2's
     // connected-account callbacks; v1's legal pages stay on v1's marketing
@@ -328,6 +318,13 @@ const cloudflareHandler = {
     const marketingRequest = marketingProxyRequest(request);
     const marketing: Fetcher | undefined = env.MARKETING;
     if (marketingRequest && marketing) return marketing.fetch(marketingRequest);
+
+    // Only v1-owned requests may warm v1's application. A dynamic import still
+    // evaluates JavaScript on this isolate's thread under waitUntil; starting it
+    // for a forwarded page or stylesheet delays the otherwise independent response.
+    if (!servedByAppPlane(new URL(request.url).pathname, request.method)) {
+      prewarmAppPlane(ctx);
+    }
 
     // Same reasoning, same seam: `/docs` and the PostHog proxy forward to an
     // external origin and never touch the router, React, or the Effect app.

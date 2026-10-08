@@ -98,7 +98,7 @@
       "binding": "MARKETING",
       "service": "executor-marketing",
     },
-    // v2's API Worker (the executor-next `v2` stage, same account). The edge
+    // v2's unplaced marketing Worker (the executor-next `v2` stage, same account). The edge
     // (src/edge/marketing.ts) forwards marketing and a fixed list of
     // executor.sh paths to it with the URL unchanged, so v2 sees host
     // `executor.sh`.
@@ -106,7 +106,7 @@
       "binding": "V2",
       // v2's Worker name. It must equal the name v2's deployment pins for
       // this binding; this is the only place v1 names it.
-      "service": "executor-next-hosted-api-v2-qs32brgjwvt7ytx4",
+      "service": "executor-next-marketing-v2",
     },
   ],
   "hyperdrive": [
