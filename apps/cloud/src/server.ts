@@ -320,7 +320,8 @@ const cloudflareHandler = {
 
     // On `executor.sh`, v2 answers marketing (including `/docs` and its
     // telemetry proxies), sign-up, the fixed list of v2 paths and v2's
-    // connected-account callbacks; v1's terms stay on v1's marketing worker.
+    // connected-account callbacks; v1's legal pages stay on v1's marketing
+    // worker.
     const v2 = v2EdgeResponse(request, env);
     if (v2) return v2;
 
