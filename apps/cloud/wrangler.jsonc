@@ -91,13 +91,17 @@
     },
   ],
   "services": [
+    // v1's marketing worker. On executor.sh it now serves only v1's terms of
+    // service and their assets (src/edge/marketing.ts); v2 serves the rest
+    // of marketing.
     {
       "binding": "MARKETING",
       "service": "executor-marketing",
     },
     // v2's API Worker (the executor-next `v2` stage, same account). The edge
-    // (src/edge/marketing.ts) forwards a fixed list of executor.sh paths to
-    // it with the URL unchanged, so v2 sees host `executor.sh`.
+    // (src/edge/marketing.ts) forwards marketing and a fixed list of
+    // executor.sh paths to it with the URL unchanged, so v2 sees host
+    // `executor.sh`.
     {
       "binding": "V2",
       // v2's Worker name. It must equal the name v2's deployment pins for
@@ -148,6 +152,10 @@
     // /api/oauth/callback requests carrying it go to v2. It must equal the
     // prefix v2 mints.
     "V2_OAUTH_STATE_PREFIX": "x2.",
+    // Roots of v2's browser telemetry proxies (product analytics, then error
+    // reporting) that v2's marketing pages call on executor.sh. They must
+    // equal the proxy paths v2's build uses.
+    "V2_TELEMETRY_PATHS": "/api/00e2e1f082a6ef17,/api/fd6fab1fbb4883e1",
     // Keeps the /__sentry-otel-verify probe live in production: Sentry
     // delivery failed silently for weeks (zero events after ~Jul 30 with an
     // active DSN), and without this there is no way to test the pipeline
