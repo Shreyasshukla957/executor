@@ -21,7 +21,13 @@ bun run e2e:self-host
 ```
 
 `e2e:prepare` builds the dashboards, app framework, bundled Motel and shared
-workerd runtime artifact. Run it again after changing these inputs. The Node server runs current TypeScript source; the workerd host bundle is prebuilt, so a change to the SDK's app runner needs `bun run e2e:runtime` before a self-host run sees it. `bun run e2e:check` runs the
+workerd runtime artifact. Run it again after changing these inputs. It caches each
+build step's outputs in `~/.cache/executor-e2e-prepare` (or `$EXECUTOR_E2E_CACHE`)
+under a hash of the step's inputs: the files git sees in its packages and their
+workspace dependencies, the lockfile, patches and root config, and the Node and Bun
+versions. A step whose inputs have not changed, in any rift, is restored instead of
+built. `scripts/e2e-prepare.ts` lists each step's inputs; add a file there when a
+build starts reading one outside them. CI and `--no-cache` build every step. The Node server runs current TypeScript source; the workerd host bundle is prebuilt, so a change to the SDK's app runner needs `bun run e2e:runtime` before a self-host run sees it. `bun run e2e:check` runs the
 boundary check and TypeScript check; the root `check` includes it.
 
 ```sh
