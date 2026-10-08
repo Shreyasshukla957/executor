@@ -38,11 +38,11 @@ describe("production v2 edge settings", () => {
     expect(bindings[0]?.service).toMatch(/^[a-z0-9-]+$/);
   });
 
-  it("redirects sign-up to v2's sign-up page on v2.executor.sh", async () => {
+  it("redirects sign-up to v2's sign-up page on app.executor.sh", async () => {
     const response = await v2EdgeResponse(new Request("https://executor.sh/sign-up"), shipped);
 
     expect(response?.status).toBe(302);
-    expect(response?.headers.get("location")).toBe("https://v2.executor.sh/login?mode=signup");
+    expect(response?.headers.get("location")).toBe("https://app.executor.sh/login?mode=signup");
   });
 
   it("ships v2's connected-account state prefix", () => {
