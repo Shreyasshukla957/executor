@@ -104,3 +104,32 @@ export class OpenapiCompileError extends Schema.TaggedError<OpenapiCompileError>
     return compileMessage(this);
   }
 }
+
+/** A tool a generated OpenAPI router exposes, read from the definition alone. */
+export const OpenapiToolName = Schema.Struct({
+  /** The tool name relative to the router, as `withApprovals` receives it. */
+  name: Schema.String,
+  /** The HTTP method, such as `GET`. */
+  method: Schema.String,
+  /** The request path, including any `pathPrefix`. */
+  path: Schema.String,
+  operationId: Schema.optionalKey(Schema.String),
+  /** After `kinds` (keyed by `operationId`, else `name`); otherwise reading methods are queries. */
+  kind: Schema.Literals(["query", "mutation"]),
+  /** Callable without credentials, so every account and a router without one expose it. */
+  public: Schema.Boolean,
+  /** The `methods` and `oauth` entries whose accounts expose it. */
+  methods: Schema.Array(Schema.String),
+});
+export type OpenapiToolName = typeof OpenapiToolName.Type;
+
+/** Every tool a definition yields for some account, and the operations the compiler left out. */
+export const OpenapiToolNames = Schema.Struct({
+  tools: Schema.Array(OpenapiToolName),
+  /**
+   * Operations the compiler left out, and why. An operation it imports but no configured `methods`
+   * or `oauth` entry can authorize is missing from `tools` and is not listed here.
+   */
+  skipped: Schema.Array(OpenapiSkippedOperation),
+});
+export type OpenapiToolNames = typeof OpenapiToolNames.Type;

@@ -12,7 +12,11 @@ import {
   type OpenapiToolsOptions,
 } from "../contracts/openapi.ts";
 import { JsonObject, JsonValue } from "../contracts/schema.ts";
-import { OpenapiCompileError, OpenapiSkippedOperation } from "../contracts/openapi-compile.ts";
+import {
+  OpenapiCompileError,
+  OpenapiSkippedOperation,
+  type OpenapiToolNames,
+} from "../contracts/openapi-compile.ts";
 import type { HostedTool, HostedToolSummary } from "../contracts/host.ts";
 import { compileOpenApiDocument } from "./openapi-compile.ts";
 import { yieldToRuntime } from "./runtime-yield.ts";
@@ -405,12 +409,19 @@ const parseYaml = (text: string): unknown => {
 };
 
 /** Fetch a bounded document using the loader's owned lifetime, never the original request signal. */
-const download = (url: string, context: CacheLoadContext) =>
+const download = (
+  url: string,
+  context: Pick<CacheLoadContext, "fetch"> & { readonly signal?: AbortSignal },
+) =>
   Effect.gen(function* () {
     // The loader's fetch is the invocation's, which opens its own upstream boundary.
     // oxlint-disable-next-line executor/authored-code-through-adapter -- fetch
     const response = yield* Effect.tryPromise({
-      try: () => context.fetch(url, { signal: context.signal, redirect: "manual" }),
+      try: () =>
+        context.fetch(url, {
+          ...(context.signal === undefined ? {} : { signal: context.signal }),
+          redirect: "manual",
+        }),
       catch: (error) => error,
     });
     if (!response.ok || response.body === null) return yield* invalid();
@@ -450,6 +461,58 @@ const download = (url: string, context: CacheLoadContext) =>
       catch: invalid,
     });
   });
+
+/** The patched definition, as a tree compilation can own. */
+const sourceDocument = (
+  options: Pick<OpenapiSourceOptions, "source" | "patches">,
+  context: Parameters<typeof download>[1],
+) =>
+  Effect.gen(function* () {
+    return patchOpenapi(
+      "url" in options.source
+        ? yield* download(options.source.url, context)
+        : // A copy the compilation can own, as a tree.
+          Schema.decodeUnknownSync(JsonObject)(JSON.parse(JSON.stringify(options.source.document))),
+      options.patches,
+    );
+  });
+
+/** Compile a definition with the source's static settings. */
+const compileSource = (options: OpenapiCompileSettings, document: JsonObject) =>
+  compileOpenApiDocument(
+    { name: "API", ...("url" in options.source ? { connectUrl: options.source.url } : {}) },
+    document,
+    {
+      allowedOrigin: options.allowedOrigin,
+      securitySchemes: options.securitySchemes,
+      ...(options.fallbackSecurity === undefined
+        ? {}
+        : { fallbackSecurity: options.fallbackSecurity }),
+      ...(options.baseUrl === undefined ? {} : { baseUrl: options.baseUrl }),
+      ...(options.pathPrefix === undefined ? {} : { pathPrefix: options.pathPrefix }),
+    },
+  );
+type OpenapiCompileSettings = Pick<
+  OpenapiSourceOptions,
+  "source" | "allowedOrigin" | "securitySchemes" | "fallbackSecurity" | "baseUrl" | "pathPrefix"
+>;
+
+/** A tool's kind: `kinds` keyed by operationId, or by name without one, else its method's. */
+const operationKind = (
+  kinds: OperationKinds | undefined,
+  op: {
+    readonly name: string;
+    readonly operationId?: string;
+    readonly method: OpenapiOperation["method"];
+  },
+) => {
+  const key = op.operationId ?? op.name;
+  return Object.hasOwn(kinds ?? {}, key)
+    ? (kinds?.[key] ?? "mutation")
+    : isOpenapiReadMethod(op.method)
+      ? "query"
+      : "mutation";
+};
 
 /** No I/O during app construction. All accounts share credential-free compilation. */
 export const liveOpenapiRouter = (options: OpenapiSourceOptions): RouterDeclaration => {
@@ -499,15 +562,7 @@ export const liveOpenapiRouter = (options: OpenapiSourceOptions): RouterDeclarat
   // compilation ends, before the compiled parts are serialized and written.
   const compile = (context: CacheLoadContext) =>
     Effect.gen(function* () {
-      let document: JsonObject | undefined = patchOpenapi(
-        "url" in options.source
-          ? yield* download(options.source.url, context)
-          : // A copy the compilation can own, as a tree.
-            Schema.decodeUnknownSync(JsonObject)(
-              JSON.parse(JSON.stringify(options.source.document)),
-            ),
-        options.patches,
-      );
+      let document: JsonObject | undefined = yield* sourceDocument(options, context);
       // oxlint-disable-next-line executor/authored-code-through-adapter -- scheduler yield
       yield* Effect.promise(yieldToRuntime);
       // Revisions are content-addressed: refreshing an unchanged document rewrites the
@@ -522,19 +577,7 @@ export const liveOpenapiRouter = (options: OpenapiSourceOptions): RouterDeclarat
         if (owned === undefined) throw new Error("The document was already handed over.");
         return owned;
       };
-      const compiled = yield* compileOpenApiDocument(
-        { name: "API", ...("url" in options.source ? { connectUrl: options.source.url } : {}) },
-        handOver(),
-        {
-          allowedOrigin: options.allowedOrigin,
-          securitySchemes: options.securitySchemes,
-          ...(options.fallbackSecurity === undefined
-            ? {}
-            : { fallbackSecurity: options.fallbackSecurity }),
-          ...(options.baseUrl === undefined ? {} : { baseUrl: options.baseUrl }),
-          ...(options.pathPrefix === undefined ? {} : { pathPrefix: options.pathPrefix }),
-        },
-      );
+      const compiled = yield* compileSource(options, handOver());
       return { revision, meta, compiled };
     });
   // Compiles the document and serializes its parts. Only strings leave it, so the compiled output
@@ -804,15 +847,7 @@ export const liveOpenapiRouter = (options: OpenapiSourceOptions): RouterDeclarat
       Object.keys(values ?? {}).sort(),
     ]),
   );
-  const kindOf = (op: OperationSummary) => {
-    const key = op.operationId ?? op.name;
-    const kinds = options.kinds ?? {};
-    return Object.hasOwn(kinds, key)
-      ? (kinds[key] ?? "mutation")
-      : isOpenapiReadMethod(op.method)
-        ? "query"
-        : "mutation";
-  };
+  const kindOf = (op: OperationSummary) => operationKind(options.kinds, op);
   const readOnly = (op: OperationSummary) => kindOf(op) === "query";
   const summarize = (operation: OperationSummary): HostedToolSummary => ({
     name: operation.name,
@@ -919,3 +954,59 @@ export const liveOpenapiRouter = (options: OpenapiSourceOptions): RouterDeclarat
       ),
   });
 };
+
+/** The settings `openapiToolNames` reads: the router's, without an account or cache. */
+export type OpenapiToolNamesOptions = Omit<
+  OpenapiSourceOptions,
+  "cache" | "account" | "parameterDefaults" | "freshFor" | "staleFor"
+>;
+
+/**
+ * The tools `liveOpenapiRouter` with the same options exposes, from the definition alone: no
+ * account, cache or deployment. Each tool says which `methods` and `oauth` entries expose it, so
+ * an author can check the names a `withApprovals` policy matches before any account connects.
+ * `skipped` lists only the operations the compiler left out and why. An operation no configured
+ * `methods` or `oauth` entry can authorize is missing from `tools` and not listed in `skipped`.
+ * `fetch` defaults to the global fetch.
+ */
+export const openapiToolNames = (options: OpenapiToolNamesOptions): Promise<OpenapiToolNames> =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const document = yield* sourceDocument(options, {
+        fetch: options.fetch ?? globalThis.fetch,
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
+      });
+      const compiled = yield* compileSource(options, document);
+      const request = createRequest(options);
+      // An account of each method with every field it binds, so availability depends only on
+      // the operation's security, never on credential values.
+      const accounts = [
+        ...Object.entries(options.methods).map(([method, bindings]) => ({
+          method,
+          fields: Object.fromEntries(bindings.map(({ field }) => [field, "placeholder"])),
+        })),
+        ...options.oauth.map((method) => ({ method, fields: { access_token: "placeholder" } })),
+      ];
+      const tools = compiled.operations.flatMap((op) => {
+        const methods = accounts
+          .filter((account) => request.available(op, account))
+          .map((account) => account.method);
+        const anonymous = request.available(op, undefined);
+        return methods.length === 0 && !anonymous
+          ? []
+          : [
+              {
+                name: op.name,
+                method: op.method,
+                path: op.path,
+                ...(op.operationId === undefined ? {} : { operationId: op.operationId }),
+                kind: operationKind(options.kinds, op),
+                public: anonymous,
+                methods,
+              },
+            ];
+      });
+      return { tools, skipped: compiled.skipped };
+    }),
+    options.signal === undefined ? {} : { signal: options.signal },
+  );

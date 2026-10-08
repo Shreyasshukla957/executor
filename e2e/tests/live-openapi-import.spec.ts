@@ -21,6 +21,20 @@ const RouterFailure = Schema.Struct({
   code: Schema.optionalKey(Schema.String),
   message: Schema.optionalKey(Schema.String),
 });
+/** What `openapiToolNames` resolves to, as a query returns it. */
+const OpenapiToolNames = Schema.Struct({
+  tools: Schema.Array(
+    Schema.Struct({
+      name: Schema.String,
+      method: Schema.String,
+      path: Schema.String,
+      kind: Schema.String,
+      public: Schema.Boolean,
+      methods: Schema.Array(Schema.String),
+    }),
+  ),
+  skipped: Schema.Array(Schema.Unknown),
+});
 const Catalog = Schema.Struct({
   items: Schema.Array(
     Schema.Struct({ name: Schema.String, readOnly: Schema.optionalKey(Schema.Boolean) }),
@@ -60,6 +74,98 @@ export default defineApp({ accounts: {} }, async ({ cache, fetch, signal }) => (
       source: { document: ${JSON.stringify(unsupportedAuthDocument)} },
       securitySchemes: ${JSON.stringify(clientCredentialsScheme)},
       allowedOrigin: "https://jobs.example.com" }),
+  }),
+}));
+`;
+
+/** A legacy API without operationIds, where a list and a single item share their resource words. */
+const pathParameters = (...names: string[]) =>
+  names.map((name) => ({ name, in: "path", required: true, schema: { type: "string" } }));
+const ok = { responses: { "200": { description: "OK" } } };
+const unnamedDocument = {
+  openapi: "3.0.3",
+  info: { title: "Legacy CI", version: "1" },
+  servers: [{ url: "https://ci.example.com" }],
+  components: { securitySchemes: { token: { type: "apiKey", in: "header", name: "x-token" } } },
+  paths: {
+    "/projects": { get: ok },
+    "/project/{username}/{project}": { parameters: pathParameters("username", "project"), get: ok },
+    "/project/{username}/{project}/envvar/{name}": {
+      parameters: pathParameters("username", "project", "name"),
+      get: ok,
+      delete: ok,
+    },
+    // Needs an account, so a router without one does not list it.
+    "/project/{username}/{project}/build": {
+      parameters: pathParameters("username", "project"),
+      post: { ...ok, security: [{ token: [] }] },
+    },
+  },
+};
+/**
+ * An operation, then a sibling the API adds later whose name normalizes to the same one: another
+ * version of the path, the path without its parameter, and an operationId equal to a refined name.
+ */
+const collisions = {
+  version: [{ "/v1/items": { get: ok } }, { "/v2/items": { get: ok } }],
+  parameter: [
+    { "/orgs/{org}/items": { parameters: pathParameters("org"), get: ok } },
+    { "/orgs/items": { get: ok } },
+  ],
+  operationId: [
+    { "/items/{id}": { parameters: pathParameters("id"), get: ok } },
+    { "/items/lookup": { get: { ...ok, operationId: "getItemsById" } } },
+  ],
+};
+const itemsDocument = (paths: Record<string, unknown>) => ({
+  openapi: "3.0.3",
+  info: { title: "Items", version: "1" },
+  servers: [{ url: "https://ci.example.com" }],
+  paths,
+});
+/** Each case alone, after the sibling is added, and with the definition's order reversed. */
+const collisionPlans = Object.entries(collisions).flatMap(([name, [existing, sibling]]) => {
+  // An operation no sibling collides with, so every definition imports something.
+  const added = { "/status": { get: ok }, ...existing, ...sibling };
+  return Object.entries({
+    alone: { "/status": { get: ok }, ...existing },
+    added,
+    reordered: Object.fromEntries(Object.entries(added).reverse()),
+  }).map(([shape, paths]) => ({ plan: `${name} ${shape}`, document: itemsDocument(paths) }));
+});
+const named = `import { defineApp, object, query, router, withApprovals } from "apps";
+import { liveOpenapiRouter, openapiToolNames } from "apps/openapi";
+import { always } from "apps/operations/approval";
+const options = {
+  source: { document: ${JSON.stringify(unnamedDocument)} },
+  allowedOrigin: "https://ci.example.com",
+  securitySchemes: { token: { type: "apiKey", in: "header", name: "x-token" } },
+  methods: { apiKey: [{ scheme: "token", field: "token", part: "value", prefix: "" }] },
+  oauth: [],
+};
+const common = { allowedOrigin: "https://ci.example.com", securitySchemes: {}, methods: {}, oauth: [] };
+const plans = ${JSON.stringify(collisionPlans)};
+const approvals = new Map([["project.deleteEnvvar", always()]]);
+export default defineApp({ accounts: {} }, async ({ cache, fetch, signal }) => ({
+  tools: router({
+    api: withApprovals(
+      liveOpenapiRouter({ ...options, cache, fetch, signal }),
+      (_, name) => approvals.get(name),
+    ),
+    names: query({ description: "Tool names", input: object({}) }, () =>
+      openapiToolNames({ ...options, signal }),
+    ),
+    collisions: query({ description: "Tool names for each plan", input: object({}) }, async () => {
+      const listings: Record<string, string[]> = {};
+      for (const { plan, document } of plans) {
+        const { tools, skipped } = await openapiToolNames({ ...common, source: { document } });
+        listings[plan] = [
+          ...tools.map((tool) => tool.method + " " + tool.path + " " + tool.name),
+          ...skipped.map((left) => left.method + " " + left.path + " left out: " + left.code),
+        ].sort();
+      }
+      return listings;
+    }),
   }),
 }));
 `;
@@ -205,6 +311,104 @@ export default defineApp({ accounts: {} }, async ({ cache, fetch, signal }) => (
           "QUERY",
           "GET",
         ]);
+      }),
+    ),
+  );
+
+  it.effect(scenarios.liveOpenapiNaming.title, (context) =>
+    withHostedCase(
+      context,
+      Effect.gen(function* () {
+        const app = yield* deployPublicApp(named);
+        const listed = yield* app.tools;
+        expect(listed.status, JSON.stringify(listed.body)).toBe(200);
+        const names = (yield* body(Catalog, listed)).items
+          .map((tool) => tool.name)
+          .filter((name) => name.startsWith("api."));
+        // Released names stay: an operation without an operationId drops its path parameters, so
+        // the single item reads like a list.
+        expect(names.sort()).toEqual([
+          "api.project.deleteEnvvar",
+          "api.project.getEnvvar",
+          "api.project.getProject",
+          "api.projects.getProjects",
+        ]);
+
+        // The definition alone lists the tools the router exposes and the accounts that expose
+        // each, including the one this router cannot list without an account.
+        const listing = yield* app.call("names", "query", {});
+        expect(listing.status, JSON.stringify(listing.body)).toBe(200);
+        const { tools, skipped } = yield* body(OpenapiToolNames, listing);
+        expect(
+          tools
+            .filter((tool) => tool.public)
+            .map((tool) => `api.${tool.name}`)
+            .sort(),
+        ).toEqual(names);
+        expect(tools).toEqual(
+          [
+            ["projects.getProjects", "GET", "/projects", "query"],
+            ["project.getProject", "GET", "/project/{username}/{project}", "query"],
+            ["project.getEnvvar", "GET", "/project/{username}/{project}/envvar/{name}", "query"],
+            [
+              "project.deleteEnvvar",
+              "DELETE",
+              "/project/{username}/{project}/envvar/{name}",
+              "mutation",
+            ],
+          ]
+            .map(([name, method, path, kind]) => ({
+              name,
+              method,
+              path,
+              kind,
+              public: true,
+              methods: ["apiKey"],
+            }))
+            .concat({
+              name: "project.postBuild",
+              method: "POST",
+              path: "/project/{username}/{project}/build",
+              kind: "mutation",
+              public: false,
+              methods: ["apiKey"],
+            }),
+        );
+        expect(skipped).toEqual([]);
+
+        // Released collision handling stays: adding a colliding sibling refines both names, in
+        // either order.
+        const collided = yield* app.call("collisions", "query", {});
+        expect(collided.status, JSON.stringify(collided.body)).toBe(200);
+        const status = "GET /status status.getStatus";
+        const released = {
+          version: [
+            "GET /v1/items items.getItems",
+            ["GET /v1/items items.v1.getItems", "GET /v2/items items.v2.getItems"],
+          ],
+          parameter: [
+            "GET /orgs/{org}/items orgs.getItems",
+            ["GET /orgs/items orgs.getItems", "GET /orgs/{org}/items orgs.getItemsByOrg"],
+          ],
+          operationId: [
+            "GET /items/{id} items.getItems",
+            ["GET /items/lookup items.getItemsById", "GET /items/{id} items.getItems"],
+          ],
+        } as const;
+        const expected: Record<string, readonly string[]> = {};
+        for (const [name, [alone, added]] of Object.entries(released)) {
+          expected[`${name} alone`] = [alone, status].sort();
+          expected[`${name} added`] = [status, ...added].sort();
+          expected[`${name} reordered`] = [status, ...added].sort();
+        }
+        expect(collided.body).toEqual(expected);
+
+        // An approval policy keyed by a listed name applies before any request is sent.
+        const deleted = yield* app.call("api.project.deleteEnvvar", "mutation", {
+          path: { username: "octo", project: "demo", name: "TOKEN" },
+        });
+        expect(deleted.status, JSON.stringify(deleted.body)).toBe(409);
+        expect(deleted.body).toMatchObject({ _tag: "ToolApprovalRequired" });
       }),
     ),
   );

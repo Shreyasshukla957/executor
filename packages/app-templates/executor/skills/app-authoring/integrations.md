@@ -286,7 +286,7 @@ path segments that differ, so `GET /builds` and `GET /builds/{build_num}` become
 `builds.getBuilds` and `builds.getBuildsByBuildNum`; then the whole path; then
 the HTTP method; then a stable hash. Each step applies only to names that still
 collide. `kinds` still uses the original operationId. Discover the exact names
-with search.
+with search, or before an account connects as below.
 
 Operations the helper cannot represent, and operations whose security needs
 another method, are left out rather than failing the app. Reading or calling a
@@ -330,6 +330,49 @@ For these declared API errors it contains JSON with `code`, `status`,
 `message`, and an optional `recovery`; parse it with `JSON.parse`. Other failures are ordinary diagnostic
 strings, so guard that parse. A failed mutation may already have made changes;
 inspect its state before retrying.
+
+### Tool names before an account connects
+
+An account's tools are listed only once it connects. `openapiToolNames` from
+`apps/openapi` reads the definition with the router's options, minus `cache`,
+`account` and `parameterDefaults`, and resolves to `{ tools, skipped }`. Each
+tool has its `name` as `withApprovals` receives it, `method`, `path` (with any
+`pathPrefix`), `kind`, and which `methods` and `oauth` entries expose it
+(`public` when it needs no credentials). `skipped` lists only the operations the
+compiler left out, and why. An operation that no `methods` or `oauth` entry can
+authorize is missing from `tools` and not listed in `skipped`. To check the
+names an approval policy uses before deploying, keep the options and the policy
+in their own module:
+
+```ts
+// openapi.ts; index.ts imports it as "./openapi.js"
+import type { OpenapiToolNamesOptions } from "apps/openapi";
+import { always } from "apps/operations/approval";
+
+export const options = {
+  source: { url: "https://api.example.com/openapi.json" },
+  allowedOrigin: "https://api.example.com",
+  securitySchemes: {},
+  methods: {},
+  oauth: [],
+} satisfies OpenapiToolNamesOptions;
+export const approvals = new Map([["projects.deleteProject", always()]]);
+```
+
+In `index.ts`, wrap the router with
+`withApprovals(liveOpenapiRouter({ ...options, cache, fetch, signal, account }), (_, name) => approvals.get(name))`.
+After installing the app's packages as in [deploy.md](deploy.md), run this in
+the app directory with Node.js 22.18 or newer:
+
+```sh
+node --input-type=module -e '
+import { openapiToolNames } from "apps/openapi";
+import { approvals, options } from "./openapi.ts";
+const names = new Set((await openapiToolNames(options)).tools.map((tool) => tool.name));
+const unknown = [...approvals.keys()].filter((name) => !names.has(name));
+if (unknown.length) throw new Error(`No tools named ${unknown.join(", ")}`);
+console.log([...names].join("\n"));'
+```
 
 ### Custom tools beside generated ones
 
