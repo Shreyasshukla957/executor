@@ -27,6 +27,11 @@ const ORG_SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9]|-(?=[a-z0-9])){1,47}$/;
  *  - Marketing worker:  home, setup, privacy, terms, blog, pricing, careers,
  *                       changelog, _astro (executor.sh edge routes; the
  *                       non-route names are cheap insurance)
+ *  - v2 on executor.sh: git (Git smart HTTP remotes the executor.sh edge
+ *                       forwards to v2), apps and experiments (v2 marketing
+ *                       pages; no v1 organization uses them), plus oauth,
+ *                       api, app, mcp, docs, sign-up, signup, pricing and
+ *                       blog listed elsewhere here
  *  - Infra:             assets (vite build output), cdn-cgi (Cloudflare),
  *                       static, public, favicon.ico, robots.txt, sitemap.xml
  *  - Auth flows:        auth, oauth, callback, logout, signin, signout,
@@ -69,6 +74,10 @@ export const RESERVED_ORG_SLUGS: ReadonlySet<string> = new Set([
   "careers",
   "changelog",
   "_astro",
+  // v2 on executor.sh
+  "git",
+  "apps",
+  "experiments",
   // infra
   "assets",
   "cdn-cgi",

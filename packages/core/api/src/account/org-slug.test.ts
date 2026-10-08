@@ -88,6 +88,45 @@ describe("isValidOrgSlug", () => {
       expect(RESERVED_ORG_SLUGS.has(critical), critical).toBe(true);
     }
   });
+
+  it("reserves the root segments the executor.sh edge gives to v2", () => {
+    // `/git/<owner>/<repo>` and the other forwarded or redirected roots would
+    // otherwise read as an org's console URL (`/<org>/...`).
+    for (const claimed of [
+      "git",
+      "apps",
+      "experiments",
+      "oauth",
+      "api",
+      "app",
+      "mcp",
+      "docs",
+      "sign-up",
+      "signup",
+      "pricing",
+      "blog",
+    ]) {
+      expect(isValidOrgSlug(claimed), claimed).toBe(false);
+    }
+    // Look-alikes stay claimable.
+    for (const lookalike of [
+      "gitlab",
+      "git-team",
+      "github",
+      "app-team",
+      "experiment",
+      "oauth-co",
+      "blogs",
+    ]) {
+      expect(isValidOrgSlug(lookalike), lookalike).toBe(true);
+    }
+  });
+
+  it("never mints a reserved edge slug for an org name", async () => {
+    const slug = await generateOrgSlug("Git", async () => false);
+    expect(slug).not.toBe("git");
+    expect(slug).toMatch(/^git-[a-z2-9]{4}$/);
+  });
 });
 
 describe("generateOrgSlug", () => {
