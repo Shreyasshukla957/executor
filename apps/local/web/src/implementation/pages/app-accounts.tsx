@@ -5,7 +5,12 @@ import { Effect, Exit, type Cause } from "effect";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Add01Icon } from "@hugeicons/core-free-icons";
 import { accountSelectionAtom, profileMutations } from "../../contracts/profiles.ts";
-import { accountAtom, accountUsageAtom, disconnectAccountAtom } from "../../contracts/accounts.ts";
+import {
+  accountAtom,
+  accountUsageAtom,
+  checkAccountAtom,
+  disconnectAccountAtom,
+} from "../../contracts/accounts.ts";
 import type { DashboardError } from "../../contracts/errors.ts";
 import { Failure, LoadingRows } from "../components/common.tsx";
 import { AppAccountForm } from "./account-form.tsx";
@@ -96,6 +101,14 @@ export function AppAccounts({
   readonly profile: Profile | undefined;
 }) {
   const chooser = useAccountChooser({ app, profile, onSelected });
+  const registry = useContext(RegistryContext);
+  const revalidate = (account: AccountId) => {
+    const check = checkAccountAtom(account);
+    registry.set(check, undefined);
+    return Effect.runPromiseExit(
+      AtomRegistry.getResult(registry, check, { suspendOnWaiting: true }),
+    );
+  };
   const unused = useUnusedAccountPrompt({
     usage: accountUsageAtom,
     remove: disconnectAccountAtom,
@@ -140,6 +153,7 @@ export function AppAccounts({
         selection={profile?.accounts ?? {}}
         accounts={accounts}
         onCreateProfile={onCreateProfile}
+        revalidate={revalidate}
         chooser={{
           pending: chooser.pending,
           choose: (slot, value) => void chooser.choose(slot, value),

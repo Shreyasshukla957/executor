@@ -381,6 +381,20 @@ layer(HostedLive, { excludeTestServices: true })("Account health", (it) => {
         ).toBe(avatar);
         yield* browser.checkpoint("Account list with check results");
 
+        // Another redeploy makes the result outdated; viewing the app's accounts shows it at once
+        // and checks it again in the background, without any action.
+        const again = yield* api.request(actors.owner, "POST", `${identityPath}/deploy`, {
+          files: [
+            {
+              path: "index.ts",
+              content: `${source(identityCheck(upstream.origin))}\n// redeployed again`,
+            },
+            appsManifest,
+          ],
+        });
+        expect(again.status, JSON.stringify(again.body)).toBe(200);
+        expect(entry(yield* read(), identity)?.check).toMatchObject({ current: false });
+
         // The app's accounts show each account with its reported photo.
         yield* browser.use("Open the app's accounts", (page) =>
           page.goto(
@@ -396,6 +410,17 @@ layer(HostedLive, { excludeTestServices: true })("Account health", (it) => {
             return photo.waitFor({ state: "visible" }).then(() => photo.getAttribute("src"));
           }),
         ).toBe(avatar);
+        yield* browser.use("The outdated result is checked again on view", (page) =>
+          page
+            .locator(".accounts-section li")
+            .filter({ hasText: "Default" })
+            .locator('[data-check-status="healthy"][data-check-current="true"]')
+            .waitFor(),
+        );
+        expect(entry(yield* read(), identity)?.check).toMatchObject({
+          status: "healthy",
+          current: true,
+        });
         yield* browser.checkpoint("App accounts with the reported photo");
         expect(entry(yield* read(), identity)?.check).toMatchObject({
           status: "healthy",

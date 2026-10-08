@@ -1,5 +1,5 @@
 import { useDashboard } from "./context.tsx";
-import { useState, type ReactNode, type ComponentType } from "react";
+import { useEffect, useRef, useState, type ReactNode, type ComponentType } from "react";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { AsyncResult, type Atom } from "effect/reactivity";
 import { Exit, type Cause } from "effect";
@@ -270,6 +270,78 @@ export interface AccountChooser {
   readonly pending: boolean;
 }
 
+/**
+ * One slot's rows. Choosing lists every compatible saved account oldest first, so a new account
+ * joins the end; bound accounts that are no longer compatible stay visible to be removed.
+ */
+function slotRows(
+  requirement: AccountRequirement,
+  ids: readonly AccountId[],
+  accounts: readonly AccountSummary[],
+  choosing: boolean,
+): readonly AccountId[] {
+  if (!choosing) return ids;
+  return [
+    ...accounts
+      .filter((account) => account.provider === requirement.provider)
+      .toSorted((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id))
+      .map((account) => account.id),
+    ...ids.filter(
+      (id) =>
+        !accounts.some((account) => account.id === id && account.provider === requirement.provider),
+    ),
+  ];
+}
+
+const selectedIds = (selected: SelectedAccounts[string] | undefined): readonly AccountId[] =>
+  typeof selected === "string" ? [selected] : (selected ?? []);
+
+/** How long a check result stays fresh before viewing the app's accounts checks again. */
+const checkFreshFor = 5 * 60 * 1000;
+
+/**
+ * Stale while revalidate: rows show the recorded checks at once, and each listed account this
+ * app checks is checked again in the background, once per view, when its result is missing,
+ * outdated or older than `checkFreshFor`. Reads hide this app's result for an account it does
+ * not select, so the reported identity's age stands in there.
+ */
+function useRevalidateChecks(
+  app: App,
+  selection: SelectedAccounts,
+  accounts: readonly AccountSummary[],
+  choosing: boolean,
+  revalidate: ((account: AccountId) => Promise<unknown>) | undefined,
+) {
+  const started = useRef(new Set<AccountId>());
+  useEffect(() => {
+    if (revalidate === undefined) return;
+    const now = Date.now();
+    for (const [slot, requirement] of Object.entries(app.requirements.accounts)) {
+      if (requirement.health !== true) continue;
+      for (const id of slotRows(requirement, selectedIds(selection[slot]), accounts, choosing)) {
+        const account = accounts.find((item) => item.id === id);
+        if (
+          account?.health === undefined ||
+          started.current.has(id) ||
+          accountNeedsSignIn(account) ||
+          account.signIn?.state === "unavailable"
+        )
+          continue;
+        const entry = account.health.apps.find((item) => item.app === app.id);
+        const checkedAt =
+          entry === undefined ? account.health.infoCheckedAt : (entry.check?.checkedAt ?? null);
+        const fresh =
+          checkedAt !== null &&
+          entry?.check?.current !== false &&
+          now - checkedAt.getTime() < checkFreshFor;
+        if (fresh) continue;
+        started.current.add(id);
+        void revalidate(id);
+      }
+    }
+  });
+}
+
 /** Provider rows show the account bindings inside one profile or its editor. */
 export function AppAccounts({
   app,
@@ -281,6 +353,7 @@ export function AppAccounts({
   accountActions,
   removeAccountAction,
   onCreateProfile,
+  revalidate,
 }: {
   readonly app: App;
   readonly selection: SelectedAccounts;
@@ -291,8 +364,11 @@ export function AppAccounts({
   readonly accountActions?: (slot: string, requirement: AccountRequirement) => ReactNode;
   readonly removeAccountAction?: (slot: string, account: AccountId, label: string) => ReactNode;
   readonly onCreateProfile?: (() => void) | undefined;
+  /** Check one account again; its result reaches `accounts` through the host's queries. */
+  readonly revalidate?: ((account: AccountId) => Promise<unknown>) | undefined;
 }) {
   const { AccountLink } = useDashboard();
+  useRevalidateChecks(app, selection, accounts, chooser !== undefined, revalidate);
   const requirements = Object.entries(app.requirements.accounts);
   if (requirements.length === 0)
     return (
@@ -304,27 +380,9 @@ export function AppAccounts({
     <div className="accounts-section space-y-5">
       {requirements.map(([slot, requirement]) => {
         const selected = selection[slot];
-        const ids = typeof selected === "string" ? [selected] : (selected ?? []);
+        const ids = selectedIds(selected);
         const many = requirement.cardinality === "many";
-        // Choosing lists every compatible saved account oldest first, so a new account joins
-        // the end; bound accounts that are no longer compatible stay visible to be removed.
-        const rows = chooser
-          ? [
-              ...accounts
-                .filter((account) => account.provider === requirement.provider)
-                .toSorted(
-                  (a, b) =>
-                    a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id),
-                )
-                .map((account) => account.id),
-              ...ids.filter(
-                (id) =>
-                  !accounts.some(
-                    (account) => account.id === id && account.provider === requirement.provider,
-                  ),
-              ),
-            ]
-          : ids;
+        const rows = slotRows(requirement, ids, accounts, chooser !== undefined);
         const action = accountActions?.(slot, requirement) ?? chooseAction;
         const showSlot = requirements.some(
           ([otherSlot, other]) =>

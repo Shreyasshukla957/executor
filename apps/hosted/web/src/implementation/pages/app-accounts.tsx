@@ -27,10 +27,14 @@ import { HostedFailure } from "../components/dashboard-bindings.tsx";
 import { appConnectionAtoms, oauthSetupAtom } from "../../contracts/apps.ts";
 import { HostedAccountForm, openAccountOAuth } from "./connect-account.tsx";
 import type { HostedOAuthSignIn } from "@executor-js/hosted-server";
-import type { AccountConnectionId } from "@executor-js/sdk";
+import type { AccountConnectionId, AccountId } from "@executor-js/sdk";
 import type { HostedError } from "../../contracts/errors.ts";
 import { accountSelectionAtom, profileMutations } from "../../contracts/profiles.ts";
-import { accountUsageAtom, disconnectAccountAtom } from "../../contracts/accounts.ts";
+import {
+  accountUsageAtom,
+  checkAccountAtom,
+  disconnectAccountAtom,
+} from "../../contracts/accounts.ts";
 import { AtomRegistry } from "effect/reactivity";
 import { HostedAccountDialog } from "./account-actions.tsx";
 
@@ -106,6 +110,14 @@ export function AppAccounts({
   const canUse = Option.isSome(data) && data.value.canUse;
   const editable = canUse && app.activeDeployment !== null;
   const chooser = useAccountChooser({ app, profile, onSelected });
+  const registry = useContext(RegistryContext);
+  const revalidate = (account: AccountId) => {
+    const check = checkAccountAtom({ organization, account });
+    registry.set(check, undefined);
+    return Effect.runPromiseExit(
+      AtomRegistry.getResult(registry, check, { suspendOnWaiting: true }),
+    );
+  };
   const unused = useUnusedAccountPrompt({
     usage: accountUsageAtom(organization),
     remove: (account) => disconnectAccountAtom({ organization, account }),
@@ -138,6 +150,7 @@ export function AppAccounts({
         selection={profile?.accounts ?? {}}
         accounts={accounts}
         onCreateProfile={canUse ? onCreateProfile : undefined}
+        revalidate={canUse ? revalidate : undefined}
         chooser={
           editable
             ? { pending, choose: (slot, value) => void chooser.choose(slot, value) }
