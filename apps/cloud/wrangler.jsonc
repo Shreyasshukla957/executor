@@ -92,8 +92,8 @@
   ],
   "services": [
     // v1's marketing worker. On executor.sh it now serves only v1's terms of
-    // service and their assets (src/edge/marketing.ts); v2 serves the rest
-    // of marketing.
+    // service, privacy policy and Google OAuth disclosure, and their assets
+    // (src/edge/marketing.ts); v2 serves the rest of marketing.
     {
       "binding": "MARKETING",
       "service": "executor-marketing",
@@ -152,10 +152,19 @@
     // /api/oauth/callback requests carrying it go to v2. It must equal the
     // prefix v2 mints.
     "V2_OAUTH_STATE_PREFIX": "x2.",
-    // Roots of v2's browser telemetry proxies (product analytics, then error
-    // reporting) that v2's marketing pages call on executor.sh. They must
-    // equal the proxy paths v2's build uses.
-    "V2_TELEMETRY_PATHS": "/api/00e2e1f082a6ef17,/api/fd6fab1fbb4883e1",
+    // v2's browser telemetry on executor.sh. Both values are outputs of v2's
+    // production infrastructure (stage `v2`; random and retained, so they do
+    // not change between deploys). v2 pins them in its edge contract and
+    // refuses to deploy stage `v2` if its outputs differ; change them here
+    // only together with that contract.
+    // PostHog browser proxy root: output `proxyPath` of v2's
+    // `executor-next-posthog` stack (apps/hosted/cloud/alchemy.posthog.ts).
+    // Forwarded with everything below it.
+    "V2_ANALYTICS_PROXY_PATH": "/api/00e2e1f082a6ef17",
+    // Sentry browser error tunnel: output `browserTunnel` of v2's
+    // `executor-next-sentry` stack (apps/hosted/cloud/alchemy.sentry.ts).
+    // Forwarded exactly, not its root or other subpaths.
+    "V2_ERROR_TUNNEL_PATH": "/api/fd6fab1fbb4883e1/submit",
     // Keeps the /__sentry-otel-verify probe live in production: Sentry
     // delivery failed silently for weeks (zero events after ~Jul 30 with an
     // active DSN), and without this there is no way to test the pipeline

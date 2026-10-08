@@ -10,8 +10,8 @@
 //    v2's Worker over a service binding;
 //  - so is a connected-account OAuth callback whose `state` carries v2's
 //    prefix;
-//  - v1's terms of service (and their assets) stay on the
-//    `executor-marketing` worker.
+//  - v1's terms of service, privacy policy and Google OAuth disclosure (and
+//    their assets) stay on the `executor-marketing` worker.
 // v1 owns everything not listed. This module deliberately has no TanStack
 // Start or cloud application imports: the Worker entry calls it before
 // loading the Start server graph.
@@ -25,21 +25,28 @@ const PRODUCTION_HOST = "executor.sh";
 const SESSION_COOKIE = "wos-session";
 
 // ---------------------------------------------------------------------------
-// v1's terms on the `executor-marketing` worker
+// v1's legal pages on the `executor-marketing` worker
 // ---------------------------------------------------------------------------
 
-/** v1's terms of service stay on v1's marketing worker: v2's terms describe
- *  only v2's billing, and v1's cover the plans v1 customers are on. The
- *  worker builds its assets under `/_v1-marketing`, apart from v2's
- *  `/_astro`. Each path matches itself and everything below it. */
-const V1_MARKETING_PATHS: ReadonlyArray<string> = ["/terms", "/_v1-marketing"];
+/** v1's legal pages stay on v1's marketing worker. v2's terms describe only
+ *  v2's billing, and v1's cover the plans v1 customers are on; v1's privacy
+ *  policy and Google OAuth disclosure describe v1's own data handling and
+ *  Google OAuth app. The worker builds its assets under `/_v1-marketing`,
+ *  apart from v2's `/_astro`. Each path matches itself and everything below
+ *  it. */
+const V1_MARKETING_PATHS: ReadonlyArray<string> = [
+  "/terms",
+  "/privacy",
+  "/google-oauth",
+  "/_v1-marketing",
+];
 
 /** Whether a pathname belongs to v1's marketing worker on `executor.sh`. */
 export const isMarketingPath = (pathname: string): boolean =>
   V1_MARKETING_PATHS.some((path) => pathname === path || pathname.startsWith(`${path}/`));
 
 /**
- * Project a production request for v1's terms (or their assets) onto the
+ * Project a production request for v1's legal pages (or their assets) onto the
  * `executor-marketing` service-binding request. Returns `null` for every
  * other request.
  */
@@ -89,34 +96,40 @@ export const isV2Path = (pathname: string): boolean =>
   V2_PATHS.some((pattern) => matchesPathPattern(pathname, pattern)) ||
   isSocialCallbackPath(pathname);
 
-/** v2's marketing site on `executor.sh`: each path and everything below it.
- *  These are the pages, files and assets v2's marketing build publishes, and
- *  its docs. Paths that are also valid v1 organization slugs and not
- *  reserved (v2's `/apps`, `/demo` and `/experiments`) stay with v1. The
+/** v2's marketing site on `executor.sh`, as path patterns (see
+ *  {@link matchesPathPattern}): the pages, files and assets v2's marketing
+ *  build publishes, and its docs. `/pricing` and `/home` match only
+ *  themselves. `apps` and `experiments` are reserved org slugs, so `/apps`,
+ *  `/apps/*` and `/experiments/*` are v2's; v2 publishes nothing at a bare
+ *  `/experiments`, which stays with v1. `/demo` is a valid, unreserved v1
+ *  organization slug, so it and everything below it stay with v1. The
  *  favicons stay with v1 too: v1's dashboard serves identical files. */
 const V2_MARKETING_PATHS: ReadonlyArray<string> = [
   "/home",
-  "/about-executor",
-  "/blog",
   "/pricing",
-  "/privacy",
-  "/google-oauth",
-  "/google-workspace",
-  "/index.md",
-  "/llms.txt",
   "/pricing.md",
+  "/index.md",
   "/setup-prompt.md",
-  "/_astro",
-  "/authors",
+  "/llms.txt",
+  "/about-executor",
+  "/google-workspace",
+  "/blog",
+  "/blog/*",
+  "/docs",
+  "/docs/*",
+  "/apps",
+  "/apps/*",
+  "/experiments/*",
+  "/_astro/*",
+  "/authors/*",
   "/og-image.png",
   "/pattern-graph-paper.svg",
-  "/docs",
 ];
 
 /** Whether a pathname belongs to v2's marketing site on `executor.sh`. `/`
  *  also does, without a v1 session; see {@link isV2Homepage}. */
 export const isV2MarketingPath = (pathname: string): boolean =>
-  V2_MARKETING_PATHS.some((path) => pathname === path || pathname.startsWith(`${path}/`));
+  V2_MARKETING_PATHS.some((pattern) => matchesPathPattern(pathname, pattern));
 
 /** The landing page without a v1 session is v2's marketing homepage. */
 const isV2Homepage = (url: URL, request: Request): boolean =>
@@ -128,10 +141,19 @@ const isV2Homepage = (url: URL, request: Request): boolean =>
  *  with v1. */
 const V2_MARKETING_COOKIES: ReadonlyArray<string> = ["executor_visitor"];
 
-/** v2's browser telemetry proxies (product analytics and error reporting)
- *  live at `/api/<16 hex>` roots, which v1's API never uses. The configured
- *  roots (`V2_TELEMETRY_PATHS`) say which ones are v2's. */
-const TELEMETRY_ROOT_PATTERN = /^\/api\/[a-f0-9]{16}$/;
+/** v2's browser telemetry lives under `/api/<16 lowercase hex>`, which v1's
+ *  API never uses. Two settings say which paths are v2's. Both are outputs
+ *  of v2's production infrastructure (stage `v2`; random, retained values),
+ *  which v2 pins in its edge contract; v2 refuses to deploy stage `v2` if
+ *  its outputs differ:
+ *  - `V2_ANALYTICS_PROXY_PATH`, the PostHog browser proxy root (output
+ *    `proxyPath` of v2's `executor-next-posthog` stack), forwarded with
+ *    everything below it;
+ *  - `V2_ERROR_TUNNEL_PATH`, the Sentry browser error tunnel (output
+ *    `browserTunnel` of v2's `executor-next-sentry` stack), forwarded
+ *    exactly. */
+const ANALYTICS_PROXY_PATH_PATTERN = /^\/api\/[a-f0-9]{16}$/;
+const ERROR_TUNNEL_PATH_PATTERN = /^\/api\/[a-f0-9]{16}\/submit$/;
 const TELEMETRY_PATH_SHAPE = /^\/api\/[a-f0-9]{16}(?:\/|$)/;
 
 /** Request headers v1 never passes to v2 as sent. The cookie header carries
@@ -188,8 +210,10 @@ export interface V2EdgeEnv {
   readonly V2_SIGN_UP_URL?: string;
   /** The prefix v2 puts on every connected-account OAuth `state`. */
   readonly V2_OAUTH_STATE_PREFIX?: string;
-  /** Comma-separated `/api/<16 hex>` roots of v2's browser telemetry proxies. */
-  readonly V2_TELEMETRY_PATHS?: string;
+  /** Root of v2's PostHog browser proxy, `/api/<16 hex>`. */
+  readonly V2_ANALYTICS_PROXY_PATH?: string;
+  /** v2's Sentry browser error tunnel, `/api/<16 hex>/submit`. */
+  readonly V2_ERROR_TUNNEL_PATH?: string;
 }
 
 /** What the edge needs to hand requests to v2. */
@@ -200,8 +224,10 @@ export interface V2Edge {
   readonly signUpUrl: URL;
   /** v2's connected-account OAuth state prefix (the `V2_OAUTH_STATE_PREFIX` var). */
   readonly oauthStatePrefix: string;
-  /** Roots of v2's browser telemetry proxies (the `V2_TELEMETRY_PATHS` var). */
-  readonly telemetryPaths: ReadonlyArray<string>;
+  /** Root of v2's PostHog browser proxy (the `V2_ANALYTICS_PROXY_PATH` var). */
+  readonly analyticsProxyPath: string;
+  /** v2's Sentry browser error tunnel (the `V2_ERROR_TUNNEL_PATH` var). */
+  readonly errorTunnelPath: string;
 }
 
 /**
@@ -209,18 +235,20 @@ export interface V2Edge {
  * when none is set (local dev, test workers), so v1 serves everything, and
  * the reason as a string when the deployment is broken: only some of them
  * set, a sign-up URL that is not absolute, a state prefix that could match a
- * v1 state, or a telemetry root outside `/api/<16 hex>`.
+ * v1 state, or a telemetry path of the wrong shape.
  */
 export const parseV2Edge = (env: V2EdgeEnv): V2Edge | string | null => {
   const service = env.V2;
   const signUpUrl = env.V2_SIGN_UP_URL;
   const oauthStatePrefix = env.V2_OAUTH_STATE_PREFIX;
-  const telemetryPaths = env.V2_TELEMETRY_PATHS;
+  const analyticsProxyPath = env.V2_ANALYTICS_PROXY_PATH;
+  const errorTunnelPath = env.V2_ERROR_TUNNEL_PATH;
   if (
     service === undefined &&
     signUpUrl === undefined &&
     oauthStatePrefix === undefined &&
-    telemetryPaths === undefined
+    analyticsProxyPath === undefined &&
+    errorTunnelPath === undefined
   ) {
     return null;
   }
@@ -228,9 +256,10 @@ export const parseV2Edge = (env: V2EdgeEnv): V2Edge | string | null => {
     service === undefined ||
     signUpUrl === undefined ||
     oauthStatePrefix === undefined ||
-    telemetryPaths === undefined
+    analyticsProxyPath === undefined ||
+    errorTunnelPath === undefined
   ) {
-    return "The V2 binding, V2_SIGN_UP_URL, V2_OAUTH_STATE_PREFIX and V2_TELEMETRY_PATHS must be set together";
+    return "The V2 binding, V2_SIGN_UP_URL, V2_OAUTH_STATE_PREFIX, V2_ANALYTICS_PROXY_PATH and V2_ERROR_TUNNEL_PATH must be set together";
   }
   const parsed = URL.parse(signUpUrl);
   if (parsed === null || (parsed.protocol !== "https:" && parsed.protocol !== "http:")) {
@@ -239,11 +268,13 @@ export const parseV2Edge = (env: V2EdgeEnv): V2Edge | string | null => {
   if (!OAUTH_STATE_PREFIX_PATTERN.test(oauthStatePrefix)) {
     return "V2_OAUTH_STATE_PREFIX must be URL-safe and contain '.' or '~'";
   }
-  const roots = telemetryPaths.split(",").map((path) => path.trim());
-  if (!roots.every((root) => TELEMETRY_ROOT_PATTERN.test(root))) {
-    return "V2_TELEMETRY_PATHS must list /api/<16 hex> paths separated by commas";
+  if (!ANALYTICS_PROXY_PATH_PATTERN.test(analyticsProxyPath)) {
+    return "V2_ANALYTICS_PROXY_PATH must be /api/<16 lowercase hex>";
   }
-  return { service, signUpUrl: parsed, oauthStatePrefix, telemetryPaths: roots };
+  if (!ERROR_TUNNEL_PATH_PATTERN.test(errorTunnelPath)) {
+    return "V2_ERROR_TUNNEL_PATH must be /api/<16 lowercase hex>/submit";
+  }
+  return { service, signUpUrl: parsed, oauthStatePrefix, analyticsProxyPath, errorTunnelPath };
 };
 
 /** Whether a connected-account callback carries v2's state prefix. Reads the
@@ -251,17 +282,20 @@ export const parseV2Edge = (env: V2EdgeEnv): V2Edge | string | null => {
 const isV2OAuthCallback = (url: URL, prefix: string): boolean =>
   url.searchParams.get("state")?.startsWith(prefix) === true;
 
-/** Whether a pathname is under one of v2's telemetry proxy roots. */
-const isV2TelemetryPath = (pathname: string, roots: ReadonlyArray<string>): boolean =>
-  roots.some((root) => pathname === root || pathname.startsWith(`${root}/`));
+/** Whether a pathname is v2's analytics proxy root or below it, or exactly
+ *  v2's error tunnel. */
+const isV2TelemetryPath = (pathname: string, edge: V2Edge): boolean =>
+  matchesPathPattern(pathname, edge.analyticsProxyPath) ||
+  matchesPathPattern(pathname, `${edge.analyticsProxyPath}/*`) ||
+  pathname === edge.errorTunnelPath;
 
 /**
  * Answer a production request that belongs to v2 and return `null` when v1
  * owns it:
  *  - sign-up (`GET`, any query) redirects to v2's sign-up page;
  *  - a {@link isV2Path} request, a connected-account callback whose `state`
- *    starts with v2's prefix, or a request under one of v2's telemetry roots
- *    is forwarded to v2's Worker without cookies;
+ *    starts with v2's prefix, or a request for v2's analytics proxy or error
+ *    tunnel is forwarded to v2's Worker without cookies;
  *  - a {@link isV2MarketingPath} request, or `/` without a v1 session, is
  *    forwarded with only v2's marketing visitor cookie.
  * v2's response comes back unchanged (status, headers and body stream).
@@ -290,6 +324,6 @@ export const v2EdgeResponse = (request: Request, env: V2EdgeEnv): Promise<Respon
   if (signUp) return Promise.resolve(Response.redirect(edge.signUpUrl.href, 302));
   if (marketing) return edge.service.fetch(v2ForwardRequest(request, V2_MARKETING_COOKIES));
   if (callback && !isV2OAuthCallback(url, edge.oauthStatePrefix)) return null;
-  if (telemetry && !isV2TelemetryPath(url.pathname, edge.telemetryPaths)) return null;
+  if (telemetry && !isV2TelemetryPath(url.pathname, edge)) return null;
   return edge.service.fetch(v2ForwardRequest(request));
 };
