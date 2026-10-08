@@ -121,7 +121,7 @@
     "@alchemy.run/cloudflare-runtime": "2.0.0-beta.80",
     "@changesets/cli": "^2.30.0",
     "@effect/platform-node": "4.0.1",
-    "@effect/tsgo": "0.48.0",
+    "@effect/tsgo": "0.51.1",
     "@effect/vitest": "4.0.1",
     "@electric-sql/pglite": "0.5.8",
     "@executor-js/sdk": "workspace:*",
