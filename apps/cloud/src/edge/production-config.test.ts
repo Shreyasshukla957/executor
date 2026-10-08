@@ -29,6 +29,7 @@ const shipped: V2EdgeEnv = {
   V2: standIn,
   V2_SIGN_UP_URL: stringVar("V2_SIGN_UP_URL"),
   V2_OAUTH_STATE_PREFIX: stringVar("V2_OAUTH_STATE_PREFIX"),
+  V2_TELEMETRY_PATHS: stringVar("V2_TELEMETRY_PATHS"),
 };
 
 describe("production v2 edge settings", () => {
@@ -49,5 +50,15 @@ describe("production v2 edge settings", () => {
     const edge = parseV2Edge(shipped);
     if (edge === null || typeof edge === "string") return expect.unreachable("settings must parse");
     expect(edge.oauthStatePrefix).toBe("x2.");
+  });
+
+  it("ships v2's analytics and error-reporting proxy roots", () => {
+    const edge = parseV2Edge(shipped);
+    if (edge === null || typeof edge === "string") return expect.unreachable("settings must parse");
+    expect(edge.telemetryPaths).toHaveLength(2);
+  });
+
+  it("keeps the MARKETING binding for v1's terms", () => {
+    expect(config.services.filter((service) => service.binding === "MARKETING")).toHaveLength(1);
   });
 });
