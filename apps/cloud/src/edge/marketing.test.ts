@@ -3,6 +3,7 @@ import { describe, expect, it } from "@effect/vitest";
 import {
   isMarketingPath,
   isSignUpPath,
+  isV2MarketingPath,
   isV2Path,
   marketingProxyRequest,
   parseV2Edge,
@@ -11,88 +12,38 @@ import {
   type V2Service,
 } from "./marketing";
 
-// On executor.sh the marketing middleware proxies an allow-list of paths to the
-// `executor-marketing` worker; everything else falls through to the auth-gated
-// cloud app (the sign-in page). `/blog` and `/llms.txt` are public content, so
-// they must be on the allow-list: without it an unauthenticated visit redirects
-// to `/login?returnTo=...` and the reader bounces.
+// On executor.sh only v1's terms of service (and their asset root) still go to
+// v1's `executor-marketing` worker; v2 serves the rest of marketing.
 describe("isMarketingPath", () => {
-  const marketing = [
-    "/home",
-    "/privacy",
-    "/terms",
-    "/pricing",
-    "/about-executor",
-    "/google-oauth",
-    "/google-workspace",
-    "/blog",
-    "/blog/",
-    "/blog/some-post",
-    "/llms.txt",
-    "/index.md",
-    "/setup-prompt.md",
-    "/pricing.md",
-    "/og-image.png",
-    "/_astro/app.css",
-    // The blog author card loads its avatar from marketing's public/authors;
-    // without this the pfp 404s on every post.
-    "/authors/rhys-sullivan.png",
-  ];
-  for (const pathname of marketing) {
-    it(`proxies ${pathname} to marketing`, () => {
+  const v1Marketing = ["/terms", "/terms/", "/_v1-marketing/Layout.css", "/_v1-marketing/_ph/e"];
+  for (const pathname of v1Marketing) {
+    it(`sends ${pathname} to v1's marketing worker`, () => {
       expect(isMarketingPath(pathname)).toBe(true);
     });
   }
 
-  // App-owned routes must reach the Effect handler, not marketing. `/blogger`
-  // guards against a bare `startsWith("/blog")` swallowing unrelated words.
-  const notMarketing = ["/", "/login", "/cloud", "/mcp", "/dashboard", "/blogger"];
-  for (const pathname of notMarketing) {
-    it(`leaves ${pathname} alone`, () => {
+  const notV1Marketing = [
+    "/",
+    "/home",
+    "/privacy",
+    "/pricing",
+    "/blog",
+    "/_astro/app.css",
+    "/_astro/_ph/e",
+    "/termsandconditions",
+    "/_v1-marketingx",
+    "/login",
+  ];
+  for (const pathname of notV1Marketing) {
+    it(`does not send ${pathname} to v1's marketing worker`, () => {
       expect(isMarketingPath(pathname)).toBe(false);
     });
   }
 });
 
 describe("marketingProxyRequest", () => {
-  it("routes a signed-out homepage request", () => {
-    const request = new Request("https://executor.sh/?source=test");
-
-    const proxied = marketingProxyRequest(request);
-
-    expect(proxied?.url).toBe("https://executor.sh/?source=test");
-  });
-
-  it("leaves the signed-in homepage with the cloud application", () => {
-    const request = new Request("https://executor.sh/", {
-      headers: { cookie: "other=value; wos-session=sealed" },
-    });
-
-    expect(marketingProxyRequest(request)).toBeNull();
-  });
-
-  it("routes public content even when a session cookie is present", () => {
-    const request = new Request("https://executor.sh/blog/post", {
-      headers: { cookie: "wos-session=sealed" },
-    });
-
-    expect(marketingProxyRequest(request)?.url).toBe("https://executor.sh/blog/post");
-  });
-
-  it("routes /pricing to the marketing worker", () => {
-    const request = new Request("https://executor.sh/pricing");
-
-    expect(marketingProxyRequest(request)?.url).toBe("https://executor.sh/pricing");
-  });
-
-  it("rewrites the public home alias to the marketing root", () => {
-    const request = new Request("https://executor.sh/home?source=test");
-
-    expect(marketingProxyRequest(request)?.url).toBe("https://executor.sh/?source=test");
-  });
-
-  it("preserves the request method, headers, and body", async () => {
-    const request = new Request("https://executor.sh/_astro/_ph/capture", {
+  it("routes v1's terms, method, headers and body unchanged", async () => {
+    const request = new Request("https://executor.sh/_v1-marketing/_ph/capture?ip=1", {
       method: "POST",
       headers: { "content-type": "application/json", "x-request-id": "request-1" },
       body: JSON.stringify({ event: "test" }),
@@ -100,14 +51,23 @@ describe("marketingProxyRequest", () => {
 
     const proxied = marketingProxyRequest(request);
 
+    expect(proxied?.url).toBe("https://executor.sh/_v1-marketing/_ph/capture?ip=1");
     expect(proxied?.method).toBe("POST");
     expect(proxied?.headers.get("x-request-id")).toBe("request-1");
     await expect(proxied?.json()).resolves.toEqual({ event: "test" });
+    expect(marketingProxyRequest(new Request("https://executor.sh/terms"))?.url).toBe(
+      "https://executor.sh/terms",
+    );
   });
 
-  it("does not proxy non-production hosts or app-owned paths", () => {
-    expect(marketingProxyRequest(new Request("http://executor-cloud.localhost/"))).toBeNull();
-    expect(marketingProxyRequest(new Request("https://executor.sh/login"))).toBeNull();
+  it("leaves the homepage and v2's marketing to the v2 edge", () => {
+    expect(marketingProxyRequest(new Request("https://executor.sh/"))).toBeNull();
+    expect(marketingProxyRequest(new Request("https://executor.sh/home"))).toBeNull();
+    expect(marketingProxyRequest(new Request("https://executor.sh/pricing"))).toBeNull();
+  });
+
+  it("does not proxy non-production hosts", () => {
+    expect(marketingProxyRequest(new Request("http://executor-cloud.localhost/terms"))).toBeNull();
   });
 });
 
@@ -152,9 +112,9 @@ describe("isV2Path", () => {
     "/github",
     "/.well-known/agent-skills",
     "/.well-known/agent-skillset/index.json",
-    // The connected-account callback goes by its state, not its path.
+    // The connected-account callback goes by its state, not its path, and
+    // marketing has its own list.
     "/api/oauth/callback",
-    // Not yet: marketing.
     "/pricing",
     // v1 dashboard, org pages and MCP, including org slugs that look similar.
     "/",
@@ -190,6 +150,7 @@ describe("parseV2Edge", () => {
     V2: service,
     V2_SIGN_UP_URL: "https://app.executor.sh/login?mode=signup",
     V2_OAUTH_STATE_PREFIX: "x2.",
+    V2_TELEMETRY_PATHS: "/api/0123456789abcdef,/api/fedcba9876543210",
   };
 
   it("is off when no setting is present", () => {
@@ -200,6 +161,7 @@ describe("parseV2Edge", () => {
     expect(typeof parseV2Edge({ ...settings, V2: undefined })).toBe("string");
     expect(typeof parseV2Edge({ ...settings, V2_SIGN_UP_URL: undefined })).toBe("string");
     expect(typeof parseV2Edge({ ...settings, V2_OAUTH_STATE_PREFIX: undefined })).toBe("string");
+    expect(typeof parseV2Edge({ ...settings, V2_TELEMETRY_PATHS: undefined })).toBe("string");
     expect(typeof parseV2Edge({ V2_OAUTH_STATE_PREFIX: "x2." })).toBe("string");
   });
 
@@ -220,24 +182,52 @@ describe("parseV2Edge", () => {
     }
   });
 
+  it("refuses telemetry roots outside /api/<16 hex>", () => {
+    for (const paths of [
+      "",
+      "/api/0123456789abcde",
+      "/api/0123456789abcdef0",
+      "/api/0123456789ABCDEF",
+      "/api/0123456789abcdef/",
+      "/api/0123456789abcdef/submit",
+      "/api/connections",
+      "/0123456789abcdef",
+      "/api/0123456789abcdef,",
+      "/api/0123456789abcdef;/api/fedcba9876543210",
+    ]) {
+      expect(typeof parseV2Edge({ ...settings, V2_TELEMETRY_PATHS: paths })).toBe("string");
+    }
+  });
+
   it("parses all settings", () => {
     const edge = parseV2Edge(settings);
     if (edge === null || typeof edge === "string") return expect.unreachable("settings must parse");
     expect(edge.signUpUrl.href).toBe("https://app.executor.sh/login?mode=signup");
     expect(edge.oauthStatePrefix).toBe("x2.");
+    expect(edge.telemetryPaths).toEqual(["/api/0123456789abcdef", "/api/fedcba9876543210"]);
     expect(typeof parseV2Edge({ ...settings, V2_OAUTH_STATE_PREFIX: "v2~" })).toBe("object");
+    const spaced = parseV2Edge({
+      ...settings,
+      V2_TELEMETRY_PATHS: " /api/0123456789abcdef , /api/fedcba9876543210 ",
+    });
+    if (spaced === null || typeof spaced === "string") {
+      return expect.unreachable("settings must parse");
+    }
+    expect(spaced.telemetryPaths).toEqual(["/api/0123456789abcdef", "/api/fedcba9876543210"]);
   });
 });
 
 describe("v2EdgeResponse", () => {
   const SIGN_UP_URL = "https://v2.executor.sh/login?mode=signup";
   const STATE_PREFIX = "x2.";
+  const TELEMETRY_PATHS = "/api/0123456789abcdef";
 
   /** The edge's settings with `service` as v2's Worker. */
   const settings = (service: V2Service, signUpUrl = SIGN_UP_URL): V2EdgeEnv => ({
     V2: service,
     V2_SIGN_UP_URL: signUpUrl,
     V2_OAUTH_STATE_PREFIX: STATE_PREFIX,
+    V2_TELEMETRY_PATHS: TELEMETRY_PATHS,
   });
 
   /** A v2 service that records what it receives and answers with `respond`. */
@@ -440,6 +430,7 @@ describe("v2EdgeResponse connected-account callback", () => {
     V2: service,
     V2_SIGN_UP_URL: "https://app.executor.sh/login?mode=signup",
     V2_OAUTH_STATE_PREFIX: "x2.",
+    V2_TELEMETRY_PATHS: "/api/0123456789abcdef",
   });
 
   const recordingService = () => {
@@ -567,6 +558,267 @@ describe("v2EdgeResponse connected-account callback", () => {
     expect(v2EdgeResponse(request(), { ...settings(service), V2_SIGN_UP_URL: "/x" })).toBeNull();
     expect(
       v2EdgeResponse(request(), { ...settings(service), V2_OAUTH_STATE_PREFIX: "x2" }),
+    ).toBeNull();
+    expect(received).toHaveLength(0);
+  });
+});
+
+// v2's marketing site answers executor.sh: the landing page without a v1
+// session, its pages, files, assets and docs, and its telemetry proxies.
+describe("isV2MarketingPath", () => {
+  const v2Marketing = [
+    "/home",
+    "/about-executor",
+    "/blog",
+    "/blog/",
+    "/blog/some-post",
+    "/pricing",
+    "/privacy",
+    "/google-oauth",
+    "/google-workspace",
+    "/index.md",
+    "/llms.txt",
+    "/pricing.md",
+    "/setup-prompt.md",
+    "/_astro/app.Cld-QA3g.css",
+    "/authors/author.png",
+    "/og-image.png",
+    "/pattern-graph-paper.svg",
+    "/docs",
+    "/docs/",
+    "/docs/quickstart",
+    "/docs/llms.txt",
+  ];
+  for (const pathname of v2Marketing) {
+    it(`sends ${pathname} to v2`, () => {
+      expect(isV2MarketingPath(pathname)).toBe(true);
+    });
+  }
+
+  const v1Owned = [
+    // The homepage depends on the session; see v2EdgeResponse.
+    "/",
+    // v2 marketing paths that are unreserved v1 organization slugs.
+    "/apps",
+    "/apps/acme/tools",
+    "/demo",
+    "/demo/workflows",
+    "/experiments/hero/b",
+    // v1's terms, and its dashboard's favicons.
+    "/terms",
+    "/favicon.ico",
+    "/favicon-32.png",
+    "/apple-touch-icon.png",
+    // Lookalikes and v1 routes.
+    "/blogger",
+    "/docsearch",
+    "/_astrox/app.css",
+    "/home-team/policies",
+    "/pricing-team/mcp",
+    "/setup",
+    "/login",
+    "/api/docs",
+    "/acme/docs",
+  ];
+  for (const pathname of v1Owned) {
+    it(`leaves ${pathname} with v1`, () => {
+      expect(isV2MarketingPath(pathname)).toBe(false);
+    });
+  }
+});
+
+describe("v2EdgeResponse marketing", () => {
+  const settings = (service: V2Service): V2EdgeEnv => ({
+    V2: service,
+    V2_SIGN_UP_URL: "https://app.executor.sh/login?mode=signup",
+    V2_OAUTH_STATE_PREFIX: "x2.",
+    V2_TELEMETRY_PATHS: "/api/0123456789abcdef,/api/fedcba9876543210",
+  });
+
+  const recordingService = (respond: () => Response = () => new Response("v2")) => {
+    const received: Request[] = [];
+    const service: V2Service = {
+      fetch: async (request) => {
+        received.push(request);
+        return respond();
+      },
+    };
+    return { received, service };
+  };
+
+  it("sends the signed-out homepage to v2 with the URL unchanged", async () => {
+    const { received, service } = recordingService();
+
+    const response = await v2EdgeResponse(
+      new Request("https://executor.sh/?hero=b&utm_source=x"),
+      settings(service),
+    );
+
+    expect(await response?.text()).toBe("v2");
+    expect(received[0]?.url).toBe("https://executor.sh/?hero=b&utm_source=x");
+    expect(received[0]?.redirect).toBe("manual");
+  });
+
+  it("keeps the signed-in homepage with v1's dashboard", () => {
+    const { received, service } = recordingService();
+
+    expect(
+      v2EdgeResponse(
+        new Request("https://executor.sh/", {
+          headers: { cookie: "executor_visitor=v; wos-session=sealed" },
+        }),
+        settings(service),
+      ),
+    ).toBeNull();
+    expect(received).toHaveLength(0);
+  });
+
+  it("passes only v2's visitor cookie, never v1's session", async () => {
+    const { received, service } = recordingService();
+
+    await v2EdgeResponse(
+      new Request("https://executor.sh/blog/post", {
+        headers: {
+          cookie:
+            "ph_id=1; executor_visitor=0f1e2d3c-4b5a-4987-a6b5-c4d3e2f1a0b9; wos-session=sealed",
+          "x-forwarded-host": "attacker.example",
+        },
+      }),
+      settings(service),
+    );
+    await v2EdgeResponse(
+      new Request("https://executor.sh/", { headers: { cookie: "ph_id=1; executor_hero=x" } }),
+      settings(service),
+    );
+
+    expect(received[0]?.headers.get("cookie")).toBe(
+      "executor_visitor=0f1e2d3c-4b5a-4987-a6b5-c4d3e2f1a0b9",
+    );
+    expect(received[0]?.headers.has("x-forwarded-host")).toBe(false);
+    expect(received[1]?.headers.has("cookie")).toBe(false);
+  });
+
+  it("serves /home, docs and assets from v2 without rewriting the path", async () => {
+    const { received, service } = recordingService();
+
+    for (const url of [
+      "https://executor.sh/home?ref=x",
+      "https://executor.sh/docs/quickstart",
+      "https://executor.sh/_astro/app.css",
+      "https://executor.sh/llms.txt",
+    ]) {
+      await v2EdgeResponse(new Request(url), settings(service));
+    }
+
+    expect(received.map((request) => request.url)).toEqual([
+      "https://executor.sh/home?ref=x",
+      "https://executor.sh/docs/quickstart",
+      "https://executor.sh/_astro/app.css",
+      "https://executor.sh/llms.txt",
+    ]);
+  });
+
+  it("returns v2's response unchanged, its cookies included", async () => {
+    const upstream = new Response("<html>", {
+      status: 200,
+      headers: {
+        "content-type": "text/html",
+        "set-cookie": "executor_visitor=v; Path=/; SameSite=Lax; Secure",
+        vary: "Cookie",
+      },
+    });
+    const { service } = recordingService(() => upstream);
+
+    expect(await v2EdgeResponse(new Request("https://executor.sh/"), settings(service))).toBe(
+      upstream,
+    );
+  });
+
+  it("answers marketing with a 500 on broken settings", async () => {
+    const { received, service } = recordingService();
+
+    const response = await v2EdgeResponse(new Request("https://executor.sh/pricing"), {
+      ...settings(service),
+      V2_TELEMETRY_PATHS: "/api/nothex",
+    });
+
+    expect(response?.status).toBe(500);
+    expect(received).toHaveLength(0);
+  });
+
+  it("is off without settings and off executor.sh", () => {
+    const { received, service } = recordingService();
+
+    expect(v2EdgeResponse(new Request("https://executor.sh/"), {})).toBeNull();
+    expect(v2EdgeResponse(new Request("https://executor.sh/pricing"), {})).toBeNull();
+    expect(
+      v2EdgeResponse(new Request("http://executor-cloud.localhost/"), settings(service)),
+    ).toBeNull();
+    expect(
+      v2EdgeResponse(new Request("http://executor-cloud.localhost/docs"), settings(service)),
+    ).toBeNull();
+    expect(received).toHaveLength(0);
+  });
+
+  it("forwards v2's telemetry proxies without cookies, body and method intact", async () => {
+    const { received, service } = recordingService();
+
+    await v2EdgeResponse(
+      new Request("https://executor.sh/api/0123456789abcdef/e/?ip=1", {
+        method: "POST",
+        headers: { cookie: "wos-session=sealed", "content-type": "text/plain" },
+        body: "event",
+      }),
+      settings(service),
+    );
+    await v2EdgeResponse(
+      new Request("https://executor.sh/api/fedcba9876543210/submit", { method: "POST" }),
+      settings(service),
+    );
+    await v2EdgeResponse(
+      new Request("https://executor.sh/api/0123456789abcdef"),
+      settings(service),
+    );
+
+    expect(received.map((request) => request.url)).toEqual([
+      "https://executor.sh/api/0123456789abcdef/e/?ip=1",
+      "https://executor.sh/api/fedcba9876543210/submit",
+      "https://executor.sh/api/0123456789abcdef",
+    ]);
+    expect(received[0]?.method).toBe("POST");
+    expect(received[0]?.headers.has("cookie")).toBe(false);
+    expect(await received[0]?.text()).toBe("event");
+  });
+
+  const v1Api = [
+    // Another 16-hex root, and v1's own PostHog proxy (8 hex).
+    "https://executor.sh/api/aaaaaaaaaaaaaaaa/e/",
+    "https://executor.sh/api/0a1b2c3d/e/",
+    // Lookalikes of a configured root.
+    "https://executor.sh/api/0123456789abcdef0/e/",
+    "https://executor.sh/api/0123456789abcdefx",
+    "https://executor.sh/0123456789abcdef/e/",
+    "https://executor.sh/acme/api/0123456789abcdef/e/",
+    // v1's API.
+    "https://executor.sh/api/connections",
+    "https://executor.sh/api/docs",
+  ];
+  for (const url of v1Api) {
+    it(`leaves ${new URL(url).pathname} with v1`, () => {
+      const { received, service } = recordingService();
+      expect(v2EdgeResponse(new Request(url), settings(service))).toBeNull();
+      expect(received).toHaveLength(0);
+    });
+  }
+
+  it("leaves telemetry roots with v1 when the settings are broken", () => {
+    const { received, service } = recordingService();
+
+    expect(
+      v2EdgeResponse(new Request("https://executor.sh/api/0123456789abcdef/e/"), {
+        ...settings(service),
+        V2_SIGN_UP_URL: "/relative",
+      }),
     ).toBeNull();
     expect(received).toHaveLength(0);
   });
