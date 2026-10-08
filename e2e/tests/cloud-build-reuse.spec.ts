@@ -149,8 +149,11 @@ layer(HostedLive, { excludeTestServices: true })("Cloud build reuse", (it) => {
         const first = yield* coldIndex(work, "work");
         expect(first.source, "The runner reads the record the deploy cached").toBe("hit");
         // The framework is stored apart from the record. The deploy cached it unless the cache
-        // already held it; the runner may also hold it decoded from an earlier build.
-        expect(["hit", "memory"], "The runner reads a cached framework").toContain(first.framework);
+        // already held it; the runner may also hold it decoded from an earlier build, or be
+        // decoding it for another app on this apps release, whose read this one waits for.
+        expect(["hit", "memory", "shared"], "The runner reads a cached framework").toContain(
+          first.framework,
+        );
         expect(first.blobReads, "A freshly deployed build is not read from R2").toBe(0);
         const second = yield* coldIndex(personal, "personal");
         expect(second.source, "The runner reuses the build it already decoded").toBe("memory");

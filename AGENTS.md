@@ -140,7 +140,7 @@ patch without an error. So are the scenarios that assert a contract one file sta
 full when the tree's copy differs from main's (`fileGuards`): a new host protocol in
 `app-protocols.ts` runs `app-package.spec.ts`, which reads back the supported list.
 A changed spec file's Cloud scenarios that otherwise first run in Cloud tests on main, after
-merge, run in the `cloud` job when managed local Cloud can run them. The ones that need a
+merge, run in the `cloud-product` job when managed local Cloud can run them. The ones that need a
 deployed stage (`runtime: "attached"`) get a warning with the `e2e:deployed` command that runs
 them; run it before merging. Write `none` for a change no scenario exercises, such as documentation. Write each name as it appears in
 `e2e/tests/`, optionally prefixed with `e2e/tests/`. The `select` job fails when the

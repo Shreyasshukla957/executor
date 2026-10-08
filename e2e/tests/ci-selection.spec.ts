@@ -16,6 +16,7 @@ const jobs = [
   "self-host-inventory",
   "self-host-catalog",
   "cloud",
+  "cloud-product",
   "cloud-workers",
   "cloud-locks",
   "cloud-isolate",
@@ -311,7 +312,7 @@ layer(NodeServices.layer)("CI E2E selection", (it) => {
     }),
   );
 
-  it.effect("a changed scenario only deployed Cloud runs runs in the cloud job when it can", () =>
+  it.effect("a changed scenario only deployed Cloud runs runs in cloud-product when it can", () =>
     Effect.gen(function* () {
       const [links, compiler, all] = yield* Effect.all(
         [
@@ -325,7 +326,10 @@ layer(NodeServices.layer)("CI E2E selection", (it) => {
         { concurrency: "unbounded" },
       );
       expect(links.exitCode, links.log).toBe(0);
-      expect(links.outputs.cloud).toBe("^(?:Cloud product links follow the deployment origin)$");
+      expect(links.outputs["cloud-product"]).toBe(
+        "^(?:Cloud product links follow the deployment origin)$",
+      );
+      expect(links.outputs.cloud).toBe("");
       expect(links.summary).toContain("Spec files: deployment-links.spec.ts\n");
       expect(links.summary).toContain(
         "- deployment-links.spec.ts: Cloud product links follow the deployment origin",
@@ -335,10 +339,15 @@ layer(NodeServices.layer)("CI E2E selection", (it) => {
 
       // Two of its scenarios need a deployed stage, and one runs on no CI path at all.
       expect(compiler.exitCode, compiler.log).toBe(0);
-      expect(compiler.outputs.cloud).toContain("Cloud compiler installs imported packages");
+      expect(compiler.outputs["cloud-product"]).toContain(
+        "Cloud compiler installs imported packages",
+      );
+      // This one is in the cloud job's own pattern.
       expect(compiler.outputs.cloud).toContain("Cloud deploys fail promptly");
-      expect(compiler.outputs.cloud).not.toContain("Concurrent Cloud deploys");
-      expect(compiler.outputs.cloud).not.toContain("memory failures");
+      for (const job of ["cloud", "cloud-product"]) {
+        expect(compiler.outputs[job]).not.toContain("Concurrent Cloud deploys");
+        expect(compiler.outputs[job]).not.toContain("memory failures");
+      }
       for (const title of [
         "Concurrent Cloud deploys that install npm packages all compile",
         "Cloud builds keep large UI files out of the server bundle",
@@ -355,9 +364,10 @@ layer(NodeServices.layer)("CI E2E selection", (it) => {
 
       // The full suite keeps the job's own pattern and adds the changed scenario.
       expect(all.exitCode, all.log).toBe(0);
-      expect(all.outputs.cloud).toMatch(
-        /^Cloud onboarding\|.*\|\^\(\?:Cloud product links follow the deployment origin\)\$$/,
+      expect(all.outputs["cloud-product"]).toMatch(
+        /^Cloud SSO SAML accepts\|.*\|\^\(\?:Cloud product links follow the deployment origin\)\$$/,
       );
+      expect(all.outputs.cloud).not.toContain("Cloud product links");
     }),
   );
 
@@ -388,7 +398,9 @@ layer(NodeServices.layer)("CI E2E selection", (it) => {
         { concurrency: "unbounded" },
       );
       expect(changed.exitCode, changed.log).toBe(0);
-      expect(changed.outputs.cloud).toBe("^(?:Cloud product links follow the deployment origin)$");
+      expect(changed.outputs["cloud-product"]).toBe(
+        "^(?:Cloud product links follow the deployment origin)$",
+      );
       expect(changed.summary).toContain("Spec files: deployment-links.spec.ts\n");
       expect(other.exitCode).toBe(1);
       expect(other.log).toContain(
@@ -794,6 +806,7 @@ layer(NodeServices.layer)("CI E2E selection", (it) => {
       }
       for (const job of [
         "cloud",
+        "cloud-product",
         "cloud-workers",
         "cloud-locks",
         "cloud-isolate",

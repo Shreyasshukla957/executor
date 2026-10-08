@@ -27,7 +27,7 @@
  * dependency or its patch differently from main, whatever the block says. So does a scenario that
  * guards a file stating a whole contract, such as the host's app protocols, when that file differs.
  * A changed spec file's Cloud scenarios that would otherwise first run on deployed Cloud after
- * merge run in the `cloud` job when managed local Cloud can run them, and are reported otherwise.
+ * merge run in the `cloud-product` job when managed local Cloud can run them, and are reported otherwise.
  *
  * Every run also checks that each scenario the plan schedules runs in CI, in a job here or in
  * Cloud tests on main, unless notRunInCi says why it cannot. That check reads only the job table
@@ -82,7 +82,14 @@ const jobs = {
   cloud: {
     target: "cloud",
     pattern:
-      "Cloud onboarding|Cloud OAuth callbacks|Cloud product events|Cloud feedback|Cloud tracks an unusable OAuth|app query traces|observability retains|browser decode and startup|Browser connection failures explain|optimistic replay failures|private app crash reports|Platform admin impersonation|Cloud reports the framework pin|Cloud deploys fail promptly when the compiler does not answer|refuses every stored state Better Auth refuses|Billing reconciles only while visible|A dashboard read refreshed while in flight|Cloud finishes a slow app's tool listing|Cloud remembers a stalled tool listing|Cloud keeps each JSON Schema definition a tool listing repeats once|definitions share a name and length but not their JSON|definition names are long and of one length|Cloud MCP session objects (?:hold|make)|Cloud MCP request spans say whether|database failure while verifying an API key|Cloud cron wakes the schedule coordinator|Cloud runs a due schedule and requested profile setup while|app evaluation failures explain the likely cause|client request rejections are recorded on their request span|failure text reaches its caller|an app request Executor's network failed to send|MCP tool calls deliver their tool name and outcome|Executor time|Cloud serves a tool listing its isolate cannot keep|Cloud writes the background refresh of a stale tool listing|Owners delete an organization with every app|Hosted MCP negotiates older protocol versions|Hosted MCP ends a cancelled call|Cloud copies each build's browser files|Cloud SSO SAML accepts|Safari reports only the page's own failures|Cloud cron triggers run their jobs|Cloud support dialog lists every channel|Hosted feedback enforces its API contract|Executor's catalog calls an app's own cache methods|Executor app is installed by its request|Request and workflow attempts at one team|remote skill catalog|a skill read without a revision|abandons a GitHub skills load",
+      "Cloud onboarding|Cloud OAuth callbacks|Cloud product events|Cloud feedback|Cloud tracks an unusable OAuth|app query traces|observability retains|browser decode and startup|Browser connection failures explain|optimistic replay failures|private app crash reports|Platform admin impersonation|Cloud reports the framework pin|Cloud deploys fail promptly when the compiler does not answer|refuses every stored state Better Auth refuses|Billing reconciles only while visible|A dashboard read refreshed while in flight|Cloud finishes a slow app's tool listing|Cloud remembers a stalled tool listing|Cloud keeps each JSON Schema definition a tool listing repeats once|definitions share a name and length but not their JSON|definition names are long and of one length|Cloud MCP session objects (?:hold|make)|Cloud MCP request spans say whether|database failure while verifying an API key|Cloud cron wakes the schedule coordinator|Cloud runs a due schedule and requested profile setup while|app evaluation failures explain the likely cause|client request rejections are recorded on their request span|failure text reaches its caller|an app request Executor's network failed to send|MCP tool calls deliver their tool name and outcome|Executor time|Cloud serves a tool listing its isolate cannot keep|Cloud writes the background refresh of a stale tool listing|Owners delete an organization with every app|Hosted MCP negotiates older protocol versions|Hosted MCP ends a cancelled call|Cloud copies each build's browser files",
+  },
+  // The scenarios above share one local Cloud and collector, and their span and latency checks
+  // stall when more scenarios load it. These assert no such bound, so they start their own.
+  "cloud-product": {
+    target: "cloud",
+    pattern:
+      "Cloud SSO SAML accepts|Safari reports only the page's own failures|Cloud cron triggers run their jobs|Cloud support dialog lists every channel|Hosted feedback enforces its API contract|Executor's catalog calls an app's own cache methods|Executor app is installed by its request|Request and workflow attempts at one team|remote skill catalog|a skill read without a revision|abandons a GitHub skills load",
   },
   "cloud-workers": {
     target: "cloud",
@@ -155,7 +162,7 @@ const jobFiles: ReadonlySet<string> = new Set(
 const deployedOnly = [...deployedRuns].filter((title) =>
   jobRuns.every(({ target, titles }) => target !== "cloud" || !titles.has(title)),
 );
-const deployedOnlyJob = "cloud" satisfies keyof typeof jobs;
+const deployedOnlyJob = "cloud-product" satisfies keyof typeof jobs;
 const managedCloud = runs(scenariosForSuite("all", "managed"), "cloud", "");
 
 /**
