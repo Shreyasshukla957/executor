@@ -146,6 +146,12 @@ declare global {
       /** Prefix of v2's connected-account OAuth `state`; `/api/oauth/callback`
        *  requests whose state starts with it go to v2. */
       V2_OAUTH_STATE_PREFIX?: string;
+      /** Root of v2's PostHog browser proxy (`/api/<16 hex>`), which v2's
+       *  marketing pages call on executor.sh; forwarded with its subpaths. */
+      V2_ANALYTICS_PROXY_PATH?: string;
+      /** v2's Sentry browser error tunnel (`/api/<16 hex>/submit`), forwarded
+       *  exactly. */
+      V2_ERROR_TUNNEL_PATH?: string;
 
       // Shared with frontend
       VITE_PUBLIC_SITE_URL?: string;

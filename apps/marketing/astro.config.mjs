@@ -30,6 +30,10 @@ export default defineConfig({
   site: "https://executor.sh",
   output: "server",
   integrations: [react()],
+  // On executor.sh this worker now serves only v1's legal pages; v2's
+  // marketing site owns `/_astro`. Build assets under their own root, which
+  // the cloud edge (apps/cloud/src/edge/marketing.ts) forwards here.
+  build: { assets: "_v1-marketing" },
   vite: {
     plugins: [tailwindcss()],
     define: wranglerPublicDefine(),

@@ -318,8 +318,10 @@ const cloudflareHandler = {
       prewarmAppPlane(ctx);
     }
 
-    // Sign-up, the fixed list of v2 paths and v2's connected-account
-    // callbacks on `executor.sh` go to v2.
+    // On `executor.sh`, v2 answers marketing (including `/docs` and its
+    // telemetry proxies), sign-up, the fixed list of v2 paths and v2's
+    // connected-account callbacks; v1's legal pages stay on v1's marketing
+    // worker.
     const v2 = v2EdgeResponse(request, env);
     if (v2) return v2;
 
@@ -333,6 +335,8 @@ const cloudflareHandler = {
     // first — measured at p50 3.1s on a cold isolate, against p50 33ms for the
     // request's own work, on a Worker where 1,666 dispatches spread across
     // 1,608 isolates (so nearly every request is cold). Forward before Start.
+    // On `executor.sh` v2 answers `/docs` above, so this serves it on other
+    // hosts; v1's own PostHog proxy is served here on every host.
     const passthroughPath = new URL(request.url).pathname;
     const passthrough = passthroughResponse(request, passthroughPath);
     if (passthrough) return passthrough;
