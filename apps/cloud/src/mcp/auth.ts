@@ -50,7 +50,12 @@ const jwks = createCachedRemoteJWKSet(new URL(`${AUTHKIT_DOMAIN}/oauth2/jwks`));
 
 const MCP_PATH = "/mcp";
 export const PROTECTED_RESOURCE_METADATA_PATH = "/.well-known/oauth-protected-resource/mcp";
-export const PROTECTED_RESOURCE_METADATA_URL = `${RESOURCE_ORIGIN}${PROTECTED_RESOURCE_METADATA_PATH}`;
+// The plain `/mcp` challenge names this alias of the bare document instead of
+// the RFC 9728 path-derived one. Executor v2 will own `executor.sh/mcp`'s root
+// discovery documents; a v1 client whose token expired follows this pointer
+// back to v1's authorization server instead of discovering v2's. The leading
+// underscore keeps it out of the org slug grammar and the `org_` id namespace.
+export const V1_PROTECTED_RESOURCE_METADATA_PATH = "/.well-known/oauth-protected-resource/_v1/mcp";
 export const RESOURCE_URL = `${RESOURCE_ORIGIN}${MCP_PATH}`;
 const TOOLKIT_SEGMENT = "/toolkits/";
 
@@ -94,15 +99,19 @@ export const resourceUrlFor = (
     ? `${RESOURCE_ORIGIN}/${organizationSelector}${toolkitMcpPath(toolkitSlug)}`
     : `${RESOURCE_ORIGIN}${toolkitMcpPath(toolkitSlug)}`;
 
-/** The protected-resource-metadata URL for an org selector, or the bare one. */
+/** The protected-resource-metadata URL a challenge names: the org-scoped or
+ *  toolkit document, or the v1 alias of the bare one for plain `/mcp`. */
 export const protectedResourceMetadataUrlFor = (
   organizationSelector: string | null,
   toolkitSlug: string | null = null,
 ): string => {
   const toolkitSuffix = toolkitSlug ? `/toolkits/${toolkitSlug}` : "";
-  return organizationSelector
-    ? `${RESOURCE_ORIGIN}/.well-known/oauth-protected-resource/${organizationSelector}/mcp${toolkitSuffix}`
-    : `${PROTECTED_RESOURCE_METADATA_URL}${toolkitSuffix}`;
+  if (organizationSelector) {
+    return `${RESOURCE_ORIGIN}/.well-known/oauth-protected-resource/${organizationSelector}/mcp${toolkitSuffix}`;
+  }
+  return toolkitSlug
+    ? `${RESOURCE_ORIGIN}${PROTECTED_RESOURCE_METADATA_PATH}${toolkitSuffix}`
+    : `${RESOURCE_ORIGIN}${V1_PROTECTED_RESOURCE_METADATA_PATH}`;
 };
 
 type McpUnauthorizedReason = "missing_bearer" | "invalid_token";

@@ -14,7 +14,11 @@
 
 import { isValidOrgSlug } from "@executor-js/api";
 
-import { MCP_ORGANIZATION_HEADER, PROTECTED_RESOURCE_METADATA_PATH } from "./auth";
+import {
+  MCP_ORGANIZATION_HEADER,
+  PROTECTED_RESOURCE_METADATA_PATH,
+  V1_PROTECTED_RESOURCE_METADATA_PATH,
+} from "./auth";
 
 const MCP_PATH = "/mcp";
 const AUTHORIZATION_SERVER_METADATA_PATH = "/.well-known/oauth-authorization-server";
@@ -71,14 +75,20 @@ const matchMcpSuffix = (segments: readonly string[]): MatchedMcpSuffix | undefin
  * "is this an MCP path?" predicate — under the envelope `HttpRouter.toWebHandler`
  * 404s unknown paths rather than returning `null`, so this gate decides whether
  * to even invoke the envelope handler (null -> fall through to Start routing).
- * Recognizes the bare `/mcp` + the two discovery docs AND their org-scoped
- * variants (`/org_xxx/mcp`, `/.well-known/oauth-protected-resource/org_xxx/mcp`);
+ * Recognizes the bare `/mcp` + the two discovery docs (and the v1 alias of the
+ * protected-resource doc) AND their org-scoped variants (`/org_xxx/mcp`,
+ * `/.well-known/oauth-protected-resource/org_xxx/mcp`);
  * only `org_…`-shaped segments are claimed. `prepareMcpOrgScope` then rewrites an
  * org-scoped path to the bare path the shared envelope actually routes.
  */
 export const classifyMcpPath = (pathname: string): McpRoute => {
   if (pathname === AUTHORIZATION_SERVER_METADATA_PATH) {
     return { kind: "oauth-authorization-server", organizationId: null };
+  }
+  // The v1 alias of the bare document, which plain `/mcp` challenges name. Its
+  // `_v1` segment is never an org selector, so it is matched before them.
+  if (pathname === V1_PROTECTED_RESOURCE_METADATA_PATH) {
+    return { kind: "oauth-protected-resource", organizationId: null };
   }
   const segments = pathname.split("/").filter((segment) => segment.length > 0);
 
