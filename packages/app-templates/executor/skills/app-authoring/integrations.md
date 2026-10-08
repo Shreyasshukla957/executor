@@ -243,8 +243,9 @@ local Node runtime.
 ## OpenAPI APIs
 
 Call `liveOpenapiRouter` from `apps/openapi` with `ctx.cache`, `ctx.fetch`,
-the signal and the selected account. It downloads and compiles the definition
-inside the app, caching each revision; no extra dependency is needed. Pass the
+the signal and the selected account. It returns the router at once, then
+downloads and compiles the definition inside the app when its tools are listed
+or called, caching each revision; no extra dependency is needed. Pass the
 settings the definition cannot be trusted to decide:
 
 - `source`: `{ url }` for a public definition (up to 40 MB), or `{ document }`:

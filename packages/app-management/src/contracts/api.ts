@@ -171,7 +171,10 @@ export const appManagementApi = <I extends HttpApiMiddleware.AnyId, S>(
           params: app,
           success: AppAuthoringMetadata,
           error: appOperationErrors,
-        }),
+        }).annotate(
+          OpenApi.Description,
+          "Read whether you can edit and publish this app, and its Git clone location, without its files. For how to write apps, read the app-authoring skill with the skills tool.",
+        ),
         HttpApiEndpoint.get("source", "/apps/:app/workspace", {
           params: app,
           success: AppSourceView,

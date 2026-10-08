@@ -57,7 +57,13 @@ const Described = Schema.Struct({
       examples: Schema.Array(Schema.String),
     }),
   ),
-  types: Schema.Array(Schema.Struct({ symbol: Schema.String })),
+  types: Schema.Array(
+    Schema.Struct({
+      symbol: Schema.String,
+      source: Schema.String,
+      definition: Schema.optional(Schema.String),
+    }),
+  ),
   examples: Schema.Array(Schema.Struct({ id: Schema.String })),
   matches: Schema.Array(Schema.Struct({ symbol: Schema.String })),
 });
@@ -409,6 +415,39 @@ return { found, described: await tools.search.describe({ paths: found.items.map(
         expect(answered[0]?.types.map((type) => type.symbol)).toContain(
           "apps/mcp.McpCatalogOptions",
         );
+        // A schema an options type names is described even though its module does not export it.
+        expect(
+          described
+            .find((item) => item.symbol === "apps/openapi.OpenapiToolsOptions")
+            ?.types.map((type) => type.symbol),
+        ).toContain("OpenapiParameterDefaults");
+        // AppOperation names the native Approval, which returns an Effect. The public apps.Approval
+        // shares its spelling but returns a value or a Promise, so each links to its own declaration.
+        const operationApprovals = described
+          .find((item) => item.symbol === "AppOperation")
+          ?.types.filter((type) => /(^|\.)Approval(@|$)/.test(type.symbol));
+        expect(
+          operationApprovals?.map(({ symbol, source, definition }) => ({
+            symbol,
+            source,
+            effect: definition?.includes("=> Effect.Effect<ApprovalDecision"),
+          })),
+        ).toEqual([
+          {
+            symbol: "Approval@apps/src/contracts/approval.ts",
+            source: "apps/src/contracts/approval.ts",
+            effect: true,
+          },
+        ]);
+        expect(
+          described
+            .find((item) => item.symbol === "apps.Approval")
+            ?.types.map((type) => type.symbol),
+        ).toContain("Approval@apps/src/contracts/approval.ts");
+        // A callable's links come from the signature TypeScript prints, not from source text.
+        expect(
+          described.find((item) => item.symbol === "apps.query")?.types.map((type) => type.symbol),
+        ).toContain("apps.QueryContext");
       }).pipe(Effect.provide(Layer.mergeAll(McpOAuth.layer, McpClient.layer))),
     ),
   );

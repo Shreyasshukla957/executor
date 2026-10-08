@@ -113,8 +113,9 @@ export default defineApp(requirements, { tools: router({ listProjects }) });
 ```
 
 `accounts.vercel.fields` holds exactly the fields the method declared. The token
-arrives per call, from whichever account the app has selected. Nothing in the
-source names an account, so the same code serves a work app and a personal one.
+arrives per call, from the account the calling
+[profile](/concepts/apps-and-deployments#profile) selected. Nothing in the source
+names an account, so the same code serves a work profile and a personal one.
 
 `decodeJson(response, schema)` checks the HTTP status and parses the body. Use
 `oauth2({ discover: "..." })` instead of `secrets` for a browser sign-in; the
@@ -239,7 +240,6 @@ Handlers read and write through `ctx.sql`, with `?` for values:
 ```ts
 import {
   defineApp,
-  json,
   mutation,
   type MutationContext,
   object,
@@ -250,12 +250,13 @@ import {
 } from "apps";
 
 const requirements = { accounts: {} };
+type Message = { id: string; subject: string };
 
 const list = query(
-  { description: "Recent messages", input: object({ mailbox: string() }), output: json() },
+  { description: "Recent messages", input: object({ mailbox: string() }) },
   async ({ sql }: QueryContext<typeof requirements>, { mailbox }) =>
     sql
-      .exec(
+      .exec<Message>(
         "SELECT id, subject FROM messages WHERE mailbox = ? ORDER BY created_at DESC LIMIT 50",
         mailbox,
       )
@@ -263,15 +264,11 @@ const list = query(
 );
 
 const add = mutation(
-  {
-    description: "Store a message",
-    input: object({ mailbox: string(), subject: string() }),
-    output: json(),
-  },
+  { description: "Store a message", input: object({ mailbox: string(), subject: string() }) },
   async ({ sql }: MutationContext<typeof requirements>, message) =>
     sql
-      .exec(
-        "INSERT INTO messages (id, mailbox, subject, created_at) VALUES (?, ?, ?, ?) RETURNING id",
+      .exec<Message>(
+        "INSERT INTO messages (id, mailbox, subject, created_at) VALUES (?, ?, ?, ?) RETURNING id, subject",
         crypto.randomUUID(),
         message.mailbox,
         message.subject,
@@ -283,8 +280,8 @@ const add = mutation(
 export default defineApp(requirements, { tools: router({ list, add }) });
 ```
 
-Queries get read-only SQL; mutations can write. Each statement commits on its
-own, and `ctx.sql.transaction(...)` groups statements. A transaction is
+`exec<Row>` types the rows it returns. Queries get read-only SQL; mutations can
+write. Each statement commits on its own, and `ctx.sql.transaction(...)` groups statements. A transaction is
 synchronous, so calls to other services always happen between transactions,
 never inside one.
 
@@ -482,8 +479,6 @@ the UI renders. Check the actual page before reporting it as working.
 
 ## What is coming later
 
-- Scheduled and background work.
 - Calling one app from another.
 - Authoring general HTTP endpoints.
-- Stored-data schema migration between deployments.
 - A local `executor dev` loop.

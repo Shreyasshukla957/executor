@@ -7,7 +7,9 @@ description: "Create a personal access token for a script or agent. Tokens use y
 
 Executor API keys are personal access tokens (PATs). A token authenticates as you
 and uses your current permissions in the organization targeted by each request.
-There are no extra permission or tool-selection settings for tokens in v1.
+Tokens have no permission or tool-selection settings of their own. To limit
+what an agent reaches, connect it through a
+[scoped connection](/mcp#scoped-connections) instead.
 
 Tokens belong to your account, not to an organization. They live under
 **Account settings → Tokens** (`/account/tokens`), reached from your avatar menu,
