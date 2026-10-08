@@ -7,11 +7,13 @@
  * apps (one account slot, a provider named `Executor`) on the published beta.9: one untouched,
  * one whose `main` holds an earlier deployment's source, one whose `main` holds the running source
  * under only the framework pin an earlier data step committed before member setup deployed the
- * template over it, one with that pin and another dependency, one with an edit on `main`, and one
- * on beta.10, beside an app with another provider on beta.9. The untouched app is recorded as the
- * organization's default Executor app. A report start writes nothing; an apply start redeploys
- * the three eligible apps with every other file byte for byte, keeps their account and records
- * the default's new deployment; and a later start changes nothing.
+ * template over it, one with that pin and another dependency, one whose `main` holds an earlier
+ * deployment's source under only that pin before a later deploy replaced it, the same with another
+ * edit, one with an edit on `main`, and one on beta.10, beside an app with another provider on
+ * beta.9. The untouched app is recorded as the organization's default Executor app. A report start
+ * writes nothing; an apply start redeploys the four eligible apps with every other file byte for
+ * byte, keeps their account and records the default's new deployment; and a later start changes
+ * nothing.
  */
 import { expect, layer } from "@effect/vitest";
 import { Effect, Schedule, Schema } from "effect";
@@ -177,41 +179,54 @@ layer(HostedLive, { excludeTestServices: true })("Executor app redeploy data ste
             status: "complete",
           });
 
+          /** A profile with an account for `app`'s slot, and its token tool once setup finished. */
+          const connect = (app: App) =>
+            Effect.gen(function* () {
+              const path = `${prefix}/apps/${app.id}`;
+              const profile = yield* createProfile(actors.owner, path);
+              const pending = yield* request("POST", `/apps/${app.id}/connections`, {
+                requirement: "service",
+                profile: profile.id,
+              }).pipe(ok(Resource));
+              const account = (yield* request("POST", `/connections/${pending.id}/submit`, {
+                method: "apiKey",
+                label: "Synthetic",
+                fields: { token },
+              }).pipe(ok(Resource))).id;
+              yield* Effect.addFinalizer(() =>
+                request("DELETE", `/accounts/${account}`).pipe(Effect.ignore),
+              );
+              const call = Effect.gen(function* () {
+                yield* api.request(actors.owner, "GET", `${path}/profiles/${profile.id}`).pipe(
+                  ok(SetupStatus),
+                  Effect.flatMap((current) =>
+                    current.status === "pending"
+                      ? Effect.fail(new Error("Profile setup has not finished"))
+                      : Effect.void,
+                  ),
+                  Effect.retry({ schedule: Schedule.spaced("200 millis"), times: 100 }),
+                );
+                return yield* request("POST", `/apps/${app.id}/tools/call`, {
+                  profile: profile.id,
+                  tool: "token",
+                  kind: "query",
+                  input: {},
+                }).pipe(ok(Schema.String));
+              });
+              /** The profile still selects the same account. */
+              const selected = api
+                .request(actors.owner, "GET", `${path}/profiles/${profile.id}`)
+                .pipe(
+                  ok(Profile),
+                  Effect.map((current) => current.accounts),
+                );
+              return { account, call, selected };
+            });
+
           // Untouched: main holds the running source. It has an account and is the default.
           const untouchedFiles = source("Executor", oldRelease, "untouched");
           const untouched = yield* deploy("Executor untouched", untouchedFiles);
-          const path = `${prefix}/apps/${untouched.id}`;
-          const profile = yield* createProfile(actors.owner, path);
-          const pending = yield* request("POST", `/apps/${untouched.id}/connections`, {
-            requirement: "service",
-            profile: profile.id,
-          }).pipe(ok(Resource));
-          const account = (yield* request("POST", `/connections/${pending.id}/submit`, {
-            method: "apiKey",
-            label: "Synthetic",
-            fields: { token },
-          }).pipe(ok(Resource))).id;
-          yield* Effect.addFinalizer(() =>
-            request("DELETE", `/accounts/${account}`).pipe(Effect.ignore),
-          );
-          /** The token tool, once profile setup for the current deployment has finished. */
-          const call = Effect.gen(function* () {
-            yield* api.request(actors.owner, "GET", `${path}/profiles/${profile.id}`).pipe(
-              ok(SetupStatus),
-              Effect.flatMap((current) =>
-                current.status === "pending"
-                  ? Effect.fail(new Error("Profile setup has not finished"))
-                  : Effect.void,
-              ),
-              Effect.retry({ schedule: Schedule.spaced("200 millis"), times: 100 }),
-            );
-            return yield* request("POST", `/apps/${untouched.id}/tools/call`, {
-              profile: profile.id,
-              tool: "token",
-              kind: "query",
-              input: {},
-            }).pipe(ok(Schema.String));
-          });
+          const { account, call, selected } = yield* connect(untouched);
           expect(yield* call).toBe(token);
 
           // Behind: a direct file deploy replaced the first source, which main still holds.
@@ -237,6 +252,36 @@ layer(HostedLive, { excludeTestServices: true })("Executor app redeploy data ste
             files: pinnedManifest(pinnedEditedFiles, { "left-pad": "1.3.0" }),
             message: "Add a dependency",
           }).pipe(ok(Committed));
+          // Behind and pinned: a pin step committed the then-running source under the framework pin,
+          // and member setup later deployed a newer template from files, which never writes Git.
+          // Those first sources declared no framework; deploys now require one, so the first
+          // deployment declares the old release and the pin commit replaces it, as the pin would add.
+          const behindPinnedFirst = source("Executor", oldRelease, "behind-pinned-first");
+          const behindPinned = yield* deploy("Executor behind pinned", behindPinnedFirst);
+          yield* request("POST", `/apps/${behindPinned.id}/commits`, {
+            expected: (yield* workspace(behindPinned)).revision.commit,
+            files: repinned(behindPinnedFirst, oldRelease, frameworkPinRelease),
+            message: `Pin the apps framework to ${frameworkPinRelease}`,
+          }).pipe(ok(Committed));
+          const behindPinnedFiles = source("Executor", oldRelease, "behind-pinned-deployed");
+          yield* request("POST", `/apps/${behindPinned.id}/deploy`, {
+            files: behindPinnedFiles,
+          }).pipe(ok(Deployed));
+          const behindPinnedAccount = yield* connect(behindPinned);
+          expect(yield* behindPinnedAccount.call).toBe(token);
+          // Behind, pinned and edited: the same, but main also changes another file.
+          const behindEditedFirst = source("Executor", oldRelease, "behind-edited-first");
+          const behindEdited = yield* deploy("Executor behind edited", behindEditedFirst);
+          yield* request("POST", `/apps/${behindEdited.id}/commits`, {
+            expected: (yield* workspace(behindEdited)).revision.commit,
+            files: repinned(behindEditedFirst, oldRelease, frameworkPinRelease).map((file) =>
+              file.path === "README.md" ? { ...file, content: "Edited.\n" } : file,
+            ),
+            message: "Edit the README",
+          }).pipe(ok(Committed));
+          yield* request("POST", `/apps/${behindEdited.id}/deploy`, {
+            files: source("Executor", oldRelease, "behind-edited-deployed"),
+          }).pipe(ok(Deployed));
           // Edited: main holds work that was never deployed.
           const edited = yield* deploy("Executor edited", source("Executor", oldRelease, "first"));
           yield* request("POST", `/apps/${edited.id}/commits`, {
@@ -248,7 +293,17 @@ layer(HostedLive, { excludeTestServices: true })("Executor app redeploy data ste
           const fixed = yield* deploy("Executor fixed", source("Executor", fixedRelease, "fixed"));
           const other = yield* deploy("Other provider", source("Other", oldRelease, "other"));
 
-          const apps = [untouched, behind, pinned, pinnedEdited, edited, fixed, other];
+          const apps = [
+            untouched,
+            behind,
+            pinned,
+            pinnedEdited,
+            behindPinned,
+            behindEdited,
+            edited,
+            fixed,
+            other,
+          ];
           const state = Effect.forEach(apps, (app) =>
             Effect.all({
               deployment: get(app).pipe(Effect.map((current) => current.activeDeployment)),
@@ -269,7 +324,8 @@ layer(HostedLive, { excludeTestServices: true })("Executor app redeploy data ste
             redeploy: 1,
             "redeploy-behind": 1,
             "redeploy-pinned": 1,
-            edited: 2,
+            "redeploy-behind-pinned": 1,
+            edited: 3,
             current: 1 + executorApps,
           });
           expect(yield* state).toEqual(before);
@@ -297,7 +353,8 @@ layer(HostedLive, { excludeTestServices: true })("Executor app redeploy data ste
             redeployed: 1,
             "redeployed-behind": 1,
             "redeployed-pinned": 1,
-            edited: 2,
+            "redeployed-behind-pinned": 1,
+            edited: 3,
             current: 1 + executorApps,
           });
           // Read the recorded default, then restore the organization's own record so member setup
@@ -330,10 +387,7 @@ layer(HostedLive, { excludeTestServices: true })("Executor app redeploy data ste
           expect(declaredApps(yield* running(untouched))).toBe(appsVersion);
           expect(sorted((yield* workspace(untouched)).files)).toEqual(expected);
           expect(yield* call).toBe(token);
-          const selected = yield* api
-            .request(actors.owner, "GET", `${path}/profiles/${profile.id}`)
-            .pipe(ok(Profile));
-          expect(selected.accounts).toEqual({ service: account });
+          expect(yield* selected).toEqual({ service: account });
 
           // Main behind the running source gets the running source with the new pin.
           const behindExpected = sorted(repinned(behindFiles, oldRelease, appsVersion));
@@ -346,9 +400,19 @@ layer(HostedLive, { excludeTestServices: true })("Executor app redeploy data ste
           expect(sorted(yield* running(pinned))).toEqual(pinnedExpected);
           expect(sorted((yield* workspace(pinned)).files)).toEqual(pinnedExpected);
 
+          // Main under the pin on an earlier deployment's source gets the running source with the new
+          // pin; the pin commit stays in its history.
+          const behindPinnedExpected = sorted(repinned(behindPinnedFiles, oldRelease, appsVersion));
+          expect(sorted(yield* running(behindPinned))).toEqual(behindPinnedExpected);
+          expect(sorted((yield* workspace(behindPinned)).files)).toEqual(behindPinnedExpected);
+          expect(yield* behindPinnedAccount.call).toBe(token);
+          expect(yield* behindPinnedAccount.selected).toEqual({
+            service: behindPinnedAccount.account,
+          });
+
           // The edited apps, the app on the fixed release and the other provider's app are untouched.
           const after = yield* state;
-          for (const app of [pinnedEdited, edited, fixed, other])
+          for (const app of [pinnedEdited, behindEdited, edited, fixed, other])
             expect(after[apps.indexOf(app)], app.name).toEqual(before[apps.indexOf(app)]);
           expect(declaredApps(yield* running(other))).toBe(oldRelease);
 
