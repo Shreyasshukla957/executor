@@ -762,7 +762,8 @@ prepared organizations, including those whose tests never start after a failure.
 
 Only scenarios declaring `runtime: "managed"` or `runtime: "rate-limited"` require the local Cloud target
 (for example, local telemetry collectors). Their deployed report says N/A with
-the reason. They remain in local CI. Claude Code's model-dependent scenario is
+the reason. They run only in the Cloud jobs of local CI, so each must match a job pattern in
+`ci-selection.ts`; the `select` job fails on a scheduled scenario that no CI job runs. Claude Code's model-dependent scenario is
 excluded by the deployed runner's default filter. A filter that executes no
 scenarios is a failure. See [test stages](../notes/test-stages.md) for retained
 previews, shared infrastructure, background pause/resume, and cleanup.

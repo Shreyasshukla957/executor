@@ -1331,7 +1331,11 @@ export const scenarios = plan({
     file: "app-framework-upgrade.spec.ts",
     title: "Single-file apps keep their framework across host upgrades",
     targets: {
-      "self-host": scheduled,
+      // #843 added this entry without its spec file; CI's runs on main showed it never ran.
+      "self-host": {
+        status: "not-run",
+        reason: "e2e/tests/app-framework-upgrade.spec.ts does not exist yet.",
+      },
       cloud: na(
         "This scenario restarts the product with another prepared runtime; Cloud shares the Worker compiler and framework storage.",
       ),
@@ -5586,6 +5590,14 @@ const cloudRuntimeReasons = {
   "rate-limited":
     "Requires a managed local Cloud with the per-address auth limit on: e2e:cloud --auth-rate-limit.",
 } as const;
+
+/**
+ * The deployed suite's default `--test-name`, which Cloud tests on main runs after every merge.
+ * Claude Code's scenario needs a model API key. Exhausting the shared compiler can interrupt other
+ * scenarios' builds, so the compiler memory scenario runs alone, by hand (see e2e/README.md).
+ */
+export const deployedSuitePattern =
+  "^(?!.*(?:Claude Code connects|Cloud compiler memory failures))";
 
 /** Hosted parity includes every scenario scheduled on both hosted products. */
 export const scenariosForSuite = (suite: "all" | "hosted", cloudMode: CloudMode = "managed") =>

@@ -26,6 +26,14 @@
  * A scenario that guards a dependency patch also runs whenever the pull request's tree pins that
  * dependency or its patch differently from main, whatever the block says. So does a scenario that
  * guards a file stating a whole contract, such as the host's app protocols, when that file differs.
+ * A changed spec file's Cloud scenarios that would otherwise first run on deployed Cloud after
+ * merge run in the `cloud` job when managed local Cloud can run them, and are reported otherwise.
+ *
+ * Every run also checks that each scenario the plan schedules runs in CI, in a job here or in
+ * Cloud tests on main, unless notRunInCi says why it cannot. That check reads only the job table
+ * here. `node e2e/ci-selection.ts verify <ci|deployed> <directory>` checks after a full run that
+ * those scenarios did execute, from the reports the jobs saved, so a workflow that stops running
+ * one fails on main.
  */
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -43,8 +51,8 @@ import {
 } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { createHash } from "node:crypto";
-import type { Target } from "./report-model.ts";
-import { scenariosForSuite, type CloudMode } from "./test-plan.ts";
+import { Target } from "./report-model.ts";
+import { deployedSuitePattern, scenarios, scenariosForSuite, type CloudMode } from "./test-plan.ts";
 
 class SelectionFailed extends Schema.TaggedError<SelectionFailed>()("SelectionFailed", {
   message: Schema.String,
@@ -74,12 +82,12 @@ const jobs = {
   cloud: {
     target: "cloud",
     pattern:
-      "Cloud onboarding|Cloud OAuth callbacks|Cloud product events|Cloud feedback|Cloud tracks an unusable OAuth|app query traces|observability retains|browser decode and startup|Browser connection failures explain|optimistic replay failures|private app crash reports|Platform admin impersonation|Cloud reports the framework pin|Cloud deploys fail promptly when the compiler does not answer|refuses every stored state Better Auth refuses|Billing reconciles only while visible|A dashboard read refreshed while in flight|Cloud finishes a slow app's tool listing|Cloud remembers a stalled tool listing|Cloud keeps each JSON Schema definition a tool listing repeats once|definitions share a name and length but not their JSON|definition names are long and of one length|Cloud MCP session objects (?:hold|make)|Cloud MCP request spans say whether|database failure while verifying an API key|Cloud cron wakes the schedule coordinator|Cloud runs a due schedule and requested profile setup while|app evaluation failures explain the likely cause|client request rejections are recorded on their request span|failure text reaches its caller|an app request Executor's network failed to send|MCP tool calls deliver their tool name and outcome|Executor time|Cloud serves a tool listing its isolate cannot keep|Cloud writes the background refresh of a stale tool listing|Owners delete an organization with every app|Hosted MCP negotiates older protocol versions|Hosted MCP ends a cancelled call|Cloud copies each build's browser files",
+      "Cloud onboarding|Cloud OAuth callbacks|Cloud product events|Cloud feedback|Cloud tracks an unusable OAuth|app query traces|observability retains|browser decode and startup|Browser connection failures explain|optimistic replay failures|private app crash reports|Platform admin impersonation|Cloud reports the framework pin|Cloud deploys fail promptly when the compiler does not answer|refuses every stored state Better Auth refuses|Billing reconciles only while visible|A dashboard read refreshed while in flight|Cloud finishes a slow app's tool listing|Cloud remembers a stalled tool listing|Cloud keeps each JSON Schema definition a tool listing repeats once|definitions share a name and length but not their JSON|definition names are long and of one length|Cloud MCP session objects (?:hold|make)|Cloud MCP request spans say whether|database failure while verifying an API key|Cloud cron wakes the schedule coordinator|Cloud runs a due schedule and requested profile setup while|app evaluation failures explain the likely cause|client request rejections are recorded on their request span|failure text reaches its caller|an app request Executor's network failed to send|MCP tool calls deliver their tool name and outcome|Executor time|Cloud serves a tool listing its isolate cannot keep|Cloud writes the background refresh of a stale tool listing|Owners delete an organization with every app|Hosted MCP negotiates older protocol versions|Hosted MCP ends a cancelled call|Cloud copies each build's browser files|Cloud SSO SAML accepts|Safari reports only the page's own failures|Cloud cron triggers run their jobs|Cloud support dialog lists every channel|Hosted feedback enforces its API contract|Executor's catalog calls an app's own cache methods|Executor app is installed by its request|Request and workflow attempts at one team|remote skill catalog|a skill read without a revision|abandons a GitHub skills load",
   },
   "cloud-workers": {
     target: "cloud",
     pattern:
-      "app Workers stay loaded across credential rotation|workflow runs reuse the app Worker|warm app calls load no build|Cold app Workers reuse a build",
+      "app Workers stay loaded across credential rotation|workflow runs reuse the app Worker|warm app calls load no build|Cold app Workers reuse a build|a cold app Worker receives only the modules|Cold app Workers read their build in the runner|A cold app load links its small build record|Apps on the same apps release store its framework|Builds on two apps releases each link",
   },
   // These hold row locks in the shared Cloud database, which would stall other scenarios' SQL.
   // Removal recovery also needs the alarm and the removal job to itself while it holds one.
@@ -110,18 +118,229 @@ const specFiles: ReadonlySet<string> = new Set(
   scenariosForSuite("all").map((scenario) => scenario.file),
 );
 const escape = (title: string) => title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-/** Spec files with a scenario that one of these jobs runs on a full run. */
-const jobFiles: ReadonlySet<string> = new Set(
-  Object.values(jobs).flatMap((job) =>
-    planFor(job)
+/** The titles of the scenarios a plan schedules on a target whose title a pattern matches. */
+const runs = (
+  plan: ReturnType<typeof scenariosForSuite>,
+  target: typeof Target.Type,
+  pattern: string,
+): ReadonlySet<string> =>
+  new Set(
+    plan
       .filter(
         (scenario) =>
-          scenario.targets[job.target].status === "scheduled" &&
-          new RegExp(job.pattern).test(scenario.title),
+          scenario.targets[target].status === "scheduled" &&
+          new RegExp(pattern).test(scenario.title),
       )
-      .map((scenario) => scenario.file),
-  ),
+      .map((scenario) => scenario.title),
+  );
+/** Each job's scenarios on a full run, as the job's target runs them. */
+const jobRuns = Object.entries(jobs).map(([name, job]) => ({
+  name,
+  target: job.target,
+  titles: runs(planFor(job), job.target, job.pattern),
+}));
+/** Cloud scenarios Cloud tests on main runs against a deployed stage after every merge. */
+const deployedRuns = runs(scenariosForSuite("all", "attached"), "cloud", deployedSuitePattern);
+const fileOf: ReadonlyMap<string, string> = new Map(
+  Object.values(scenarios).map((scenario) => [scenario.title, scenario.file]),
 );
+/** Spec files with a scenario that one of these jobs runs on a full run. */
+const jobFiles: ReadonlySet<string> = new Set(
+  jobRuns.flatMap(({ titles }) => [...titles].map((title) => fileOf.get(title)!)),
+);
+/**
+ * Cloud scenarios that run only on deployed Cloud after merge, for a pull request that changes
+ * them. The `cloud` job runs those its managed local Cloud can run; the others are reported.
+ */
+const deployedOnly = [...deployedRuns].filter((title) =>
+  jobRuns.every(({ target, titles }) => target !== "cloud" || !titles.has(title)),
+);
+const deployedOnlyJob = "cloud" satisfies keyof typeof jobs;
+const managedCloud = runs(scenariosForSuite("all", "managed"), "cloud", "");
+
+/**
+ * Scheduled scenarios that no CI job runs on a target, and why. Every other scenario a target
+ * schedules must run in a job here or in Cloud tests on main: a scenario nothing runs goes stale
+ * without anyone noticing, as Cloud SSO and browser error provenance did.
+ */
+const notRunInCi: Partial<
+  Record<
+    keyof typeof scenarios,
+    { readonly targets: ReadonlyArray<typeof Target.Type>; readonly reason: string }
+  >
+> = {
+  mcp: {
+    targets: ["self-host", "cloud"],
+    reason: "Needs a model API key, which CI does not hold.",
+  },
+  localMcp: { targets: ["local"], reason: "Needs a model API key, which CI does not hold." },
+  profilePicker: {
+    targets: ["self-host"],
+    reason:
+      "Flaky on the self-host job until https://github.com/UsefulSoftwareCo/executor-next/issues/1743 is fixed. Cloud tests on main runs it on Cloud.",
+  },
+  // These never ran in CI until the coverage check, and fail on managed local Cloud. Each moves
+  // into its job's pattern once it passes.
+  cloudSsoOidc: {
+    targets: ["cloud"],
+    reason:
+      "Fails on managed local Cloud: times out at 60 s (https://github.com/UsefulSoftwareCo/executor-next/actions/runs/37728676598).",
+  },
+  dynamicSkills: {
+    targets: ["cloud"],
+    reason:
+      "Fails on managed local Cloud: the Skills tab says the app source could not be saved or loaded (https://github.com/UsefulSoftwareCo/executor-next/actions/runs/37728676598).",
+  },
+  serverRenderedSkills: {
+    targets: ["cloud"],
+    reason:
+      "Fails on managed local Cloud: the Skills tab says the app source could not be saved or loaded (https://github.com/UsefulSoftwareCo/executor-next/actions/runs/37728676598).",
+  },
+  appWorkerAttribution: {
+    targets: ["cloud"],
+    reason:
+      "Fails on managed local Cloud: no attributed invocation arrives (https://github.com/UsefulSoftwareCo/executor-next/actions/runs/37728676598).",
+  },
+  browserErrorProvenance: {
+    targets: ["cloud"],
+    reason:
+      "Flaky on managed local Cloud: the dashboard sometimes renders without the resource read it breaks, so no Retry appears (passed in https://github.com/UsefulSoftwareCo/executor-next/actions/runs/37728676598, failed in https://github.com/UsefulSoftwareCo/executor-next/actions/runs/37729728401).",
+  },
+  cloudCompilerMemory: {
+    targets: ["cloud"],
+    reason:
+      "Exhausting the shared compiler can interrupt other scenarios' builds, so it runs alone, by hand: bun run e2e:deployed --test-name 'Cloud compiler memory failures' --workers 1.",
+  },
+};
+
+/** What runs a scenario on a target in CI, for the coverage check. */
+const ciRuns = (title: string, target: typeof Target.Type) => [
+  ...jobRuns
+    .filter((job) => job.target === target && job.titles.has(title))
+    .map(({ name }) => `the ${name} job`),
+  ...(target === "cloud" && deployedRuns.has(title) ? ["Cloud tests on main"] : []),
+];
+
+/** Scheduled scenarios no CI path runs, and notRunInCi entries that no longer name such a gap. */
+const coverageProblems = () => {
+  const problems: Array<string> = [];
+  for (const [key, scenario] of Object.entries(scenarios)) {
+    const exception = notRunInCi[key as keyof typeof scenarios];
+    for (const target of ["local", "self-host", "cloud"] as const) {
+      const excepted = exception?.targets.includes(target) === true;
+      const scheduled = scenario.targets[target].status === "scheduled";
+      const paths = scheduled ? ciRuns(scenario.title, target) : [];
+      const where = `scenarios.${key} (${scenario.file}) on ${target}`;
+      if (scheduled && paths.length === 0 && !excepted)
+        problems.push(`- ${where}: "${scenario.title}" is scheduled, but no CI job runs it.`);
+      else if (excepted && !scheduled)
+        problems.push(`- ${where} is in notRunInCi, but the plan does not schedule it there.`);
+      else if (excepted && paths.length > 0)
+        problems.push(`- ${where} is in notRunInCi, but ${paths.join(" and ")} runs it.`);
+    }
+  }
+  return problems;
+};
+
+/** The part of Vitest's JSON report that says which tests ran and how they ended. */
+const Results = Schema.fromJsonString(
+  Schema.Struct({
+    testResults: Schema.Array(
+      Schema.Struct({
+        name: Schema.String,
+        assertionResults: Schema.Array(
+          Schema.Struct({ title: Schema.String, status: Schema.String }),
+        ),
+      }),
+    ),
+  }),
+);
+const pair = (target: typeof Target.Type, file: string, title: string) =>
+  `${target}\0${file}\0${title}`;
+
+/**
+ * The scenarios the runs saved under `directory` executed, passed or failed, as `pair` keys. A
+ * run saves Vitest's report in <target>/report/diagnostics/results.json (see e2e/sdk/suite.ts). A
+ * test the run filtered out or skipped did not execute.
+ */
+const executed = (directory: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const ran = new Set<string>();
+    const reports = (yield* fs.exists(directory))
+      ? (yield* fs.readDirectory(directory, { recursive: true })).filter(
+          (file) => path.basename(file) === "results.json",
+        )
+      : [];
+    for (const report of reports) {
+      const name = path.basename(path.join(directory, report, "..", "..", ".."));
+      const target = yield* Schema.decodeUnknownEffect(Target)(name).pipe(
+        Effect.mapError(
+          () =>
+            new SelectionFailed({
+              message: `${report} is not in a run directory named for its target, such as cloud/report/diagnostics/results.json.`,
+            }),
+        ),
+      );
+      const results = yield* fs
+        .readFileString(path.join(directory, report))
+        .pipe(Effect.flatMap(Schema.decodeUnknownEffect(Results)));
+      for (const file of results.testResults)
+        for (const test of file.assertionResults)
+          if (test.status === "passed" || test.status === "failed")
+            ran.add(pair(target, path.basename(file.name), test.title));
+    }
+    return ran;
+  });
+
+/**
+ * Which scheduled scenarios a full run did not execute, from the reports its jobs saved under
+ * `directory`. For `ci` these are the scenarios each job here runs on a full run; for `deployed`,
+ * those Cloud tests on main runs. A job, step or workflow that was skipped, cancelled, disabled or
+ * never started saves no report, so its scenarios count as not run, however the workflow skipped it.
+ */
+const verify = (suite: string | undefined, directory: string | undefined) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    if ((suite !== "ci" && suite !== "deployed") || directory === undefined)
+      return yield* new SelectionFailed({
+        message: "Usage: node e2e/ci-selection.ts verify <ci|deployed> <directory of saved runs>",
+      });
+    const ran = yield* executed(directory);
+    const paths =
+      suite === "ci"
+        ? jobRuns.map(({ name, target, titles }) => ({ name: `the ${name} job`, target, titles }))
+        : [{ name: "Cloud tests on main", target: "cloud" as const, titles: deployedRuns }];
+    const problems: Array<string> = [];
+    let expected = 0;
+    for (const { name, target, titles } of paths) {
+      expected += titles.size;
+      const missing = [...titles].filter(
+        (title) => !ran.has(pair(target, fileOf.get(title)!, title)),
+      );
+      if (missing.length > 0)
+        problems.push(
+          `- ${name} on ${target}: ${missing.length} of ${titles.size} scenarios did not run: ${missing
+            .slice(0, 10)
+            .map((title) => `${fileOf.get(title)}: "${title}"`)
+            .join("; ")}${missing.length > 10 ? `; and ${missing.length - 10} more` : ""}.`,
+        );
+    }
+    if (problems.length > 0)
+      return yield* new SelectionFailed({
+        message: [
+          `A full run must execute every scheduled scenario that e2e/ci-selection.ts counts as run in CI, passed or failed. These saved no result in ${directory}:`,
+          ...problems,
+          "A job or step that was skipped, cancelled or never started saves no result. Check this run's jobs. If a scenario cannot run in CI, list it in notRunInCi in e2e/ci-selection.ts with the reason.",
+        ].join("\n"),
+      });
+    const report = `## E2E coverage\n\nEvery one of the ${expected} scenario runs ${suite === "ci" ? "the jobs here schedule" : "Cloud tests on main schedules"} executed. ${Object.keys(notRunInCi).length} scenarios are in notRunInCi.\n`;
+    yield* Console.log(report);
+    const summary = yield* Config.String("GITHUB_STEP_SUMMARY").pipe(Config.option);
+    if (Option.isSome(summary))
+      yield* fs.writeFileString(summary.value, `${report}\n`, { flag: "a" });
+  });
 
 /**
  * Bun applies a patch only while its selector names the installed version, and applies hunks that
@@ -131,7 +350,11 @@ const jobFiles: ReadonlySet<string> = new Set(
  */
 const patchGuards: Readonly<Record<string, ReadonlyArray<string>>> = {
   "@opencode-ai/codemode": ["mcp-catalog.spec.ts"],
-  effect: ["mcp-telemetry-privacy.spec.ts", "mcp-protocol-versions.spec.ts"],
+  effect: [
+    "mcp-telemetry-privacy.spec.ts",
+    "mcp-protocol-versions.spec.ts",
+    "cloud-mcp-session-timing.spec.ts",
+  ],
 };
 
 const Manifest = Schema.fromJsonString(
@@ -328,7 +551,9 @@ const separateSuites = Effect.gen(function* () {
 /** Where a spec file these jobs never run does run, for the failure message. */
 const runsElsewhere = (file: string, suite: Suite | undefined) => {
   if (suite === undefined)
-    return `- ${file}: these jobs exclude all of its scenarios (see the job patterns in e2e/ci-selection.ts).`;
+    return [...deployedRuns].some((title) => fileOf.get(title) === file)
+      ? `- ${file}: only Cloud tests on main runs its scenarios, on a deployed stage after merge. A pull request that changes the file runs those managed local Cloud can run in the ${deployedOnlyJob} job.`
+      : `- ${file}: these jobs exclude all of its scenarios (see the job patterns in e2e/ci-selection.ts).`;
   const command = suite.commands[0] ?? `bunx vitest run --config ${suite.config}`;
   return suite.workflows.length === 0
     ? `- ${file} runs only by hand, with ${suite.config}: ${command}. No workflow runs it.`
@@ -490,9 +715,14 @@ const requested = (parsed: Requested, retry: string) =>
  * The spec files the e2e block names, each written as its name in e2e/tests/ with an optional
  * `e2e/tests/` prefix. A name is compared as written, so `./groups.spec.ts` or a path that leaves
  * e2e/tests/ is not a spec file. A spec file a separate config runs fails too, with where it does
- * run: naming it would test nothing here.
+ * run: naming it would test nothing here. So does a spec file only deployed Cloud runs, unless the
+ * pull request changes it and the cloud job therefore runs its scenarios.
  */
-const checkNamed = (tokens: ReadonlyArray<string>, suites: ReadonlyMap<string, Suite>) =>
+const checkNamed = (
+  tokens: ReadonlyArray<string>,
+  suites: ReadonlyMap<string, Suite>,
+  changedDeployedOnly: ReadonlySet<string>,
+) =>
   Effect.gen(function* () {
     const named = tokens.map((token) => token.replace(/^e2e\/tests\//, ""));
     const unknown = tokens.filter(
@@ -502,7 +732,7 @@ const checkNamed = (tokens: ReadonlyArray<string>, suites: ReadonlyMap<string, S
       return yield* new SelectionFailed({
         message: `The e2e block names files that are not spec files in e2e/tests/: ${unknown.map((token) => `"${token}"`).join(", ")}. Write each name as it appears in e2e/tests/, such as groups.spec.ts. A new spec file needs its scenarios in e2e/test-plan.ts.`,
       });
-    const elsewhere = named.filter((file) => !jobFiles.has(file));
+    const elsewhere = named.filter((file) => !jobFiles.has(file) && !changedDeployedOnly.has(file));
     if (elsewhere.length > 0)
       return yield* new SelectionFailed({
         message: [
@@ -516,6 +746,8 @@ const checkNamed = (tokens: ReadonlyArray<string>, suites: ReadonlyMap<string, S
 
 NodeRuntime.runMain(
   Effect.gen(function* () {
+    const [command, ...args] = process.argv.slice(2);
+    if (command === "verify") return yield* verify(args[0], args[1]);
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const pullRequest = yield* Config.String("E2E_PULL_REQUEST").pipe(Config.withDefault(""));
@@ -561,6 +793,15 @@ NodeRuntime.runMain(
         yield* fs.writeFileString(summary.value, `${report}\n`, { flag: "a" });
       return;
     }
+    const uncovered = coverageProblems();
+    if (uncovered.length > 0)
+      return yield* new SelectionFailed({
+        message: [
+          "Every scenario e2e/test-plan.ts schedules must run in CI, or it goes stale without anyone noticing:",
+          ...uncovered,
+          'Add a scenario to a job pattern in e2e/ci-selection.ts; a Cloud scenario without runtime "managed" or "rate-limited" runs in Cloud tests on main. Otherwise mark the target not-run with its reason in e2e/test-plan.ts, or add it to notRunInCi in e2e/ci-selection.ts with why no CI job runs it.',
+        ].join("\n"),
+      });
     const changed =
       read === undefined
         ? ""
@@ -572,7 +813,6 @@ NodeRuntime.runMain(
             ".[].filename",
           ]);
     const suites = yield* separateSuites;
-    const named = Array.isArray(block) ? yield* checkNamed(block, suites) : block;
     // The pull request files list holds the new name of a renamed file and the old name of a
     // deleted one, so a changed name that no plan or config knows is a file nothing would run.
     const changedSpecs = changed
@@ -588,8 +828,25 @@ NodeRuntime.runMain(
       return yield* new SelectionFailed({
         message: `No CI job runs these spec files, because neither e2e/test-plan.ts nor an e2e/*.config.ts includes them: ${unregistered.join(", ")}. Add their scenarios to e2e/test-plan.ts.`,
       });
+    // A changed scenario that would otherwise first run on deployed Cloud after merge runs in the
+    // cloud job when managed local Cloud can run it. The rest only deployed Cloud can run.
+    const changedDeployedOnly = deployedOnly.filter((title) =>
+      changedSpecs.includes(fileOf.get(title)!),
+    );
+    const deployedOnlyRun = new Set(changedDeployedOnly.filter((title) => managedCloud.has(title)));
+    const deployedOnlyUnrun = changedDeployedOnly.filter((title) => !deployedOnlyRun.has(title));
+    const named = Array.isArray(block)
+      ? yield* checkNamed(
+          block,
+          suites,
+          new Set([...deployedOnlyRun].map((title) => fileOf.get(title)!)),
+        )
+      : block;
     const changedElsewhere = changedSpecs.filter(
-      (file) => (specFiles.has(file) || suites.has(file)) && !jobFiles.has(file),
+      (file) =>
+        (specFiles.has(file) || suites.has(file)) &&
+        !jobFiles.has(file) &&
+        ![...deployedOnlyRun].some((title) => fileOf.get(title) === file),
     );
     // Main's pinned dependencies and patches: patch guard scenarios run when they differ. The
     // workflow names the default branch; without it there is no main to compare with.
@@ -629,27 +886,38 @@ NodeRuntime.runMain(
             ...guarded,
             ...guardedByFile,
             ...changedSpecs.filter((file) => jobFiles.has(file)),
+            ...[...deployedOnlyRun].map((title) => fileOf.get(title)!),
           ]);
 
     const selections = Object.entries(jobs).map(([job, definition]) => {
       const { target, pattern } = definition;
       const base = new RegExp(pattern);
+      const extra = job === deployedOnlyJob ? deployedOnlyRun : new Set<string>();
       const titles = planFor(definition)
         .filter(
           (scenario) =>
             scenario.targets[target].status === "scheduled" &&
-            base.test(scenario.title) &&
-            (files === undefined || files.has(scenario.file)),
+            ((base.test(scenario.title) && (files === undefined || files.has(scenario.file))) ||
+              extra.has(scenario.title)),
         )
         .map((scenario) => scenario.title);
+      const added = titles.filter((title) => !base.test(title));
       const selected =
         titles.length === 0
           ? ""
           : files === undefined
-            ? pattern
+            ? added.length === 0
+              ? pattern
+              : `${pattern}|^(?:${added.map(escape).join("|")})$`
             : `^(?:${titles.map(escape).join("|")})$`;
       return { job, count: titles.length, selected };
     });
+    // GitHub shows these on the pull request's checks, where a summary line is easy to miss.
+    const deployedOnlyCommand = `bun run e2e:deployed --test-name '^(?:${deployedOnlyUnrun.map(escape).join("|")})$'`;
+    for (const title of deployedOnlyUnrun)
+      yield* Console.log(
+        `::warning title=Runs only on deployed Cloud after merge::${fileOf.get(title)}: "${title}" changed, but only a deployed stage can run it. Run it before merging: ${deployedOnlyCommand}`,
+      );
 
     const lines = selections.map(({ job, selected }) => `${job}=${selected}`).join("\n");
     const report = [
@@ -668,6 +936,23 @@ NodeRuntime.runMain(
             "",
             "Changed spec files these jobs do not run:",
             ...changedElsewhere.sort().map((file) => runsElsewhere(file, suites.get(file))),
+          ]),
+      ...(deployedOnlyRun.size === 0
+        ? []
+        : [
+            "",
+            `Changed Cloud scenarios that otherwise run only on deployed Cloud after merge run in the ${deployedOnlyJob} job:`,
+            ...[...deployedOnlyRun].sort().map((title) => `- ${fileOf.get(title)}: ${title}`),
+          ]),
+      ...(deployedOnlyUnrun.length === 0
+        ? []
+        : [
+            "",
+            "Changed Cloud scenarios that only a deployed stage can run, so CI first runs them in Cloud tests on main, after merge. Run them before merging:",
+            "",
+            `    ${deployedOnlyCommand}`,
+            "",
+            ...deployedOnlyUnrun.sort().map((title) => `- ${fileOf.get(title)}: ${title}`),
           ]),
       ...(guarded.length === 0
         ? []

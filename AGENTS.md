@@ -139,12 +139,24 @@ differently from main (`patchGuards` in `e2e/ci-selection.ts`): Bun skips a stal
 patch without an error. So are the scenarios that assert a contract one file states in
 full when the tree's copy differs from main's (`fileGuards`): a new host protocol in
 `app-protocols.ts` runs `app-package.spec.ts`, which reads back the supported list.
-Write `none` for a change no scenario exercises, such as documentation. Write each name as it appears in
+A changed spec file's Cloud scenarios that otherwise first run in Cloud tests on main, after
+merge, run in the `cloud` job when managed local Cloud can run them. The ones that need a
+deployed stage (`runtime: "attached"`) get a warning with the `e2e:deployed` command that runs
+them; run it before merging. Write `none` for a change no scenario exercises, such as documentation. Write each name as it appears in
 `e2e/tests/`, optionally prefixed with `e2e/tests/`. The `select` job fails when the
 description has no block, a name is not a spec file there, or a named file is one these
 jobs never run: the release, desktop, billing and PGlite suites have their own
 `e2e/*.config.ts`, and the failure names the workflow or command that runs each one.
 A new spec file must have its scenarios in `e2e/test-plan.ts` or be included by such a config.
+Every scenario the plan schedules on a target must run in CI: in one of these jobs, or, for a
+Cloud scenario without `runtime: "managed"` or `"rate-limited"`, in Cloud tests on main. The
+`select` job fails on a scenario nothing runs, because it goes stale unnoticed. Add it to a job
+pattern, mark the target `not-run` with its reason, or add it to `notRunInCi` in
+`e2e/ci-selection.ts` with why CI cannot run it. That check reads only the job table. After a
+full run, on pushes to main and manual runs, `e2e-coverage` in CI and `deployed-coverage` in
+Cloud tests on main check from the jobs' saved reports that each of those scenarios executed,
+passed or failed, so a job or step the workflow skipped fails there. `e2e-coverage` also fails a
+push to main that did not start Cloud tests on main.
 
 Select specific files by default. A selection finishes in about five minutes; the full
 suite takes about fifteen and holds the runners other PRs wait for. Reserve `all` for
@@ -238,7 +250,9 @@ scenarios on Linux instead of moving them to a Mac.
   competing with the functional job's product servers.
 - `e2e-cloud` runs Cloud onboarding, delivered observability, MCP tool-call privacy, client rejection and app evaluation
   incident reporting, bearer refusal, billing polling, MCP session object database connection,
-  API-key storage outage and supervisor-kept tool listing scenarios; the refusal scenario writes stored rows into the runner-owned
+  API-key storage outage, supervisor-kept tool listing, Cloud SSO SAML, Safari error provenance, remote skill
+  cache, team installation and app Worker build load scenarios: every scenario that needs managed local
+  Cloud, except those `notRunInCi` lists as failing there. The refusal scenario writes stored rows into the runner-owned
   Postgres. It starts the local Cloud Worker, a throwaway Postgres container and the service
   emulators, so it needs Docker but no credentials. Scenarios that hold row locks to pause the
   server's own statements get a second local Cloud, so their locks cannot stall other scenarios.

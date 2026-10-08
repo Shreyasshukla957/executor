@@ -5,13 +5,12 @@ import { Effect, Layer } from "effect";
 import { Command, Flag } from "effect/cli";
 import { FetchHttpClient } from "effect/http";
 import { runDeployedSuite } from "./sdk/deployed-suite.ts";
+import { deployedSuitePattern } from "./test-plan.ts";
 const command = Command.make(
   "e2e-deployed",
   {
     database: Flag.Literals("database", ["neon", "planetscale"]).pipe(Flag.withDefault("neon")),
-    name: Flag.String("test-name").pipe(
-      Flag.withDefault("^(?!.*(?:Claude Code connects|Cloud compiler memory failures))"),
-    ),
+    name: Flag.String("test-name").pipe(Flag.withDefault(deployedSuitePattern)),
     workers: Flag.Int("workers").pipe(Flag.withDefault(16)),
   },
   runDeployedSuite,
