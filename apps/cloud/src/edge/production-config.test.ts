@@ -35,10 +35,10 @@ const shipped: V2EdgeEnv = {
 };
 
 describe("production v2 edge settings", () => {
-  it("binds V2 to exactly one Worker", () => {
+  it("binds V2 to the unplaced marketing gateway", () => {
     const bindings = config.services.filter((service) => service.binding === "V2");
     expect(bindings).toHaveLength(1);
-    expect(bindings[0]?.service).toMatch(/^[a-z0-9-]+$/);
+    expect(bindings[0]?.service).toBe("executor-next-marketing-v2");
   });
 
   it("redirects sign-up to v2's sign-up page on app.executor.sh", async () => {
