@@ -181,10 +181,10 @@ function V1Workspace() {
   return (
     <HostedEntry
       title="Your workspace is on Executor v1"
-      description="This email belongs to an organization on Executor v1. Keep using it there."
+      description="We're getting Executor v2 ready for you. Only new users can use it for now. Use the button below to sign in to Executor v1 and keep using it."
     >
       <Button asChild>
-        <a href="https://executor.sh/login">Open Executor v1</a>
+        <a href="https://executor.sh/login">Sign in to Executor v1</a>
       </Button>
     </HostedEntry>
   );
