@@ -134,10 +134,11 @@ const V2_MARKETING_COOKIES: ReadonlyArray<string> = ["executor_visitor"];
 const TELEMETRY_ROOT_PATTERN = /^\/api\/[a-f0-9]{16}$/;
 const TELEMETRY_PATH_SHAPE = /^\/api\/[a-f0-9]{16}(?:\/|$)/;
 
-/** Request headers v1 never passes to v2. The cookie header carries v1's
- *  `wos-session` (v2's cookies are host-only on its own hosts, so nothing of
- *  v2's travels on `executor.sh`). Client-sent forwarding headers are dropped
- *  so v2 sees no host claim other than the request URL's. */
+/** Request headers v1 never passes to v2 as sent. The cookie header carries
+ *  v1's `wos-session`; v2's own cookies are host-only on its own hosts,
+ *  except marketing's visitor cookie, which is passed on by name. Client-sent
+ *  forwarding headers are dropped so v2 sees no host claim other than the
+ *  request URL's. */
 const V2_STRIPPED_HEADERS = ["cookie", "x-forwarded-host", "x-forwarded-proto"] as const;
 
 /**
@@ -146,8 +147,9 @@ const V2_STRIPPED_HEADERS = ["cookie", "x-forwarded-host", "x-forwarded-proto"] 
  * Keeps the URL (so v2 sees host `executor.sh`, path and query unchanged),
  * method, body stream and every header except {@link V2_STRIPPED_HEADERS},
  * including `Authorization`. The cookie header is rebuilt from `keptCookies`
- * only, and dropped when none of them is present. Redirects are returned to the client, not
- * followed: v2 answers callbacks with a redirect to its own host.
+ * only, and dropped when none of them is present. Redirects are returned to
+ * the client, not followed: v2 answers callbacks with a redirect to its own
+ * host.
  */
 export const v2ForwardRequest = (
   request: Request,
