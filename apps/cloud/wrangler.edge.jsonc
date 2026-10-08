@@ -1,0 +1,46 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // The `executor.sh` front Worker (src/edge/front.ts). It answers the
+  // requests v1's edge hands to v2 or to v1's marketing worker where they
+  // land, and passes every other request on to `executor-cloud`, the Worker
+  // on the `executor.sh` Custom Domain. Deployed after `executor-cloud` by
+  // .github/workflows/deploy.yml.
+  "name": "executor-cloud-edge",
+  "compatibility_date": "2025-04-01",
+  "main": "src/edge/front.ts",
+  "workers_dev": false,
+  "preview_urls": false,
+  // A zone route runs before the Custom Domain's Worker; see front.ts.
+  "routes": [
+    {
+      "pattern": "executor.sh/*",
+      "zone_name": "executor.sh",
+    },
+  ],
+  // No `placement`, on purpose: this Worker exists to run where the request
+  // lands. `executor-cloud` stays placed for v1's own requests.
+  "observability": {
+    "enabled": true,
+    "redact_query_string": true,
+  },
+  "logpush": true,
+  // The same Workers and v2 settings as `executor-cloud`'s wrangler.jsonc,
+  // which keeps its own copy of the edge. src/edge/production-config.test.ts
+  // fails when the two differ.
+  "services": [
+    {
+      "binding": "MARKETING",
+      "service": "executor-marketing",
+    },
+    {
+      "binding": "V2",
+      "service": "executor-next-marketing-v2",
+    },
+  ],
+  "vars": {
+    "V2_SIGN_UP_URL": "https://app.executor.sh/login?mode=signup",
+    "V2_OAUTH_STATE_PREFIX": "x2.",
+    "V2_ANALYTICS_PROXY_PATH": "/api/00e2e1f082a6ef17",
+    "V2_ERROR_TUNNEL_PATH": "/api/fd6fab1fbb4883e1/submit",
+  },
+}
