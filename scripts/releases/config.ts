@@ -17,11 +17,11 @@ export {
 export const npmArchiveBudgetBytes = 180 * 1024 * 1024;
 
 /**
- * Native platforms supported by the packaged runtime. Linux and Windows run the full CLI suite
- * against their archives, and CI runs it from source on every push to main. macOS runs only what
- * Linux cannot: the Keychain and desktop checks on arm64. Intel macOS builds under Rosetta on
- * the same Apple Silicon runner and gets a start-up smoke test, since GitHub's Intel runners
- * take most of an hour for the suite and time out on single scenarios.
+ * Native platforms supported by the packaged runtime. The full CLI suite runs against the packaged
+ * archive on linux x64 and on Windows, which no other workflow tests; CI runs it from source on
+ * every push to main. The other targets run only the checks specific to them: the OS credential
+ * store and the desktop app. Intel macOS builds under Rosetta on an Apple Silicon runner and gets
+ * a start-up smoke test, since GitHub's Intel runners take most of an hour for the suite.
  */
 export const platforms = [
   {
@@ -54,7 +54,7 @@ export const platforms = [
   {
     platform: "linux",
     arch: "arm64",
-    cliWorkers: 4,
+    cliWorkers: 0,
     packagedTests: true,
     runner: "blacksmith-16vcpu-ubuntu-2404-arm",
     desktopOs: "linux",
