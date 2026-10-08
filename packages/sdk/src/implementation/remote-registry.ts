@@ -84,6 +84,8 @@ export const remoteRegistry = (origin: string): Registry => {
     }).pipe(
       // Browsers, Node, Bun, and workerd all support "manual"; workerd rejects "error".
       Effect.provideService(FetchHttpClient.RequestInit, { redirect: "manual" }),
+      // Trace headers would make a browser's cross-origin read a preflighted request.
+      Effect.provideService(HttpClient.TracerPropagationEnabled, false),
       Effect.provide(FetchHttpClient.layer),
       Effect.tapError((error) => Effect.annotateCurrentSpan("registry.error.reason", error.reason)),
       Effect.withSpan("registry.request", {

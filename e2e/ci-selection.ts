@@ -97,7 +97,7 @@ const jobs = {
   "cloud-domains": {
     target: "cloud",
     pattern:
-      "cloud role hosts serve only|a grant is for its one resource|role host resource seed|Cloud request spans name the host|Cloud sign-in explains that a passkey|Cloud connected-account sign-ins return through|Cloud serves its site for the edge|Cloud's API host serves the SDK|Cloud's own social sign-ins on app\\.",
+      "cloud role hosts serve only|a grant is for its one resource|role host resource seed|Cloud request spans name the host|Cloud sign-in explains that a passkey|Cloud connected-account sign-ins return through|Cloud serves its site for the edge|Apps directory on the edge reads|Cloud's API host serves the SDK|Cloud's own social sign-ins on app\\.",
   },
   "cloud-workers": {
     target: "cloud",

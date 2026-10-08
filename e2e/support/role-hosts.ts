@@ -52,6 +52,8 @@ export const rawRequest = (url: string, init: RequestInit = {}) => {
           contentType: response.headers.get("content-type"),
           challenge: response.headers.get("www-authenticate"),
           setCookies: response.headers.getSetCookie(),
+          allowOrigin: response.headers.get("access-control-allow-origin"),
+          allowMethods: response.headers.get("access-control-allow-methods"),
           text,
         })),
       ),

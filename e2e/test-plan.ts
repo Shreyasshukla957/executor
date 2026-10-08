@@ -139,6 +139,28 @@ export const scenarios = plan({
       local: na("Local signs the CLI in with an API key."),
     },
   },
+  cloudSiteAppsDirectory: {
+    file: "cloud-site-apps.spec.ts",
+    title:
+      "The site's Apps directory on the edge reads the API host's registry, whose public GETs allow any origin",
+    targets: {
+      cloud: managedCloud,
+      "self-host": na("Self-host does not serve the marketing site."),
+      local: na("Local does not serve the marketing site."),
+    },
+  },
+  cloudSiteAppPublication: {
+    fixtures: "actors",
+    file: "cloud-site-apps.spec.ts",
+    title:
+      "The site's Apps pages on the edge list a publication and show its source from the API host",
+    targets: {
+      // Publishing needs app Git storage, which a local Cloud Worker cannot reach.
+      cloud: { status: "scheduled", runtime: "attached" },
+      "self-host": na("Self-host does not serve the marketing site."),
+      local: na("Local does not serve the marketing site."),
+    },
+  },
   appGitRemotes: {
     fixtures: "actors",
     file: "app-git-remotes.spec.ts",
