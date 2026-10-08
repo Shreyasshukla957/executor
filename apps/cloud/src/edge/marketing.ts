@@ -147,8 +147,8 @@ const V2_MARKETING_COOKIES: ReadonlyArray<string> = ["executor_visitor"];
  *  which v2 pins in its edge contract; v2 refuses to deploy stage `v2` if
  *  its outputs differ:
  *  - `V2_ANALYTICS_PROXY_PATH`, the PostHog browser proxy root (output
- *    `proxyPath` of v2's `executor-next-posthog` stack), forwarded with
- *    everything below it;
+ *    `proxyPath` of v2's `executor-next-posthog` stack), forwarded below
+ *    it (`<root>/*`), not the root itself, which v2 does not serve;
  *  - `V2_ERROR_TUNNEL_PATH`, the Sentry browser error tunnel (output
  *    `browserTunnel` of v2's `executor-next-sentry` stack), forwarded
  *    exactly. */
@@ -282,12 +282,10 @@ export const parseV2Edge = (env: V2EdgeEnv): V2Edge | string | null => {
 const isV2OAuthCallback = (url: URL, prefix: string): boolean =>
   url.searchParams.get("state")?.startsWith(prefix) === true;
 
-/** Whether a pathname is v2's analytics proxy root or below it, or exactly
- *  v2's error tunnel. */
+/** Whether a pathname is below v2's analytics proxy root, or exactly v2's
+ *  error tunnel. */
 const isV2TelemetryPath = (pathname: string, edge: V2Edge): boolean =>
-  matchesPathPattern(pathname, edge.analyticsProxyPath) ||
-  matchesPathPattern(pathname, `${edge.analyticsProxyPath}/*`) ||
-  pathname === edge.errorTunnelPath;
+  matchesPathPattern(pathname, `${edge.analyticsProxyPath}/*`) || pathname === edge.errorTunnelPath;
 
 /**
  * Answer a production request that belongs to v2 and return `null` when v1

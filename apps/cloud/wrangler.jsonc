@@ -159,7 +159,7 @@
     // only together with that contract.
     // PostHog browser proxy root: output `proxyPath` of v2's
     // `executor-next-posthog` stack (apps/hosted/cloud/alchemy.posthog.ts).
-    // Forwarded with everything below it.
+    // Forwarded below it (`<root>/*`), not the root itself.
     "V2_ANALYTICS_PROXY_PATH": "/api/00e2e1f082a6ef17",
     // Sentry browser error tunnel: output `browserTunnel` of v2's
     // `executor-next-sentry` stack (apps/hosted/cloud/alchemy.sentry.ts).
