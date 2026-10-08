@@ -99,10 +99,14 @@ than Bun: after `bun patch --commit`, drop `.bun-tag-*` sections and sections
 whose `b/` path is outside the package, and keep `\ No newline at end of file`
 markers. Its fixtures are in `scripts/check-patches-fixtures.ts`.
 
-The typecheck uses TypeScript 7 (`tsc` is the native Go compiler). `bun install`
-patches it with `@effect/tsgo` in `prepare`, so it also reports the Effect
-language service diagnostics configured in `tsconfig.json`. Effect errors fail
-the typecheck; warnings mark rules with too many existing sites to fix at once.
+The typecheck runs `tsc-rs`, a Rust port of the TypeScript 7 compiler that is
+about twice as fast as Go's `tsc` here and has the Effect language service
+diagnostics built in. It reports the Effect diagnostics configured in
+`tsconfig.json`; it warns that `unstableApiUsage` and `experimentalApiUsage` are
+unknown rules because its Effect rules predate them. Effect errors fail the
+typecheck; warnings mark rules with too many existing sites to fix at once.
+Editors still use TypeScript 7 (`tsc` is the native Go compiler), which
+`bun install` patches with `@effect/tsgo` in `prepare` for the same diagnostics.
 TypeScript 7 has no JavaScript compiler API. The `packages/apps` build scripts
 and `e2e/check-boundary.ts` import TypeScript 5.9 as `typescript-5` for it;
 do not use that package to typecheck.

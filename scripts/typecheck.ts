@@ -1,6 +1,7 @@
 /**
- * Typechecks the TypeScript projects concurrently. Each `tsc` already checks a project on four
- * threads, so the script runs one project per four cores: two on a 4-core CI runner, at most four.
+ * Typechecks the TypeScript projects concurrently. Each `tsc-rs` already checks a project on
+ * several threads, so the script runs one project per four cores: two on a 4-core CI runner, at
+ * most four.
  *
  * Every project runs to completion. Its output is printed in one block when it finishes, and the
  * script exits non-zero when any project fails. A signal stops every running project.
@@ -8,9 +9,6 @@
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { availableParallelism, constants } from "node:os";
-// Fails unless `tsc` is the @effect/tsgo build. It runs here, not as a separate command before
-// this one in `package.json`, so that `bun run typecheck` signals this process directly.
-import "./check-typescript.ts";
 
 type Step = {
   readonly name: string;
@@ -57,7 +55,7 @@ type Result = { readonly name: string; readonly code: number };
 
 // The steps stay in this process group, so a signal or kill sent to the group (Ctrl-C in a
 // terminal, an agent harness's kill) reaches them directly. A signal sent only to this process,
-// as `bun run` forwards it, is passed on to the steps. `tsc` ignores SIGINT and SIGTERM, so a
+// as `bun run` forwards it, is passed on to the steps. `tsc-rs` ignores SIGINT and SIGTERM, so a
 // step that is still running a second later is killed.
 const running = new Set<ChildProcess>();
 let stoppedBy: NodeJS.Signals | undefined;
@@ -99,13 +97,13 @@ const run = (step: Step): Promise<Result> =>
   });
 
 const typecheck = async (project: Project): Promise<Result> => {
-  const name = `tsc -p ${project.path}`;
+  const name = `tsc-rs -p ${project.path}`;
   if (project.needs) {
     const before = await run(project.needs);
     if (before.code !== 0) return { name, code: before.code };
     if (stoppedBy) return { name, code: 1 };
   }
-  return run({ name, command: "tsc", args: ["--noEmit", "-p", project.path] });
+  return run({ name, command: "tsc-rs", args: ["--noEmit", "-p", project.path] });
 };
 
 const started = performance.now();

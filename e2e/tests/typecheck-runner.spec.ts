@@ -1,7 +1,7 @@
 /**
  * `bun run typecheck` runs `node scripts/typecheck.ts`, which runs the TypeScript projects
  * concurrently. These cases copy that entry point into a temporary directory with a fake
- * framework build, put a fake `tsc` first on PATH, and run it through `bun run typecheck` or
+ * framework build, put a fake `tsc-rs` first on PATH, and run it through `bun run typecheck` or
  * `node` directly. They read its piped output, exit code and the processes it leaves behind.
  */
 import { expect, layer } from "@effect/vitest";
@@ -18,17 +18,9 @@ const projects = 9;
  * - `mixed`: every step writes 500 numbered lines to each stream, with stdout lines split
  *   across two writes around a stderr line;
  * - `hang`: records its pid in `$FAKE_STATE/pids` and runs until killed, ignoring SIGINT and
- *   SIGTERM as the real compiler and framework build do;
- * - `unpatched`: `tsc --version` reports a compiler without @effect/tsgo.
+ *   SIGTERM as the real compiler and framework build do.
  */
 const tsc = `#!/bin/sh
-if [ "$1" = --version ]; then
-  case "$FAKE_MODE" in
-    unpatched) echo "Version 7.0.2" ;;
-    *) echo "Version 7.0.2+effect-tsgo.0.48.0" ;;
-  esac
-  exit 0
-fi
 echo "$*" >> "$FAKE_STATE/ran"
 project=$(echo "$*" | sed 's/.* -p //')
 case "$FAKE_MODE" in
@@ -65,13 +57,13 @@ if (process.env.FAKE_MODE === "hang") {
 }
 `;
 
-/** A directory with the repository's `typecheck` script, runner and guard, and the fakes. */
+/** A directory with the repository's `typecheck` script and runner, and the fakes. */
 const fakes = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const bin = yield* fs.makeTempDirectoryScoped({ prefix: "executor-typecheck-bin-" });
-  yield* fs.writeFileString(path.join(bin, "tsc"), tsc);
-  yield* fs.chmod(path.join(bin, "tsc"), 0o755);
+  yield* fs.writeFileString(path.join(bin, "tsc-rs"), tsc);
+  yield* fs.chmod(path.join(bin, "tsc-rs"), 0o755);
   const repo = yield* fs.makeTempDirectoryScoped({ prefix: "executor-typecheck-repo-" });
   const manifest: { readonly scripts: { readonly typecheck: string } } = JSON.parse(
     yield* fs.readFileString("package.json"),
@@ -81,8 +73,7 @@ const fakes = Effect.gen(function* () {
     JSON.stringify({ type: "module", scripts: { typecheck: manifest.scripts.typecheck } }),
   );
   yield* fs.makeDirectory(path.join(repo, "scripts"));
-  for (const file of ["scripts/typecheck.ts", "scripts/check-typescript.ts"])
-    yield* fs.copyFile(file, path.join(repo, file));
+  yield* fs.copyFile("scripts/typecheck.ts", path.join(repo, "scripts/typecheck.ts"));
   yield* fs.makeDirectory(path.join(repo, "apps/hosted/cloud/scripts"), { recursive: true });
   yield* fs.writeFileString(
     path.join(repo, "apps/hosted/cloud/scripts/build-framework.ts"),
@@ -95,7 +86,7 @@ type Fakes = Effect.Success<typeof fakes>;
 
 const typecheck = (input: {
   readonly fakes: Fakes;
-  readonly mode: "long" | "mixed" | "hang" | "unpatched";
+  readonly mode: "long" | "mixed" | "hang";
   readonly concurrency: string | undefined;
   /** `bun run typecheck`, or the runner without `bun` in front of it. */
   readonly entry?: "bun" | "node";
@@ -241,15 +232,6 @@ layer(NodeServices.layer, { excludeTestServices: true })("Parallel typecheck run
     }).pipe(Effect.scoped),
   );
 
-  it.effect("a compiler without @effect/tsgo fails before any project runs", () =>
-    Effect.gen(function* () {
-      const run = yield* typecheck({ fakes: yield* fakes, mode: "unpatched", concurrency: "4" });
-      expect(run.exitCode).toBe(1);
-      expect(run.stderr).toContain("Version 7.0.2 is not patched with @effect/tsgo");
-      expect(run.ran).toEqual([]);
-    }).pipe(Effect.scoped),
-  );
-
   it.effect("every line of a long failing project and the summary reach a pipe", () =>
     Effect.gen(function* () {
       const files = yield* fakes;
@@ -266,10 +248,10 @@ layer(NodeServices.layer, { excludeTestServices: true })("Parallel typecheck run
         expect(run.ran, label).toHaveLength(projects + 1);
         expect(diagnostics, label).toHaveLength(lines);
         expect(diagnostics.at(-1), label).toBe(`diagnostic ${lines}`);
-        expect(run.stdout, label).toMatch(/^── tsc -p apps\/docs: failed \(exit 2\) in /m);
+        expect(run.stdout, label).toMatch(/^── tsc-rs -p apps\/docs: failed \(exit 2\) in /m);
         expect(run.stdout, label).toMatch(
           new RegExp(
-            `^Typechecked ${projects} of ${projects} projects .* Failed: tsc -p apps/docs\\.$`,
+            `^Typechecked ${projects} of ${projects} projects .* Failed: tsc-rs -p apps/docs\\.$`,
             "m",
           ),
         );
