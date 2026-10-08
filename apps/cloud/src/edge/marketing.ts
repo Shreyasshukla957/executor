@@ -5,9 +5,9 @@
 //  - marketing paths and the unauthenticated landing page go to the separate
 //    `executor-marketing` worker;
 //  - sign-up goes to v2 (a redirect to v2's sign-up page);
-//  - a fixed list of exact v2 paths (sign-in issuer metadata, social sign-in
-//    callbacks, the OAuth client metadata document, Git smart HTTP and the
-//    agent skills index) is forwarded to v2's Worker over a service binding.
+//  - a fixed list of v2 paths (sign-in issuer metadata, social sign-in
+//    callbacks, Git smart HTTP and the agent skills index) is forwarded to
+//    v2's Worker over a service binding.
 // v1 owns everything not listed. This module deliberately has no TanStack
 // Start or cloud application imports: the Worker entry calls it before
 // loading the Start server graph.
@@ -67,19 +67,21 @@ export const marketingProxyRequest = (request: Request): Request | null => {
 
 const SIGN_UP_PATHS: ReadonlySet<string> = new Set(["/sign-up", "/signup"]);
 
-/** Paths v2 answers on `executor.sh`, matched exactly. */
-const V2_EXACT_PATHS: ReadonlySet<string> = new Set([
+/** A path pattern is an exact path, or `/x/*`, which matches every path
+ *  that starts with `/x/` (and not `/x` itself). */
+const matchesPathPattern = (pathname: string, pattern: string): boolean =>
+  pattern.endsWith("/*") ? pathname.startsWith(pattern.slice(0, -1)) : pathname === pattern;
+
+/** Path patterns v2 answers on `executor.sh`. `/git/*` never matches
+ *  `/gitlab/...`. v2's outbound OAuth client metadata document stays off this
+ *  list: its move to `executor.sh` is pending, and v1's own document
+ *  (`/oauth/client-id-metadata.json`) stays with v1. */
+const V2_PATHS: ReadonlyArray<string> = [
   // Sign-in issuer metadata for the issuer `https://executor.sh/api/auth`.
   "/.well-known/oauth-authorization-server/api/auth",
-  "/api/auth/.well-known/openid-configuration",
-  // Outbound OAuth client metadata document. v1's own document lives at
-  // `/oauth/client-id-metadata.json`, which stays with v1.
-  "/oauth/client-metadata.json",
-]);
-
-/** Path trees v2 answers on `executor.sh`. Each prefix ends in `/`, so
- *  `/gitlab/...` never matches `/git/`. */
-const V2_PATH_PREFIXES: ReadonlyArray<string> = ["/git/", "/.well-known/agent-skills/"];
+  "/git/*",
+  "/.well-known/agent-skills/*",
+];
 
 /** v2's social sign-in callback is `/api/auth/callback/<provider>`. v1's
  *  WorkOS callback is the bare `/api/auth/callback`, which stays with v1. */
@@ -96,8 +98,7 @@ export const isSignUpPath = (pathname: string): boolean => SIGN_UP_PATHS.has(pat
 
 /** Whether `executor.sh` forwards a pathname to v2's Worker. */
 export const isV2Path = (pathname: string): boolean =>
-  V2_EXACT_PATHS.has(pathname) ||
-  V2_PATH_PREFIXES.some((prefix) => pathname.startsWith(prefix)) ||
+  V2_PATHS.some((pattern) => matchesPathPattern(pathname, pattern)) ||
   isSocialCallbackPath(pathname);
 
 /** Request headers v1 never passes to v2. The cookie header carries v1's
