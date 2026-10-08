@@ -217,11 +217,11 @@ layer(HostedLive, { excludeTestServices: true })("Tool call held check", (it) =>
         const reconnected = yield* heldCall(
           rotated.profile,
           Effect.gen(function* () {
-            const reconnect = yield* api.request(
-              actors.owner,
-              "POST",
-              `${prefix}/accounts/${rotated.account}/connections`,
-            );
+            const reconnect = yield* api.request(actors.owner, "POST", `${path}/connections`, {
+              requirement: "service",
+              profile: rotated.profile,
+              account: rotated.account,
+            });
             expect(reconnect.status, JSON.stringify(reconnect.body)).toBe(200);
             const saved = yield* submit(
               (yield* body(Resource, reconnect)).id,
@@ -418,7 +418,11 @@ layer(HostedLive, { excludeTestServices: true })("Tool call held check", (it) =>
             Effect.gen(function* () {
               const again = yield* body(
                 Resource,
-                yield* send("POST", `${prefix}/accounts/${account}/connections`),
+                yield* send("POST", `${selected.path}/connections`, {
+                  requirement: "service",
+                  profile: selected.profile,
+                  account,
+                }),
               );
               expect((yield* complete(provider, again.id, "synthetic-held-after")).id).toBe(
                 account,

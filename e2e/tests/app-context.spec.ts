@@ -209,7 +209,8 @@ layer(HostedLive, { excludeTestServices: true })("App handler context", (it) => 
         const reconnected = yield* api.request(
           actors.owner,
           "POST",
-          `${prefix}/accounts/${created.account}/connections`,
+          `${prefix}/apps/${app}/connections`,
+          { requirement: "service", profile: profile.id, account: created.account },
         );
         expect(reconnected.status).toBe(200);
         expect(

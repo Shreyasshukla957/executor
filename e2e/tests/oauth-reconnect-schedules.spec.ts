@@ -388,11 +388,11 @@ export default defineApp(requirements, async () => ({
           // Reconnecting the same account resumes the schedule without re-enabling it.
           const reconnect = yield* body(
             Resource,
-            yield* api.request(
-              actors.owner,
-              "POST",
-              `${prefix}/accounts/${account.id}/connections`,
-            ),
+            yield* api.request(actors.owner, "POST", `${path}/connections`, {
+              requirement: "service",
+              profile: profile.id,
+              account: account.id,
+            }),
           );
           expect((yield* signIn(reconnect.id)).id).toBe(account.id);
           const resumed = yield* settings;

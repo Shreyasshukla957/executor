@@ -314,8 +314,13 @@ export default defineApp({ accounts: { primary: service, mailboxes: service.many
           yield* browser.use("Remove the scalar binding without deleting its saved account", () =>
             primary.getByRole("radio", { name: "Second account", exact: true }).hover(),
           );
-          yield* browser.use("Remove the scalar binding without deleting its saved account", () =>
-            primary.getByRole("button", { name: "Remove Second account", exact: true }).click(),
+          yield* browser.use(
+            "Remove the scalar binding without deleting its saved account",
+            (page) =>
+              primary
+                .getByRole("button", { name: "Manage Second account", exact: true })
+                .click()
+                .then(() => page.getByRole("menuitem", { name: "Remove", exact: true }).click()),
           );
           yield* browser.use("Remove the scalar binding without deleting its saved account", () =>
             primary.locator(":checked").waitFor({ state: "detached" }),
@@ -388,7 +393,7 @@ export default defineApp({ accounts: { primary: service, mailboxes: service.many
           yield* browser.use("Only selected mailboxes offer removal", () =>
             Promise.all(
               ["First account", "Second account", "Third account"].map((label) =>
-                mailboxes.getByRole("button", { name: `Remove ${label}`, exact: true }).count(),
+                mailboxes.getByRole("button", { name: `Manage ${label}`, exact: true }).count(),
               ),
             ),
           ),
@@ -397,8 +402,11 @@ export default defineApp({ accounts: { primary: service, mailboxes: service.many
           yield* browser.use("Remove the mailbox from its row", () =>
             mailboxes.getByRole("checkbox", { name: "Third account", exact: true }).hover(),
           );
-          yield* browser.use("Remove the mailbox from its row", () =>
-            mailboxes.getByRole("button", { name: "Remove Third account", exact: true }).click(),
+          yield* browser.use("Remove the mailbox from its row", (page) =>
+            mailboxes
+              .getByRole("button", { name: "Manage Third account", exact: true })
+              .click()
+              .then(() => page.getByRole("menuitem", { name: "Remove", exact: true }).click()),
           );
         });
         yield* browser.use("Removing the last use offers deletion", () =>

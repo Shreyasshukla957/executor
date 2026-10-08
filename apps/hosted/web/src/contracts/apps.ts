@@ -19,6 +19,7 @@ import {
   HttpUrl,
   type App,
   type Account,
+  type AccountId,
   type AccountFieldsInput,
   type SelectedAccounts,
   type OAuthClientInput,
@@ -205,6 +206,8 @@ export function appConnectionAtoms(key: {
   readonly provider: ProviderId;
   readonly profile?: ProfileId | undefined;
   readonly accounts: SelectedAccounts;
+  /** Replace this selected account's credentials instead of adding an account. */
+  readonly account?: AccountId | undefined;
 }) {
   const requestKey = crypto.randomUUID();
   const profile = Atom.make<ProfileId | undefined>(key.profile);
@@ -224,7 +227,11 @@ export function appConnectionAtoms(key: {
         current ??
         (yield* client.accounts.connect({
           params: { organization: key.organization, app: key.app },
-          payload: { requirement: key.requirement, profile: selected },
+          payload: {
+            requirement: key.requirement,
+            profile: selected,
+            ...(key.account === undefined ? {} : { account: key.account }),
+          },
         }));
       if (current === undefined) get.set(request, saved);
       // Cached form definitions cannot send credentials to a different provider after an app edit.

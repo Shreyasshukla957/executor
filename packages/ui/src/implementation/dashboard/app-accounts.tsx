@@ -4,7 +4,7 @@ import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { AsyncResult, type Atom } from "effect/reactivity";
 import { Exit, type Cause } from "effect";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { Cancel01Icon, UserCircleIcon } from "@hugeicons/core-free-icons";
+import { MoreHorizontalIcon, UserCircleIcon } from "@hugeicons/core-free-icons";
 import type {
   AccountAppHealth,
   App,
@@ -26,6 +26,13 @@ import { AccountCheckResult } from "./account-health.tsx";
 import { EmptyState } from "./empty-state.tsx";
 import { Button } from "../components/button.tsx";
 import { Checkbox } from "../components/checkbox.tsx";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "../components/dropdown-menu.tsx";
 import {
   Dialog,
   DialogContent,
@@ -66,16 +73,7 @@ export function ProviderAccountSupport({
   );
 }
 
-/** Remove only this binding; keep the reusable account and every other provider selection. */
-export function RemoveAccountBinding<E>({
-  profile,
-  slot,
-  account,
-  label,
-  update,
-  Failure,
-  onRemoved,
-}: {
+type AccountBindingProps<E> = {
   readonly profile: Profile;
   readonly slot: string;
   readonly account: AccountId;
@@ -87,43 +85,85 @@ export function RemoveAccountBinding<E>({
   >;
   readonly Failure: ComponentType<FailureProps<E>>;
   readonly onRemoved?: ((account: AccountId) => void) | undefined;
-}) {
+};
+
+/** Remove only this binding; keep the reusable account and every other provider selection. */
+function useRemoveAccountBinding<E>({
+  profile,
+  slot,
+  account,
+  update,
+  onRemoved,
+}: AccountBindingProps<E>) {
   const save = useAtomSet(update, { mode: "promiseExit" });
   const result = useAtomValue(update);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<Cause.Cause<E>>();
+  return {
+    pending,
+    error,
+    disabled: AsyncResult.isWaiting(result) || profile.status === "removing",
+    remove: async () => {
+      const current = profile.accounts[slot];
+      const accounts: SelectedAccounts = Object.fromEntries(
+        Object.entries(profile.accounts).filter(([name]) => name !== slot),
+      );
+      const next =
+        current !== undefined && typeof current !== "string"
+          ? { ...accounts, [slot]: current.filter((id) => id !== account) }
+          : accounts;
+      setError(undefined);
+      setPending(true);
+      const saved = await save({ accounts: next, expectedRevision: profile.revision });
+      setPending(false);
+      if (Exit.isFailure(saved)) setError(saved.cause);
+      else onRemoved?.(account);
+    },
+  };
+}
+
+const bindingActionClass =
+  "shrink-0 text-muted-foreground [@media(hover:hover)]:opacity-0 group-hover/account:opacity-100 group-focus-within/account:opacity-100 focus-visible:opacity-100 data-loading:opacity-100";
+
+/**
+ * A selected account's actions in this app: the host's items, then removal from the profile.
+ * Removal keeps the reusable account and every other provider selection.
+ */
+export function AccountBindingMenu<E>({
+  children,
+  ...props
+}: AccountBindingProps<E> & { readonly children?: ReactNode }) {
+  const removal = useRemoveAccountBinding(props);
+  const { Failure } = props;
   return (
     <>
-      <Button
-        variant="ghost"
-        size="icon-xs"
-        aria-label={`Remove ${label}`}
-        title="Remove from this profile"
-        className="shrink-0 text-muted-foreground hover:text-destructive [@media(hover:hover)]:opacity-0 group-hover/account:opacity-100 group-focus-within/account:opacity-100 focus-visible:opacity-100 data-loading:opacity-100"
-        loading={pending}
-        disabled={AsyncResult.isWaiting(result) || profile.status === "removing"}
-        onClick={async () => {
-          const current = profile.accounts[slot];
-          const accounts: SelectedAccounts = Object.fromEntries(
-            Object.entries(profile.accounts).filter(([name]) => name !== slot),
-          );
-          const next =
-            current !== undefined && typeof current !== "string"
-              ? { ...accounts, [slot]: current.filter((id) => id !== account) }
-              : accounts;
-          setError(undefined);
-          setPending(true);
-          const saved = await save({ accounts: next, expectedRevision: profile.revision });
-          setPending(false);
-          if (Exit.isFailure(saved)) setError(saved.cause);
-          else onRemoved?.(account);
-        }}
-      >
-        <HugeiconsIcon icon={Cancel01Icon} size={13} aria-hidden />
-      </Button>
-      {error && (
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            aria-label={`Manage ${props.label}`}
+            className={`${bindingActionClass} hover:text-foreground data-[state=open]:opacity-100`}
+            loading={removal.pending}
+          >
+            <HugeiconsIcon icon={MoreHorizontalIcon} size={14} strokeWidth={2} aria-hidden />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="min-w-44">
+          {children}
+          {children && <DropdownMenuSeparator />}
+          <DropdownMenuItem
+            variant="destructive"
+            disabled={removal.disabled}
+            onSelect={() => void removal.remove()}
+          >
+            Remove
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      {removal.error && (
         <div className="basis-full text-xs">
-          <Failure cause={error} />
+          <Failure cause={removal.error} />
         </div>
       )}
     </>

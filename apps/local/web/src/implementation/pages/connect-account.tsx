@@ -19,7 +19,7 @@ import { faviconUrl } from "@executor-js/ui/contracts/icons";
 import { Button } from "@executor-js/ui/components/button";
 import { ConnectionLinkFailure } from "../components/common.tsx";
 import { AccountForm } from "@executor-js/ui/dashboard/account-form";
-import { OAuthFields } from "./oauth-fields.tsx";
+import { LinkOAuthFields } from "./oauth-fields.tsx";
 
 /** A standalone, mobile-sized handoff page with no dashboard navigation or access. */
 export function ConnectAccountPage() {
@@ -135,9 +135,9 @@ function ConnectionForm({
         submit={(input: AccountSubmission) => submit({ ...grant, ...input })}
         onSaved={(account) => setState({ status: "completed", account })}
         oauth={(props) => (
-          <OAuthFields
+          <LinkOAuthFields
             provider={connection.provider}
-            connection={grant}
+            grant={grant}
             onSaved={(account) => setState({ status: "completed", account })}
             {...(connection.reconnectAccount ? { account: connection.reconnectAccount } : {})}
             {...props}

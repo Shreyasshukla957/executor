@@ -62,7 +62,7 @@ export const accountConnectHandlers = (
               if (request.headers.origin !== undefined) return yield* new AuthForbidden();
               if (request.headers.authorization !== `Bearer ${Redacted.value(config.apiKey)}`)
                 return yield* new PairingUnauthorized();
-              if (payload.account === managed.account || payload.target?.app === managed.app)
+              if (payload.account === managed.account || payload.target.app === managed.app)
                 return yield* new ConnectionLinkRejected();
               const connection = yield* executor.accountConnections.create(payload);
               const signed = yield* Effect.tryPromise({

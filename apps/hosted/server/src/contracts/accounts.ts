@@ -138,13 +138,6 @@ export const HostedAccounts = HttpApiGroup.make("accounts")
     }).pipe(requireAccount.use),
   )
   .add(
-    HttpApiEndpoint.post("reconnect", `${prefix}/accounts/:account/connections`, {
-      params: { ...params, account: AccountId },
-      success: AccountConnection,
-      error: [...connectionErrors, AccountSelectionInvalid],
-    }).pipe(requireAccount.reconnect),
-  )
-  .add(
     HttpApiEndpoint.delete("disconnect", `${prefix}/accounts/:account`, {
       params: { ...params, account: AccountId },
       success: Schema.Struct({ account: AccountId }),
@@ -185,6 +178,8 @@ export const HostedAccounts = HttpApiGroup.make("accounts")
         requirement: Schema.NonEmptyString,
         profile: ProfileId,
         destination: Schema.optional(ConnectionDestination),
+        /** Replace this account's credentials instead of adding an account. */
+        account: Schema.optional(AccountId),
       }),
       success: BrowserAccountConnection,
       error: [...connectionErrors, AccountSelectionInvalid],

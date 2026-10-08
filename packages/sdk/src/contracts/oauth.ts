@@ -611,7 +611,7 @@ export const OAuthCompletionFailed = UserFacingError.define({
             description:
               "The account being reconnected was removed or edited, so nothing was saved.",
             recovery: {
-              action: "Open Accounts and start the connection again.",
+              action: "Open the app’s Accounts tab and reconnect the account again.",
               instructions:
                 "Check whether the reconnected account still exists with the same provider and sign-in method. Start a fresh connection for the intended account.",
             },
@@ -756,7 +756,7 @@ export const OAuthCompletionFailed = UserFacingError.define({
  * - `restart`: start the same connection again.
  * - `client`: the service rejected the OAuth client; correct its details.
  * - `configuration`: retrying will not help until the app or instance changes.
- * - `account`: the account being reconnected changed; start from Accounts.
+ * - `account`: the account being reconnected changed; start again from the app's Accounts tab.
  * - `cancelled`: the user declined; nothing is wrong.
  */
 export type OAuthCompletionRecovery =
@@ -819,7 +819,8 @@ export const OAuthReconnectRequired = UserFacingError.define({
             ? "Executor stopped while renewing this account’s access, before it could save the result. The service no longer accepts the saved sign-in, most likely because that renewal had already replaced it."
             : "The saved sign-in can no longer be used for this account.",
         recovery: {
-          action: "Open Accounts and reconnect the affected account, then return to Tools.",
+          action:
+            "Open the app’s Accounts tab and reconnect the affected account, then return to Tools.",
           instructions:
             "Identify the selected account whose OAuth grant needs renewal. Guide the user through the supported reconnect flow for that same account. Preserve its identity and profile bindings, then verify tool discovery. Do not replace the account or switch authentication methods as a workaround.",
         },
@@ -905,7 +906,7 @@ export const OAuthRenewalFailed = UserFacingError.define({
               "The service refused Executor’s request to renew this account’s access without saying the sign-in has ended. The saved sign-in is kept, and Executor tries again the next time the account is used.",
             recovery: {
               action:
-                "Try again in a moment. If this continues, reconnect the account from Accounts.",
+                "Try again in a moment. If this continues, reconnect the account from the app’s Accounts tab.",
               instructions:
                 "The account’s saved OAuth grant is intact. Inspect the recorded provider error code and HTTP status. Retry a temporary refusal. If the service keeps refusing, reconnect this same account; do not replace the account or change its authentication method.",
             },

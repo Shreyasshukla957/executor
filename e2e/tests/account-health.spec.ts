@@ -265,7 +265,11 @@ layer(HostedLive, { excludeTestServices: true })("Account health", (it) => {
         yield* upstream.answer({ kind: "user" });
         const reconnect = yield* body(
           Resource,
-          yield* api.request(actors.owner, "POST", `${accountPath}/connections`),
+          yield* api.request(actors.owner, "POST", `${identityPath}/connections`, {
+            requirement: "service",
+            profile: identityProfile.id,
+            account: accountId,
+          }),
         );
         const replaced = yield* api.request(
           actors.owner,
@@ -288,7 +292,11 @@ layer(HostedLive, { excludeTestServices: true })("Account health", (it) => {
         // Recovery replaces the failure, and a redeploy makes the result outdated again.
         const restore = yield* body(
           Resource,
-          yield* api.request(actors.owner, "POST", `${accountPath}/connections`),
+          yield* api.request(actors.owner, "POST", `${identityPath}/connections`, {
+            requirement: "service",
+            profile: identityProfile.id,
+            account: accountId,
+          }),
         );
         expect(
           (yield* api.request(actors.owner, "POST", `${prefix}/connections/${restore.id}/submit`, {

@@ -180,7 +180,8 @@ The public HTML and bundled assets contain no key or account data.
 Inspect apps, saved account selections, live tools, retained deployments and
 source files. The Accounts page shows provider metadata and the apps that use
 each account. It never returns saved credentials. This first dashboard is
-also supports catalog imports, reusable account creation and app account selection.
+also supports catalog imports and app account selection. Accounts are connected and their
+credentials replaced from an app's Accounts tab, which selects them for that app.
 The SDK and MCP expose the underlying operations to other clients.
 
 The React UI lives in `apps/local/web`. Effect Atom reads the shared HTTP API

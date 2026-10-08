@@ -2612,7 +2612,7 @@ export const scenarios = {
   localPastedCredentialsNamedAfterSaving: {
     file: "local-account-naming.spec.ts",
     title:
-      "Local pasted credentials are named in a dialog after Add account and from the app's accounts, and keep the name when replaced",
+      "Local pasted credentials connect only through an app, are named in a dialog on the app's accounts, and keep the name when replaced there",
     targets: {
       local: scheduled,
       "self-host": na("Paired local dashboard; hosted naming has its own scenario."),
@@ -2622,7 +2622,7 @@ export const scenarios = {
   localOAuthNamedAfterReturn: {
     file: "local-account-naming.spec.ts",
     title:
-      "A new local OAuth account is named in a dialog after sign-in returns, and a reconnect keeps its name",
+      "A new local OAuth account is named in a dialog after sign-in returns to its app, and a reconnect from the app keeps its name",
     targets: {
       local: scheduled,
       "self-host": na("Paired local dashboard; hosted OAuth naming has its own scenario."),
@@ -2704,7 +2704,7 @@ export const scenarios = {
     fixtures: "actors",
     file: "oauth-connect-storyboard.spec.ts",
     title:
-      "A new OAuth account returns to its app to be named, keeps its default name when closed, and a reconnect keeps its name",
+      "A new OAuth account returns to its app to be named, keeps its default name when closed, and a reconnect from the app keeps its name",
     targets: {
       "self-host": scheduled,
       cloud: na("Uses a scoped loopback OAuth issuer."),

@@ -248,7 +248,12 @@ export default defineApp({accounts:{service}},async({accounts})=>({tools: router
           yield* api.request(
             actors.owner,
             "POST",
-            `${prefix}/accounts/${publicAccount.id}/connections`,
+            `${prefix}/apps/${publicClient.app.id}/connections`,
+            {
+              requirement: "service",
+              profile: publicClient.profile.id,
+              account: publicAccount.id,
+            },
           ),
         );
         const reconnectStart = yield* start(reconnection.id, clients.public, null);

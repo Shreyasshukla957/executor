@@ -265,7 +265,7 @@ export const localApi = (
                 create: (input) => {
                   if (input.account === managed.account)
                     return Effect.fail(new AccountNotFound({ account: input.account }));
-                  if (input.target?.app === managed.app)
+                  if (input.target.app === managed.app)
                     return Effect.fail(new AppNotFound({ app: input.target.app }));
                   return executor.accountConnections.create(input);
                 },
@@ -417,14 +417,12 @@ export const localApi = (
         HttpRouter.add("GET", "/apps/:app/setup", web.document),
         HttpRouter.add("GET", "/apps/:app/open", web.document),
         HttpRouter.add("GET", "/apps/:app/delete", web.document),
-        HttpRouter.add("GET", "/accounts/add", web.document),
         HttpRouter.add("GET", "/connect", web.document),
         HttpRouter.add("GET", "/approvals", web.document),
         HttpRouter.add("GET", "/approvals/:run", web.document),
         HttpRouter.add("GET", "/account-connect/:connection", web.document),
         HttpRouter.add("GET", "/accounts", web.document),
         HttpRouter.add("GET", "/accounts/:account", web.document),
-        HttpRouter.add("GET", "/accounts/:account/credentials", web.document),
         HttpRouter.add("GET", "/accounts/:account/disconnect", web.document),
         // Manual webhook setup links issued to agents open this dashboard page.
         HttpRouter.add("GET", "/webhooks/:app/:subscription", web.document),

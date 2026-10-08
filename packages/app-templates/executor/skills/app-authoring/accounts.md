@@ -397,7 +397,7 @@ return connection.state; // { status: "completed", account } means setup finishe
 // A pending state with `failure` holds the error the user saw, including the service's own error.
 ```
 
-Completing a targeted request saves the account and selects it for the named profile in
+Completing a request saves the account and selects it for the named profile in
 one transaction. A `.many()` target appends without duplicates. Other selections
 are kept. If a single-account selection or the requirement changed during sign-in,
 completion returns `AccountConnectionTargetChanged` without saving credentials;
@@ -405,16 +405,21 @@ inspect the profile and request a new link. A pending link whose app was redeplo
 with a different provider for that requirement, such as an API key instead of OAuth,
 returns the same error when read or opened. Request a new link after such a deploy.
 
-To save an account without selecting it for any app, pass `provider` instead:
+Every request names an app profile requirement; there are no standalone
+connections. To replace the credentials of an account a profile already uses,
+add `account` beside `target`. The account keeps its ID, name and selections:
 
 ```js
 return await tools.executor.profiles["<management-profile-id>"].accountConnect.issue({
-  body: { owner: "alice", provider: "<provider-reference>" },
+  body: {
+    owner: "alice",
+    target: { app: "<app-id>", profile: "<profile-id>", requirement: "vercel" },
+    account: "<account-id>",
+  },
 });
 ```
 
-Supply exactly one of `target` or `provider`. Requests expire after thirty
-minutes. Cancelled or expired requests need a new link. Do not wait or busy-poll
+Requests expire after thirty minutes. Cancelled or expired requests need a new link. Do not wait or busy-poll
 inside execute.
 
 Use `accounts.list({ query: { provider } })` to find compatible saved accounts first when
