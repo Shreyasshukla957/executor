@@ -77,6 +77,10 @@ const EdgeContract = Schema.Struct({
   cases: Schema.Array(
     Schema.Struct({ method: Schema.String, target: Schema.String, forwards: Schema.Boolean }),
   ),
+  slashRedirects: Schema.Struct({
+    pages: Schema.Array(Schema.String),
+    cases: Schema.Array(Schema.Struct({ target: Schema.String, location: Schema.String })),
+  }),
 });
 const contract = Schema.decodeUnknownSync(Schema.fromJsonString(EdgeContract))(
   readFileSync(fileURLToPath(new URL("./v2-edge-contract.json", import.meta.url)), "utf8"),
@@ -133,6 +137,27 @@ describe("v2's edge contract", () => {
   it("lists both sign-up paths as not forwarded", () => {
     expect(signUps.map((c) => c.target).toSorted()).toEqual(["/sign-up", "/signup"]);
   });
+
+  // A slashed exact page is not forwarded: the edge redirects it to the page,
+  // which is. Every page v2 lists has an example.
+  it("covers every slashed page v2 lists", () => {
+    expect(
+      contract.slashRedirects.cases
+        .map((c) => new URL(c.target, contract.origin).pathname)
+        .toSorted(),
+    ).toEqual(expect.arrayContaining(contract.slashRedirects.pages.map((page) => `${page}/`)));
+  });
+
+  for (const { target, location } of contract.slashRedirects.cases) {
+    for (const method of ["GET", "HEAD"]) {
+      it(`redirects ${method} ${target} to ${location} without forwarding`, async () => {
+        const { calls, response } = await runCase(method, target);
+        expect(calls).toHaveLength(0);
+        expect(response?.status).toBe(308);
+        expect(response?.headers.get("location")).toBe(`${contract.origin}${location}`);
+      });
+    }
+  }
 
   for (const { method, target } of signUps) {
     it(`redirects ${method} ${target} to v2's sign-up page without forwarding`, async () => {

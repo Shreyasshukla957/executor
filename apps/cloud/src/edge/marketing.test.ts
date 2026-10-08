@@ -8,6 +8,7 @@ import {
   marketingProxyRequest,
   parseV2Edge,
   v2EdgeResponse,
+  v2PageForSlashedPath,
   type V2EdgeEnv,
   type V2Service,
 } from "./marketing";
@@ -143,6 +144,18 @@ describe("isV2Path", () => {
       expect(isV2Path(pathname)).toBe(false);
     });
   }
+});
+
+describe("v2PageForSlashedPath", () => {
+  it("canonicalizes only v2's exact pages", () => {
+    expect(v2PageForSlashedPath("/pricing/")).toBe("/pricing");
+    expect(v2PageForSlashedPath("/google-workspace/")).toBe("/google-workspace");
+    expect(v2PageForSlashedPath("/pricing")).toBeNull();
+    expect(v2PageForSlashedPath("/pricing.md/")).toBeNull();
+    expect(v2PageForSlashedPath("/blog/")).toBeNull();
+    expect(v2PageForSlashedPath("/terms/")).toBeNull();
+    expect(v2PageForSlashedPath("/")).toBeNull();
+  });
 });
 
 describe("isSignUpPath", () => {
@@ -688,6 +701,66 @@ describe("v2EdgeResponse marketing", () => {
     };
     return { received, service };
   };
+
+  // A signed-out visitor at `/pricing/` would otherwise reach v1's sign-in
+  // gate, which redirects to login.
+  it("redirects v2's slashed exact pages to the page, query kept, without forwarding", async () => {
+    const { received, service } = recordingService();
+
+    for (const [target, location] of [
+      ["/pricing/", "/pricing"],
+      ["/pricing/?ref=hn", "/pricing?ref=hn"],
+      ["/home/", "/home"],
+      ["/about-executor/", "/about-executor"],
+      ["/google-workspace/", "/google-workspace"],
+    ] as const) {
+      for (const method of ["GET", "HEAD"]) {
+        const response = await v2EdgeResponse(
+          new Request(`https://executor.sh${target}`, {
+            method,
+            headers: { cookie: "wos-session=sealed" },
+          }),
+          settings(service),
+        );
+        expect(response?.status, `${method} ${target}`).toBe(308);
+        expect(response?.headers.get("location"), `${method} ${target}`).toBe(
+          `https://executor.sh${location}`,
+        );
+      }
+    }
+    expect(received).toHaveLength(0);
+  });
+
+  it("forwards the slashed form of a page v2 owns below, such as /blog/", async () => {
+    const { received, service } = recordingService();
+
+    const response = await v2EdgeResponse(
+      new Request("https://executor.sh/docs/"),
+      settings(service),
+    );
+
+    expect(await response?.text()).toBe("v2");
+    expect(received[0]?.url).toBe("https://executor.sh/docs/");
+  });
+
+  it("keeps deeper paths, other methods and v1's own slashed pages with v1", () => {
+    const { received, service } = recordingService();
+
+    for (const [method, target] of [
+      ["GET", "/pricing/extra"],
+      ["GET", "/home/extra/"],
+      ["GET", "/pricing//"],
+      ["POST", "/pricing/"],
+      ["GET", "/terms/"],
+      ["GET", "/demo/"],
+    ] as const) {
+      expect(
+        v2EdgeResponse(new Request(`https://executor.sh${target}`, { method }), settings(service)),
+        `${method} ${target}`,
+      ).toBeNull();
+    }
+    expect(received).toHaveLength(0);
+  });
 
   it("sends the signed-out homepage to v2 with the URL unchanged", async () => {
     const { received, service } = recordingService();
