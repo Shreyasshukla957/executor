@@ -118,12 +118,22 @@
     },
     {
       "method": "GET",
+      "target": "/blog/",
+      "forwards": true
+    },
+    {
+      "method": "GET",
       "target": "/blog/a-post",
       "forwards": true
     },
     {
       "method": "GET",
       "target": "/docs",
+      "forwards": true
+    },
+    {
+      "method": "GET",
+      "target": "/docs/",
       "forwards": true
     },
     {
@@ -318,6 +328,21 @@
     },
     {
       "method": "GET",
+      "target": "/about-executor/extra",
+      "forwards": false
+    },
+    {
+      "method": "GET",
+      "target": "/google-workspace/extra",
+      "forwards": false
+    },
+    {
+      "method": "POST",
+      "target": "/pricing/",
+      "forwards": false
+    },
+    {
+      "method": "GET",
       "target": "/login",
       "forwards": false
     },
@@ -371,5 +396,31 @@
       "target": "/api/webhooks/workos",
       "forwards": false
     }
-  ]
+  ],
+  "slashRedirects": {
+    "rule": "GET or HEAD <page>/ answers 308 to <page>, query kept, for each of pages",
+    "pages": ["/home", "/pricing", "/about-executor", "/google-workspace"],
+    "cases": [
+      {
+        "target": "/pricing/",
+        "location": "/pricing"
+      },
+      {
+        "target": "/pricing/?ref=hn",
+        "location": "/pricing?ref=hn"
+      },
+      {
+        "target": "/home/",
+        "location": "/home"
+      },
+      {
+        "target": "/about-executor/",
+        "location": "/about-executor"
+      },
+      {
+        "target": "/google-workspace/",
+        "location": "/google-workspace"
+      }
+    ]
+  }
 }
