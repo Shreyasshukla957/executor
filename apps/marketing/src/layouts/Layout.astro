@@ -62,11 +62,12 @@ const canonical = new URL(Astro.url.pathname, Astro.site ?? Astro.url).toString(
       // `history_change` is for SPAs like apps/cloud.
       const phKey = import.meta.env.PUBLIC_POSTHOG_KEY;
       if (phKey) {
-        // api_host rides the `/_astro` prefix that the cloud edge forwards to
-        // this worker on executor.sh; src/middleware.ts proxies it to PostHog.
+        // api_host rides the `/_v1-marketing` asset root that the cloud edge
+        // forwards to this worker on executor.sh; src/middleware.ts proxies it
+        // to PostHog.
         const posthogReady = import("posthog-js").then(({ default: posthog }) => {
           posthog.init(phKey, {
-            api_host: `${window.location.origin}/_astro/_ph`,
+            api_host: `${window.location.origin}/_v1-marketing/_ph`,
             ui_host: import.meta.env.PUBLIC_POSTHOG_HOST ?? "https://us.posthog.com",
             autocapture: false,
             capture_pageview: true,

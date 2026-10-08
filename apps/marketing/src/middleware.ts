@@ -7,12 +7,11 @@ import type { MiddlewareHandler } from "astro";
 //
 // The path MUST sit under a prefix that the cloud worker's edge forwards to
 // this worker. On the production apex (executor.sh) the cloud worker owns the
-// custom domain and only proxies an allow-list to executor-marketing; `/api/*`
-// stays in cloud (it has its own posthog proxy on a randomized path), so a
-// top-level `/api/...` path here 404s. `/_astro` IS forwarded, so we ride it.
+// custom domain and only proxies `/terms` and the `/_v1-marketing` asset root
+// to executor-marketing, so we ride the asset root.
 const POSTHOG_INGEST_HOST = "us.i.posthog.com";
 const POSTHOG_ASSETS_HOST = "us-assets.i.posthog.com";
-const POSTHOG_PROXY_PATH = "/_astro/_ph";
+const POSTHOG_PROXY_PATH = "/_v1-marketing/_ph";
 
 export const onRequest: MiddlewareHandler = async (context, next) => {
   const { pathname } = new URL(context.request.url);
