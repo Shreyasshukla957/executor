@@ -41,7 +41,7 @@ const command = Command.make("e2e-emulators", {
         );
         complete = true;
         yield* Console.log(
-          `Created isolated identity, mail, company and billing emulators. Private configuration: ${output}`,
+          `Created isolated identity, mail, company, billing and WorkOS emulators. Private configuration: ${output}`,
         );
       }),
     ),

@@ -102,7 +102,7 @@ layer(TestLive, { excludeTestServices: true })("Local apps CLI", (it) => {
         yield* evidence.json("signed-out.json", signedOut);
         expect(signedOut.code).toBe(1);
         expect(signedOut.stderr).toContain(
-          "run executor apps login --host https://v2.executor.sh and pass the same --host",
+          "run executor apps login --host https://api.executor.sh and pass the same --host",
         );
         expect(signedOut.stderr).toContain(
           "For a local server (default http://127.0.0.1:4312), set EXECUTOR_API_KEY",

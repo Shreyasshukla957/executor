@@ -14,7 +14,7 @@ import {
 } from "../content/site-copy";
 import { testimonials } from "../content/testimonials";
 import { appStructure } from "../content/app-structure";
-import { siteOrigin } from "../content/site-origin.ts";
+import { appOrigin, siteOrigin } from "../content/site-origin.ts";
 
 // ---------------------------------------------------------------------------
 // `/index.md` — the homepage as Markdown, for agents.
@@ -41,7 +41,7 @@ const capabilityLines = capabilities.map(
     `${i + 1}. **${title}**${comingSoon ? " _(coming soon)_" : ""} — ${body}`,
 );
 
-const pricingLines = pricingTiers(siteOrigin).map(
+const pricingLines = pricingTiers(appOrigin).map(
   ({ name, price, audience, featuresLabel, features, cta }) =>
     [
       `### ${name} — ${price}`,

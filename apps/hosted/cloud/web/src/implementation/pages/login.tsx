@@ -17,6 +17,7 @@ import { SsoSignInForm } from "./sso-sign-in.tsx";
 import { Spinner } from "@executor-js/ui/components/spinner";
 import {
   finishCloudSignIn,
+  formerPasskeyHostAtom,
   passkeySignInAtom,
   beginEmailSignInAtom,
   verifyCodeAtom,
@@ -99,9 +100,13 @@ function CloudSignInForm(props: LoginProps & { readonly mode?: "signin" | "signu
   const beginning = useAtomValue(beginEmailSignInAtom),
     verifying = useAtomValue(verifyCodeAtom),
     signing = useAtomValue(passkeySignInAtom);
+  const formerPasskeyHost = useAtomValue(formerPasskeyHostAtom);
   const [email, setEmail] = useState("");
   const [sent, setSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // A passkey made for the dashboard's former host cannot sign in here: the browser offers
+  // none, or the ceremony is cancelled. Either way, say why and what to do instead.
+  const [passkeyMoved, setPasskeyMoved] = useState(false);
   const redirecting = AsyncResult.isSuccess(beginning) && beginning.value === "sso";
   const pending =
     beginning.waiting ||
@@ -147,11 +152,18 @@ function CloudSignInForm(props: LoginProps & { readonly mode?: "signin" | "signu
               loading={signing.waiting}
               onClick={async () => {
                 setError(null);
+                setPasskeyMoved(false);
                 reportBrowserUsage({ area: "auth", action: "passkey", outcome: "started" });
                 const result = await passkey(props.redirect);
                 if (Exit.isSuccess(result))
                   reportBrowserUsage({ area: "auth", action: "passkey", outcome: "success" });
-                if (Exit.isFailure(result)) failure(result.cause);
+                if (Exit.isFailure(result)) {
+                  if (formerPasskeyHost === null) failure(result.cause);
+                  else {
+                    reportBrowserUsage({ area: "auth", action: "sign_in", outcome: "failure" });
+                    setPasskeyMoved(true);
+                  }
+                }
               }}
             >
               Sign in with a passkey
@@ -240,6 +252,7 @@ function CloudSignInForm(props: LoginProps & { readonly mode?: "signin" | "signu
             onClick={() => {
               setSent(false);
               setError(null);
+              setPasskeyMoved(false);
             }}
           >
             Use another email or send a new code
@@ -249,6 +262,16 @@ function CloudSignInForm(props: LoginProps & { readonly mode?: "signin" | "signu
       {error && (
         <p className="auth-error text-destructive text-[13px]" role="alert">
           {error}
+        </p>
+      )}
+      {passkeyMoved && formerPasskeyHost !== null && (
+        <p
+          className="rounded-md border bg-muted/40 px-3 py-2 text-[13px] text-muted-foreground"
+          role="status"
+        >
+          <strong className="font-medium text-foreground">Passkey sign-in didn't finish.</strong> If
+          you made your passkey on {formerPasskeyHost} before sign-in moved, it no longer works.
+          Sign in with email, Google or GitHub, then add a new passkey in account settings.
         </p>
       )}
     </LoginPage>

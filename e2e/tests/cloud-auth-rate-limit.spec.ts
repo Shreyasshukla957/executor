@@ -15,6 +15,7 @@ import type { SpanQuery } from "../support/contracts.ts";
 import { Evidence, Telemetry } from "../support/evidence.ts";
 import { Target } from "../support/platform.ts";
 import { sentryExceptions } from "../support/sentry-events.ts";
+import { targetHosts } from "../support/role-hosts.ts";
 
 type Span = (typeof SpanQuery.Type)["data"][number]["span"];
 
@@ -82,7 +83,8 @@ layer(TestLive, { excludeTestServices: true })("Cloud auth rate limit", (it) => 
       Effect.gen(function* () {
         const target = yield* Target,
           http = yield* HttpClient.HttpClient;
-        const origin = target.metadata.origin;
+        // Sign-in runs on the browser origin, which Better Auth trusts.
+        const origin = targetHosts(target).browser;
         const post = (path: string, data: unknown) =>
           Effect.scoped(
             Effect.gen(function* () {
@@ -134,7 +136,7 @@ layer(TestLive, { excludeTestServices: true })("Cloud auth rate limit", (it) => 
   const tokenRequest = Effect.gen(function* () {
     const target = yield* Target,
       http = yield* HttpClient.HttpClient;
-    const origin = target.metadata.origin;
+    const origin = targetHosts(target).browser;
     const traceId = randomBytes(16).toString("hex");
     const status = yield* Effect.scoped(
       Effect.gen(function* () {

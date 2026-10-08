@@ -6,7 +6,15 @@ import type { Target } from "./report-model.ts";
 export const TargetPlan = Schema.Union([
   Schema.Struct({
     status: Schema.Literal("scheduled"),
-    runtime: Schema.optional(Schema.Literals(["managed", "attached", "rate-limited"])),
+    runtime: Schema.optional(
+      Schema.Literals([
+        "managed",
+        "attached",
+        "rate-limited",
+        "rolled-back",
+        "oauth-proxy-preview",
+      ]),
+    ),
   }),
   Schema.Struct({
     status: Schema.Literal("not-applicable"),
@@ -40,6 +48,9 @@ const scheduled = { status: "scheduled" } as const;
 const managedCloud = { status: "scheduled", runtime: "managed" } as const;
 /** Runs alone on a managed local Cloud started with Better Auth's per-address limit on. */
 const rateLimitedCloud = { status: "scheduled", runtime: "rate-limited" } as const;
+const rolledBackCloud = { status: "scheduled", runtime: "rolled-back" } as const;
+/** Runs on a managed test stage that signs in through a second local Cloud's OAuth proxy. */
+const oauthProxyPreviewCloud = { status: "scheduled", runtime: "oauth-proxy-preview" } as const;
 const na = (reason: string) => ({ status: "not-applicable", reason }) as const;
 const cloudOnboarding = {
   cloud: scheduled,
@@ -65,6 +76,146 @@ const plan = <Name extends string>(scenarios: { readonly [_ in Name]: typeof Tes
 
 /** Scenario names and applicability used by both test declarations and test selection. */
 export const scenarios = plan({
+  cloudRoleHostRoutes: {
+    fixtures: "actors",
+    file: "cloud-role-hosts.spec.ts",
+    title:
+      "cloud role hosts serve only their own routes and discovery, and browser pages move to app.",
+    targets: {
+      // A new stage orders the role hosts' certificate as it deploys; local Cloud has none to wait for.
+      cloud: managedCloud,
+      "self-host": na("Role hosts are Cloud's; self-host serves one origin."),
+      local: na("Role hosts are Cloud's; local serves one origin."),
+    },
+  },
+  cloudPasskeyMoved: {
+    file: "cloud-passkey-moved.spec.ts",
+    title:
+      "Cloud sign-in explains that a passkey made on the deployment origin no longer works after the move to app.",
+    targets: {
+      cloud: managedCloud,
+      "self-host": na("Self-host serves sign-in on its one origin; its passkeys never move."),
+      local: na("Local has no passkeys."),
+    },
+  },
+  cloudAccountCallback: {
+    fixtures: "actors",
+    file: "cloud-account-callback.spec.ts",
+    title:
+      "Cloud connected-account sign-ins return through the deployment origin's callback to the browser origin, and the edge forwards v2's state prefix",
+    targets: {
+      cloud: managedCloud,
+      "self-host": na("Self-host's callback is on its one origin; nothing forwards to it."),
+      local: na("Local's callback is on its one origin; nothing forwards to it."),
+    },
+  },
+  cloudSiteEdge: {
+    file: "cloud-site-edge.spec.ts",
+    title:
+      "Cloud serves its site for the edge with links to app., and its other hosts send site pages there",
+    targets: {
+      cloud: managedCloud,
+      "self-host": na("Self-host does not serve the marketing site."),
+      local: na("Local does not serve the marketing site."),
+    },
+  },
+  cloudApiHostClients: {
+    fixtures: "actors",
+    file: "cloud-api-host-clients.spec.ts",
+    title:
+      "Cloud's API host serves the SDK's registry, leads the CLI to sign-in by discovery and names the edge for Git",
+    targets: {
+      cloud: managedCloud,
+      "self-host": na("Self-host serves its registry, sign-in and Git on its one origin."),
+      local: na("Local signs the CLI in with an API key."),
+    },
+  },
+  appGitRemotes: {
+    fixtures: "actors",
+    file: "app-git-remotes.spec.ts",
+    title:
+      "Git clones and pushes through the remote the host names, with the session the CLI signed in with",
+    targets: {
+      // Managed local Cloud has no Git storage; deployed stages have Cloudflare's.
+      cloud: { status: "scheduled", runtime: "attached" },
+      "self-host": scheduled,
+      local: na("Local signs the CLI in with an API key, not a saved session."),
+    },
+  },
+  cloudRoleHostGrants: {
+    fixtures: "actors",
+    file: "cloud-role-hosts.spec.ts",
+    title: "a grant is for its one resource and works at the deployment origin and its role host",
+    targets: {
+      // A new stage orders the role hosts' certificate as it deploys; local Cloud has none to wait for.
+      cloud: managedCloud,
+      "self-host": na("Role hosts are Cloud's; self-host serves one origin."),
+      local: na("Role hosts are Cloud's; local serves one origin."),
+    },
+  },
+  cloudRoleHostSpans: {
+    fixtures: "actors",
+    file: "cloud-role-hosts.spec.ts",
+    title:
+      "Cloud request spans name the host each request reached, its role, its path and its route",
+    targets: {
+      cloud: managedCloud,
+      "self-host": na("Role hosts are Cloud's; self-host serves one origin."),
+      local: na("Role hosts are Cloud's; local serves one origin."),
+    },
+  },
+  cloudRollbackSwitch: {
+    fixtures: "actors",
+    file: "cloud-rollback.spec.ts",
+    title:
+      "Cloud's rollback switch serves sign-in on the deployment origin and keeps mcp., the issuer on the edge and grants",
+    targets: {
+      cloud: rolledBackCloud,
+      "self-host": na("Role hosts are Cloud's; self-host serves one origin."),
+      local: na("Role hosts are Cloud's; local serves one origin."),
+    },
+  },
+  cloudOAuthProxyOwnSignIn: {
+    file: "cloud-oauth-proxy.spec.ts",
+    title: "Cloud's own social sign-ins on app. return through the edge without its OAuth proxy",
+    targets: {
+      // Only local Cloud runs as the proxy's production; an emulated test stage has no proxy.
+      cloud: managedCloud,
+      "self-host": na("The OAuth proxy and role hosts are Cloud's."),
+      local: na("The OAuth proxy and role hosts are Cloud's."),
+    },
+  },
+  cloudOAuthProxyRollback: {
+    file: "cloud-oauth-proxy.spec.ts",
+    title:
+      "Cloud's own social sign-ins under the rollback switch return through the edge without its OAuth proxy",
+    targets: {
+      cloud: rolledBackCloud,
+      "self-host": na("The OAuth proxy and role hosts are Cloud's."),
+      local: na("The OAuth proxy and role hosts are Cloud's."),
+    },
+  },
+  cloudOAuthProxyPreview: {
+    file: "cloud-oauth-proxy.spec.ts",
+    title:
+      "A test stage signs in through production's OAuth proxy and keeps the session on its own origin",
+    targets: {
+      cloud: oauthProxyPreviewCloud,
+      "self-host": na("The OAuth proxy and role hosts are Cloud's."),
+      local: na("The OAuth proxy and role hosts are Cloud's."),
+    },
+  },
+  cloudRoleHostResourceSeed: {
+    fixtures: "actors",
+    file: "cloud-role-host-seed.spec.ts",
+    title:
+      "the role host resource seed adds missing connection resources once and changes nothing else",
+    targets: {
+      cloud: managedCloud,
+      "self-host": na("Role hosts and their resource seed are Cloud's."),
+      local: na("Role hosts and their resource seed are Cloud's."),
+    },
+  },
   appWorkerBudget: {
     fixtures: "actors",
     file: "app-worker-budget.spec.ts",
@@ -5030,6 +5181,27 @@ export const scenarios = plan({
       "Cloud onboarding can skip a passkey and returning email sign-in keeps the existing team",
     targets: cloudOnboarding,
   },
+  v1SignInStop: {
+    file: "cloud-v1-sign-in.spec.ts",
+    title:
+      "Cloud sign-in keeps a new v1 organization member on v1 and fails closed while WorkOS is unavailable",
+    targets: cloudOnboarding,
+  },
+  v1SignInInvited: {
+    file: "cloud-v1-sign-in.spec.ts",
+    title:
+      "Cloud sign-in keeps a new v1 organization member who joins an invited team from creating another, and fails closed while WorkOS is unavailable",
+    targets: cloudOnboarding,
+  },
+  v1SignInExisting: {
+    file: "cloud-v1-sign-in.spec.ts",
+    title: "Cloud sign-in skips the v1 check for accounts from before it and for v2 team members",
+    targets: {
+      ...cloudOnboarding,
+      // Backdating an account writes the managed Cloud's own database.
+      cloud: managedCloud,
+    },
+  },
   localSkills: {
     file: "local-skills.spec.ts",
     title: "local MCP skills follow configured copies and deployment versions",
@@ -5593,15 +5765,25 @@ export const scenarios = plan({
 /**
  * How the run reaches Cloud. Managed Cloud is local and turns the per-address auth limit off, as
  * deployed test stages do; a rate-limited run starts it with the limit on for the scenarios that
- * prove it, and runs only those.
+ * prove it, and runs only those. A rolled-back run starts it with its rollback switch on, sign-in
+ * on the deployment origin, and runs only the scenarios that prove the switch.
  */
-export type CloudMode = "managed" | "attached" | "rate-limited";
+export type CloudMode =
+  | "managed"
+  | "attached"
+  | "rate-limited"
+  | "rolled-back"
+  | "oauth-proxy-preview";
 
 const cloudRuntimeReasons = {
   managed: "Requires the managed local Cloud target and its local collectors.",
   attached: "Requires a deployed Cloud target with Cloudflare's memory limit.",
   "rate-limited":
     "Requires a managed local Cloud with the per-address auth limit on: e2e:cloud --auth-rate-limit.",
+  "rolled-back":
+    "Requires a managed local Cloud with its rollback switch on: e2e:cloud --rollback.",
+  "oauth-proxy-preview":
+    "Requires a managed test stage signing in through a second local Cloud's OAuth proxy: e2e:cloud --oauth-proxy-preview.",
 } as const;
 
 /**
@@ -5625,7 +5807,11 @@ export const scenariosForSuite = (suite: "all" | "hosted", cloudMode: CloudMode 
       const cloud = scenario.targets.cloud;
       if (cloud.status !== "scheduled") return scenario;
       const runs =
-        cloud.runtime === undefined ? cloudMode !== "rate-limited" : cloud.runtime === cloudMode;
+        cloud.runtime === undefined
+          ? cloudMode !== "rate-limited" &&
+            cloudMode !== "rolled-back" &&
+            cloudMode !== "oauth-proxy-preview"
+          : cloud.runtime === cloudMode;
       return runs
         ? scenario
         : {
@@ -5634,7 +5820,11 @@ export const scenariosForSuite = (suite: "all" | "hosted", cloudMode: CloudMode 
               ...scenario.targets,
               cloud: na(
                 cloud.runtime === undefined
-                  ? "Runs on Cloud without the per-address auth limit."
+                  ? cloudMode === "rolled-back"
+                    ? "Runs on Cloud with sign-in on app., without the rollback switch."
+                    : cloudMode === "oauth-proxy-preview"
+                      ? "Runs on Cloud as the OAuth proxy's production, not on a stage signing in through it."
+                      : "Runs on Cloud without the per-address auth limit."
                   : cloudRuntimeReasons[cloud.runtime],
               ),
             },

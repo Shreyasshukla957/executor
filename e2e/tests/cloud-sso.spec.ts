@@ -10,6 +10,7 @@ import { ssoFixture } from "../support/sso.ts";
 import { scenarios } from "../test-plan.ts";
 import { holdQuery } from "../support/query-transition.ts";
 import { Emulators } from "../support/emulators.ts";
+import { targetHosts } from "../support/role-hosts.ts";
 
 const BillingOverview = Schema.Struct({
   enterprise: Schema.Boolean,
@@ -405,7 +406,7 @@ const completed = (destination: string) =>
     yield* browser.use("Wait for the protocol result", (page) =>
       page.waitForURL(
         (url) =>
-          url.origin === target.metadata.origin &&
+          url.origin === targetHosts(target).browser &&
           (url.pathname === destination || url.searchParams.has("error")),
       ),
     );
@@ -790,7 +791,7 @@ layer(HostedLive, { excludeTestServices: true })("Cloud customer SSO", (it) => {
           page.getByRole("button", { name: "Replay assertion", exact: true }).click(),
         );
         yield* browser.use("Replay returns an error", (page) =>
-          page.waitForURL((url) => url.origin === target.metadata.origin),
+          page.waitForURL((url) => url.origin === targetHosts(target).browser),
         );
         expect(
           yield* browser.use("Replay creates no session", (page) =>
@@ -803,7 +804,7 @@ layer(HostedLive, { excludeTestServices: true })("Cloud customer SSO", (it) => {
           page.getByRole("button", { name: "Continue to Executor", exact: true }).click(),
         );
         yield* browser.use("Tampering returns to the product", (page) =>
-          page.waitForURL((url) => url.origin === target.metadata.origin),
+          page.waitForURL((url) => url.origin === targetHosts(target).browser),
         );
         expect(
           yield* browser.use("Tampering creates no session", (page) =>

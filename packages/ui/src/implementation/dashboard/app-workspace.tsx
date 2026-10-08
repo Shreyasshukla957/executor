@@ -237,14 +237,14 @@ function CloneRepository({ source }: { readonly source: typeof AppSourceDisplay.
     </Popover>
   );
 }
-/** Rendered only in the browser, once the popover opens. */
+/** The host names the clone URL; Git may be served on another origin than the dashboard. */
 function CloneDetails({ source }: { readonly source: typeof AppSourceDisplay.Type }) {
-  const cloneUrl = window.location.origin + source.gitPath;
+  const cloneUrl = source.gitUrl;
   return (
     <>
       <h2 className="text-sm font-medium">Clone</h2>
       <div className="mt-4 border-b pb-2 text-xs font-medium">
-        {window.location.protocol === "https:" ? "HTTPS" : "HTTP"}
+        {cloneUrl.startsWith("https:") ? "HTTPS" : "HTTP"}
       </div>
       <div className="mt-3 flex items-center gap-2">
         <Input

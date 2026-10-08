@@ -21,3 +21,7 @@ export const previewOwner = (repository: string, number: number) =>
 /** Every preview uses the existing production OAuth proxy's trusted dashboard domain. */
 export const previewOrigin = (number: number) =>
   `https://${previewSlug(number)}.executor.engineering`;
+
+/** Where a preview serves its dashboard and sign-in: `app.` under its own host (`stage.ts`). */
+export const previewBrowserOrigin = (number: number) =>
+  `https://app.${previewSlug(number)}.executor.engineering`;

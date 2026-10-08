@@ -130,7 +130,7 @@ export const hostedMcpConnectionHandlers = HttpApiBuilder.group(
       const auth = yield* McpAuthentication;
       const view = (connection: Connection) => ({
         ...connection,
-        url: mcpResource(auth.origin, { mode: "model", connection: connection.id }),
+        url: mcpResource(auth.resourceOrigins.mcp[0], { mode: "model", connection: connection.id }),
       });
       return handlers
         .handle("list", () =>

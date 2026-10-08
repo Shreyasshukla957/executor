@@ -7,7 +7,7 @@ Executor serves one MCP endpoint at `/mcp`. Every app you have configured is
 reachable through it. You do not add one MCP server per service, and you do not
 paste a credential into the agent.
 
-- Hosted: `https://v2.executor.sh/mcp`
+- Hosted: `https://mcp.executor.sh/mcp`
 - Self-host: `<your origin>/mcp`
 - Local: `http://127.0.0.1:4312/mcp`
 

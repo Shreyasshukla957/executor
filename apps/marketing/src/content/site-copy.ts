@@ -11,19 +11,22 @@
  * Copied by the hero CTA and served verbatim at `/setup-prompt.md`.
  * Helps an agent turn the user's need into a small, useful Executor app.
  */
-export const setupPrompt = (siteOrigin: string) => `Help me build something useful with Executor.
+export const setupPrompt = (origins: {
+  readonly site: string;
+  readonly app: string;
+}) => `Help me build something useful with Executor.
 
 Executor is a place to deploy software that my agents and I can use: custom tools, skills, automations, and apps with saved data and a UI. An existing MCP or API can be a starting point, or you can write the code for something new.
 
 Ask what I want to do. Start with the smallest useful version. Explain what it will do before building it.
 
-Help me sign in at ${siteOrigin}/login and connect Executor to you over MCP. If your client needs a restart to load its tools, tell me and wait until they are available.
+Help me sign in at ${origins.app}/login and connect Executor to you over MCP. If your client needs a restart to load its tools, tell me and wait until they are available.
 
 Read the Executor app's executor skill through Executor's skills tool, then its app-authoring skill. Check what this Executor host supports. Use its management tools to build and deploy the app. Connect any required accounts through the secure connection flow and select them for the app. Never ask me to paste credentials into this chat or put them in source code.
 
 Explain what the app can read or change, and ask before actions that send, delete, or publish anything. Verify the result with a safe call. Keep its source so I can ask you or another agent to change it later. Add features only when they serve the task I asked for.
 
-Docs: ${siteOrigin}/docs`;
+Docs: ${origins.site}/docs`;
 
 /** Canonical GitHub repository. */
 export const GITHUB_URL = "https://github.com/UsefulSoftwareCo/executor";
@@ -107,13 +110,13 @@ export type PricingTier = {
  * Pricing tiers. The `/pricing` page and `/pricing.md` both read this list,
  * so it is the single source of truth.
  */
-export const pricingTiers = (siteOrigin: string): ReadonlyArray<PricingTier> => [
+export const pricingTiers = (appOrigin: string): ReadonlyArray<PricingTier> => [
   {
     name: "Free",
     price: "$0 / month",
     audience: "For small teams getting started",
     features: ["Up to 3 members", "Unlimited integrations"],
-    cta: `Start free: ${siteOrigin}/login?mode=signup`,
+    cta: `Start free: ${appOrigin}/login?mode=signup`,
   },
   {
     name: "Team",
@@ -123,7 +126,7 @@ export const pricingTiers = (siteOrigin: string): ReadonlyArray<PricingTier> => 
       "14-day free trial, then $15 / member / month",
       "Verified domains & join by team domain",
     ],
-    cta: `Start free trial: ${siteOrigin}/login?mode=signup`,
+    cta: `Start free trial: ${appOrigin}/login?mode=signup`,
   },
   {
     name: "Enterprise",

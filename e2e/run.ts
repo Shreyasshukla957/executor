@@ -24,6 +24,12 @@ const command = Command.make(
     workers: Flag.Int("workers").pipe(Flag.optional),
     // Start managed Cloud with the per-address auth limit on and run only the scenarios proving it.
     authRateLimit: Flag.Boolean("auth-rate-limit").pipe(Flag.withDefault(false)),
+    // Start managed Cloud with its rollback switch on, sign-in on the deployment origin, and run
+    // only the scenarios proving it.
+    rollback: Flag.Boolean("rollback").pipe(Flag.withDefault(false)),
+    // Start a second managed Cloud as the OAuth proxy's production, run against a test stage that
+    // signs in through it, and run only the scenarios that prove the proxy.
+    oauthProxyPreview: Flag.Boolean("oauth-proxy-preview").pipe(Flag.withDefault(false)),
   },
   (flags) => runSuite({ ...flags, workers: Option.getOrUndefined(flags.workers), defaultWorkers }),
 );

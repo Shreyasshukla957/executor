@@ -111,7 +111,7 @@ export const createExecutor = (
       oauth.resolveSelected,
       credentials,
       crypto,
-      options.origin,
+      options.webhookOrigin ?? options.origin,
       declarations,
       workflows.controls,
       options.hooks,

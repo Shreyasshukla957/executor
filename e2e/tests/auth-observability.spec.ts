@@ -9,6 +9,7 @@ import { HttpClient } from "effect/http";
 import { Collector, SpanQuery } from "../support/contracts.ts";
 import { Target } from "../support/platform.ts";
 import { Onboarding } from "../support/onboarding.ts";
+import { targetHosts } from "../support/role-hosts.ts";
 
 const Logs = Schema.Struct({
   data: Schema.Array(
@@ -34,6 +35,7 @@ layer(TestLive, { excludeTestServices: true })("Auth observability", (it) => {
         const fs = yield* FileSystem.FileSystem;
         const http = yield* HttpClient.HttpClient;
         const target = yield* Target;
+        const hosts = targetHosts(target);
         const collector = yield* fs
           .readFileString(`${target.directory}/data/diagnostics/collector.json`)
           .pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(Collector))));
@@ -77,11 +79,11 @@ layer(TestLive, { excludeTestServices: true })("Auth observability", (it) => {
               "A POST callback only redirects to the GET callback",
               (page) =>
                 page.request
-                  .post(`${target.metadata.origin}/api/auth/callback/github`, {
+                  .post(`${hosts.browser}/api/auth/callback/github`, {
                     maxRedirects: 0,
                     form: { state: "private-oauth-state", code: "private-invalid-code" },
                     headers: {
-                      origin: target.metadata.origin,
+                      origin: hosts.browser,
                       traceparent: `00-${traceId}-1234567890abcdef-01`,
                     },
                   })
@@ -91,8 +93,8 @@ layer(TestLive, { excludeTestServices: true })("Auth observability", (it) => {
           } else {
             const started = yield* browser.use("Start OAuth through the public endpoint", (page) =>
               page.request
-                .post(`${target.metadata.origin}/api/auth/sign-in/social`, {
-                  headers: { origin: target.metadata.origin },
+                .post(`${hosts.browser}/api/auth/sign-in/social`, {
+                  headers: { origin: hosts.browser },
                   data: { provider, callbackURL: "/login", errorCallbackURL: "/login" },
                 })
                 .then((response) =>
@@ -116,10 +118,19 @@ layer(TestLive, { excludeTestServices: true })("Auth observability", (it) => {
               if (fixture.kind === "cancel") callback.searchParams.set("error", "access_denied");
               if (fixture.kind === "unknown")
                 callback.searchParams.set("error", "private-provider-error");
+              const headers = { traceparent: `00-${traceId}-1234567890abcdef-01` };
+              // The provider returns to the edge, which sends the browser, query intact, to the
+              // browser origin, where the sign-in's state cookie is checked.
               return page.request
-                .get(callback.href, {
-                  maxRedirects: 0,
-                  headers: { traceparent: `00-${traceId}-1234567890abcdef-01` },
+                .get(callback.href, { maxRedirects: 0, headers })
+                .then((bounce) => {
+                  const location = bounce.headers()["location"];
+                  if (
+                    bounce.status() !== 302 ||
+                    location !== `${hosts.browser}${callback.pathname}${callback.search}`
+                  )
+                    throw new Error("The provider callback did not return to the browser origin");
+                  return page.request.get(location, { maxRedirects: 0, headers });
                 })
                 .then((response) => response.status());
             });

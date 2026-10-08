@@ -27,6 +27,7 @@ import { cloudLocks } from "../support/cloud-locks.ts";
 import { Organization, type SpanQuery } from "../support/contracts.ts";
 import { Evidence, Telemetry } from "../support/evidence.ts";
 import { Target } from "../support/platform.ts";
+import { targetHosts } from "../support/role-hosts.ts";
 
 type Span = (typeof SpanQuery.Type)["data"][number]["span"];
 
@@ -138,7 +139,7 @@ layer(HostedLive, { excludeTestServices: true })("Organization removal recovery"
                 `/api/organizations/${organization}`,
                 undefined,
                 {
-                  origin: target.metadata.origin,
+                  origin: targetHosts(target).browser,
                   traceparent: `00-${traceId}-${randomBytes(8).toString("hex")}-01`,
                 },
               );

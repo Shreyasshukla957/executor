@@ -23,7 +23,7 @@ Read these docs with
 Commands target the local server at `http://127.0.0.1:4312` by default. It
 reads the local API key from `EXECUTOR_API_KEY`. If that variable is unset, ask
 the user to set it; do not search files for it. For hosted Executor, run
-`executor apps login --host https://v2.executor.sh` once. It signs in through
+`executor apps login --host https://api.executor.sh` once. It signs in through
 the browser. Then pass the same `--host` to every command.
 
 A new app is a directory with `index.ts` and a `package.json` that pins the

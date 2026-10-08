@@ -6,6 +6,7 @@ import { holdOrganizationEntry } from "./organization-entry.ts";
 import { Emulators } from "./emulators.ts";
 import { Evidence } from "./evidence.ts";
 import { Target, driver } from "./platform.ts";
+import { targetHosts } from "./role-hosts.ts";
 
 const Organizations = Schema.Array(
   Schema.Struct({ id: Schema.String, name: Schema.String, slug: Schema.String }),
@@ -36,7 +37,8 @@ const make = Effect.gen(function* () {
           page.waitForResponse((response) => {
             const url = new URL(response.url());
             return (
-              url.origin === target.metadata.origin && url.pathname === "/api/auth/sign-in/social"
+              url.origin === targetHosts(target).browser &&
+              url.pathname === "/api/auth/sign-in/social"
             );
           }),
           page
@@ -127,7 +129,7 @@ const make = Effect.gen(function* () {
             window.location.origin === origin &&
             (window.location.pathname !== "/login" ||
               document.querySelector("h1")?.textContent === "Create a passkey"),
-          target.metadata.origin,
+          targetHosts(target).browser,
         ),
       );
     });
@@ -154,7 +156,7 @@ const make = Effect.gen(function* () {
                 const url = new URL(response.url());
                 return (
                   response.request().isNavigationRequest() &&
-                  url.origin === target.metadata.origin &&
+                  url.origin === targetHosts(target).browser &&
                   url.pathname === "/create"
                 );
               }),
@@ -182,7 +184,7 @@ const make = Effect.gen(function* () {
         yield* memberships.release;
         yield* browser.use("Complete the OAuth callback into Cloud", (page) =>
           page.waitForURL(
-            (url) => url.origin === target.metadata.origin && url.pathname !== "/login",
+            (url) => url.origin === targetHosts(target).browser && url.pathname !== "/login",
           ),
         );
         yield* evidence.json("identity-provider.json", {
@@ -318,7 +320,7 @@ const make = Effect.gen(function* () {
           page.getByRole("button", { name: "Continue", exact: true }).click(),
         );
         yield* browser.use("Team creation opens agent setup", (page) =>
-          page.waitForURL(`${target.metadata.origin}/create/agent`),
+          page.waitForURL(`${targetHosts(target).browser}/create/agent`),
         );
         const teams = yield* organizations;
         if (teams.length !== 1 || teams[0]?.name !== name)
@@ -333,7 +335,7 @@ const make = Effect.gen(function* () {
         yield* browser.use("Reload keeps the agent instructions open", (page) =>
           page.getByRole("heading", { name: "Continue in your agent", exact: true }).waitFor(),
         );
-        const endpoint = `${target.metadata.origin}/mcp`;
+        const endpoint = `${targetHosts(target).mcp}/mcp`;
         yield* browser.use("The public MCP URL is visible", (page) =>
           page.getByText(endpoint, { exact: true }).waitFor(),
         );
@@ -356,7 +358,7 @@ const make = Effect.gen(function* () {
         );
         if (
           !prompt.includes(endpoint) ||
-          !prompt.includes(`${target.metadata.origin}/docs/`) ||
+          !prompt.includes(`${targetHosts(target).browser}/docs/`) ||
           !prompt.includes("help me get my first app set up")
         )
           return yield* new OnboardingFailed({
@@ -367,7 +369,7 @@ const make = Effect.gen(function* () {
           page.getByRole("link", { name: "Open dashboard", exact: false }).click(),
         );
         yield* browser.use("The new team opens Apps", (page) =>
-          page.waitForURL(`${target.metadata.origin}/org/${team.slug}/apps`),
+          page.waitForURL(`${targetHosts(target).browser}/org/${team.slug}/apps`),
         );
         yield* browser.use("The confirmed team stays open", (page) =>
           page
@@ -396,8 +398,12 @@ const make = Effect.gen(function* () {
       yield* browser.use("Sign out of Cloud", (page) =>
         page.getByRole("menuitem", { name: "Sign out", exact: true }).click(),
       );
+      // Cloud's browser origin opens sign-in for a signed-out visitor; elsewhere the public entry.
+      const entry = target.metadata.target === "cloud" ? "/login" : "/";
       yield* browser.use("Return to the public entry", (page) =>
-        page.waitForURL((url) => url.origin === target.metadata.origin && url.pathname === "/"),
+        page.waitForURL(
+          (url) => url.origin === targetHosts(target).browser && url.pathname === entry,
+        ),
       );
     }),
     passkey: Effect.gen(function* () {
@@ -442,7 +448,7 @@ const make = Effect.gen(function* () {
           );
           yield* browser.use("Passkey enrollment finishes", (page) =>
             page.waitForURL(
-              (url) => url.origin === target.metadata.origin && url.pathname === "/create",
+              (url) => url.origin === targetHosts(target).browser && url.pathname === "/create",
               { waitUntil: "domcontentloaded" },
             ),
           );
@@ -470,7 +476,8 @@ const make = Effect.gen(function* () {
           yield* browser.use("Passkey returns to the existing team", (page) =>
             page.waitForURL(
               (url) =>
-                url.origin === target.metadata.origin && /^\/org\/[^/]+\/apps$/.test(url.pathname),
+                url.origin === targetHosts(target).browser &&
+                /^\/org\/[^/]+\/apps$/.test(url.pathname),
             ),
           );
           yield* browser.checkpoint("Returning sign-in with the saved passkey");

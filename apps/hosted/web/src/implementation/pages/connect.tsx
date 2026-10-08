@@ -18,16 +18,23 @@ import {
   saveMcpConnectionAtom,
 } from "../../contracts/mcp-connections.ts";
 import { documentationUrl } from "../../contracts/documentation.ts";
+import { useResourceOrigins } from "../resource-origin.ts";
 
 /** Headless setup: a personal access token against this organization's own addresses. */
-function PersonalTokenSetup({ origin }: { readonly origin: string }) {
+function PersonalTokenSetup({
+  apiOrigin,
+  mcpOrigin,
+}: {
+  readonly apiOrigin: string;
+  readonly mcpOrigin: string;
+}) {
   const { organization, slug, id } = useOrganizationRoute();
   const mcp = JSON.stringify(
     {
       mcpServers: {
         executor: {
           type: "http",
-          url: `${origin}/org/${encodeURIComponent(slug)}/mcp`,
+          url: `${mcpOrigin}/org/${encodeURIComponent(slug)}/mcp`,
           headers: { Authorization: "Bearer <YOUR_PAT>" },
         },
       },
@@ -35,7 +42,7 @@ function PersonalTokenSetup({ origin }: { readonly origin: string }) {
     null,
     2,
   );
-  const http = `curl '${origin}/api/organizations/${encodeURIComponent(id ?? organization)}/inventory' \\\n  --header 'Authorization: Bearer <YOUR_PAT>'`;
+  const http = `curl '${apiOrigin}/api/organizations/${encodeURIComponent(id ?? organization)}/inventory' \\\n  --header 'Authorization: Bearer <YOUR_PAT>'`;
   return (
     <>
       <p className="text-[13px] leading-5 text-muted-foreground">
@@ -62,6 +69,8 @@ function PersonalTokenSetup({ origin }: { readonly origin: string }) {
 /** The member's full-access URL, scoped connections and connected agents for this organization. */
 export function ConnectPage() {
   const page = usePageUrl();
+  const origins = useResourceOrigins();
+  const mcpOrigin = origins.mcp[0];
   const { organization } = useOrganizationRoute();
   const docs = new URL(documentationUrl(), page.origin).href;
   return (
@@ -82,9 +91,9 @@ export function ConnectPage() {
       }
       installation={
         <McpInstallInstructions
-          endpoint={`${page.origin}/mcp`}
+          endpoint={`${mcpOrigin}/mcp`}
           docs={docs}
-          token={<PersonalTokenSetup origin={page.origin} />}
+          token={<PersonalTokenSetup apiOrigin={origins.api[0]} mcpOrigin={mcpOrigin} />}
         />
       }
       renderTools={({ app, profile, names, onChange }) => (

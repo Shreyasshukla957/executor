@@ -1724,7 +1724,7 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
       scopeSeparator?: string;
     }) =>
       Effect.gen(function* () {
-        const state = yield* Effect.sync(oauth.generateRandomState);
+        const state = `${options.statePrefix ?? ""}${yield* Effect.sync(oauth.generateRandomState)}`;
         const verifier = yield* Effect.sync(oauth.generateRandomCodeVerifier);
         const nonce = input.scopes.includes("openid")
           ? yield* Effect.sync(oauth.generateRandomNonce)

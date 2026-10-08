@@ -28,14 +28,19 @@ export const cloudAuthSetup = Effect.gen(function* () {
     secret: Redacted.value(secret),
     advanced: { ...base.advanced, database: { validateSchema: false } },
   };
+  const origins = {
+    origin: settings.url,
+    resourceOrigins: settings.resourceOrigins,
+    issuer: settings.issuer,
+  };
+  const context = Effect.tryPromise({
+    try: () => betterAuth(options).$context,
+    catch: () => new HostedMigrationFailed({ stage: "auth" }),
+  });
   const provision = Effect.gen(function* () {
-    const context = yield* Effect.tryPromise({
-      try: () => betterAuth(options).$context,
-      catch: () => new HostedMigrationFailed({ stage: "auth" }),
-    });
-    yield* provisionHostedOAuthResources(settings.url, context).pipe(
+    yield* provisionHostedOAuthResources(origins, yield* context).pipe(
       Effect.mapError(() => new HostedMigrationFailed({ stage: "auth" })),
     );
   });
-  return { url, options, provision };
+  return { url, options, origins, context, provision };
 });

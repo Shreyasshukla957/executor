@@ -12,6 +12,7 @@ import {
 import { HttpClient, HttpClientRequest } from "effect/http";
 import { createHash, randomUUID } from "node:crypto";
 import { Target } from "./platform.ts";
+import { roleHost } from "./role-hosts.ts";
 
 export const BaseUrl = Schema.String.check(
   Schema.makeFilter((value) => {
@@ -58,7 +59,7 @@ const GoogleProvider = Schema.Struct({ ...Provider.fields, discovery: GoogleDisc
 
 /** Private control-plane output consumed by both deployment configuration and black-box tests. */
 export const EmulatorFixture = Schema.Struct({
-  version: Schema.Literal(3),
+  version: Schema.Literal(4),
   origin: Schema.String,
   services: Schema.Struct({
     google: GoogleProvider,
@@ -66,6 +67,7 @@ export const EmulatorFixture = Schema.Struct({
     mail: Schema.Struct({ baseUrl: BaseUrl, token: Schema.NonEmptyString }),
     company: Schema.Struct({ baseUrl: BaseUrl, token: Schema.NonEmptyString }),
     billing: Schema.Struct({ baseUrl: BaseUrl, token: Schema.NonEmptyString }),
+    workos: Schema.Struct({ baseUrl: BaseUrl, token: Schema.NonEmptyString }),
   }),
 });
 /**
@@ -310,7 +312,11 @@ export const emulatorRequest = (
   );
 };
 
-/** Provision actual hosted instances and credentials through emulators.dev's control plane. */
+/**
+ * Provision actual hosted instances and credentials through emulators.dev's control plane, for a
+ * Cloud deployment at `origin`. Cloud's providers return sign-in to its edge, which stands in
+ * for `executor.sh`, so that is the one callback each sign-in client registers.
+ */
 export const createEmulatorFixture = (origin: string) =>
   Effect.gen(function* () {
     const instance = `executor-onboarding-${randomUUID()}`;
@@ -326,7 +332,7 @@ export const createEmulatorFixture = (origin: string) =>
         const issued = yield* emulatorRequest(instance.providerBaseUrl, "/_emulate/credentials", {
           type: "oauth-authorization-code",
           name: "Executor onboarding E2E",
-          redirect_uris: [`${origin}/api/auth/callback/${service}`],
+          redirect_uris: [`${roleHost(origin, "edge")}/api/auth/callback/${service}`],
         }).pipe(
           Effect.flatMap(
             Schema.decodeUnknownEffect(
@@ -372,7 +378,7 @@ export const createEmulatorFixture = (origin: string) =>
       });
     return Redacted.make(
       EmulatorFixture.make({
-        version: 3,
+        version: 4,
         origin,
         services: {
           google,
@@ -381,6 +387,7 @@ export const createEmulatorFixture = (origin: string) =>
           company: yield* keyed("context"),
           // Cloud accepts only Autumn-shaped keys; a private instance is keyed like the sandbox.
           billing: yield* keyed("autumn", `am_sk_test_${randomUUID().replaceAll("-", "")}`),
+          workos: yield* keyed("workos"),
         },
       }),
     );
@@ -491,6 +498,20 @@ const make = Effect.gen(function* () {
       request(value.services.google.baseUrl, "/_emulate/seed", {
         users: [{ ...user, email_verified: true }],
       }).pipe(Effect.asVoid),
+    /** Make an email an active member of a new organization in the emulated v1 WorkOS. */
+    v1Member: (email: string) =>
+      request(value.services.workos.baseUrl, "/_emulate/seed", {
+        users: [{ email, first_name: "Synthetic", last_name: "Member" }],
+        organizations: [{ name: `V1 ${randomUUID().slice(0, 8)}`, members: [email] }],
+      }).pipe(Effect.asVoid),
+    /**
+     * Fail the next membership read once. Only accounts seeded with `v1Member` reach that read,
+     * so other scenarios sharing this emulator never consume the fault.
+     */
+    failNextV1MembershipRead: request(value.services.workos.baseUrl, "/_emulate/faults", {
+      match: { method: "GET", pathPattern: "/user_management/organization_memberships" },
+      response: { status: 503, body: { error: "temporarily_unavailable" } },
+    }).pipe(Effect.asVoid),
     received: (email: string) =>
       messages(email).pipe(Effect.map((rows) => rows.map((row) => row.id))),
     /** The newest new code and its email subject. */

@@ -17,10 +17,13 @@ const jobs = [
   "self-host-catalog",
   "cloud",
   "cloud-product",
+  "cloud-domains",
   "cloud-workers",
   "cloud-locks",
   "cloud-isolate",
   "cloud-rate-limit",
+  "cloud-rollback",
+  "cloud-oauth-proxy-preview",
 ];
 
 const block = (...lines: ReadonlyArray<string>) =>
@@ -807,10 +810,13 @@ layer(NodeServices.layer)("CI E2E selection", (it) => {
       for (const job of [
         "cloud",
         "cloud-product",
+        "cloud-domains",
         "cloud-workers",
         "cloud-locks",
         "cloud-isolate",
         "cloud-rate-limit",
+        "cloud-rollback",
+        "cloud-oauth-proxy-preview",
       ])
         expect(noCloud.log).toMatch(
           new RegExp(`- the ${job} job on cloud: (\\d+) of \\1 scenarios did not run`),

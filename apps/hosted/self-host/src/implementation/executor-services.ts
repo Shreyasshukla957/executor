@@ -1,6 +1,6 @@
 import { hostedAppCapabilities } from "@executor-js/hosted-server/app-management";
 import { executorSelfHostApiDocument } from "../contracts/api.ts";
-import { AppManagementHost } from "@executor-js/app-management";
+import { AppGitOrigins, AppManagementHost } from "@executor-js/app-management";
 import { expireIdleAgentGrants, runStartupDataSteps } from "@executor-js/app-management/data-steps";
 import { SelfHostAuth, selfHostAuth } from "../auth.ts";
 /** Self-host SDK uses the same PGlite connection as Better Auth. */
@@ -158,6 +158,8 @@ export const selfHostExecutorServices = <E, R>(
         Layer.succeed(ScheduledAuthority, scheduleAuthority),
         Layer.succeed(GroupDatabase, Effect.succeed(groupDatabase)),
         Layer.succeed(OrganizationIcons, makeOrganizationIcons(blobs)),
+        // Self-host serves Git, like everything else, on its one origin.
+        Layer.succeed(AppGitOrigins, () => [new URL(origin).origin]),
         Layer.succeed(
           AppManagementHost,
           Effect.succeed({

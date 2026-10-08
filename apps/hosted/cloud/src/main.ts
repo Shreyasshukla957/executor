@@ -54,13 +54,14 @@ import {
 import * as Cloudflare from "alchemy/Cloudflare";
 import { cloudSite } from "./infrastructure/site.ts";
 import { cloudSiteAssets } from "./infrastructure/site-assets.ts";
-import { retainedAssetFolders } from "./contracts/retained-assets.ts";
+import { retainedAssetFolders, retainedAssetPath } from "./contracts/retained-assets.ts";
 import * as Output from "alchemy/Output";
 import { AlchemyContext } from "alchemy/AlchemyContext";
-import { Config, Effect, Layer, Path, Ref } from "effect";
+import { Config, Effect, Layer, Option, Path, Ref } from "effect";
 import { HttpRouter, HttpServer, HttpServerResponse } from "effect/http";
 import { cloudAuth } from "./infrastructure/auth.ts";
 import { cloudOnboarding } from "./infrastructure/onboarding.ts";
+import { Onboarding } from "./contracts/onboarding.ts";
 import { cloudMcp } from "./infrastructure/mcp.ts";
 import { cloudApi } from "./implementation/api.ts";
 import { billingLive } from "./implementation/billing.ts";
@@ -88,8 +89,10 @@ import { cloudWelcomeEmails } from "./infrastructure/welcome-email.ts";
 import { cloudEntryApi, cloudEntryDocument, resolveCloudEntry } from "./implementation/entry.ts";
 import { browserReturnTo } from "@executor-js/hosted-server/browser/contracts";
 import { HttpServerRequest } from "effect/http";
-import { homepage } from "./implementation/homepage.ts";
-import { withNotFoundDocument } from "./implementation/not-found.ts";
+import { homepage, staticDocument } from "./implementation/homepage.ts";
+import { experimentHomepage } from "./implementation/hero-experiment.ts";
+import { sitePageRoutes } from "./contracts/site-paths.ts";
+import { withNotFoundDocument, notFoundDocument } from "./implementation/not-found.ts";
 import { openAiAppsChallenge } from "./implementation/openai-apps-challenge.ts";
 import {
   cloudDashboard,
@@ -106,7 +109,17 @@ import { reportCloudFailure } from "./implementation/error-reporting.ts";
 import { sentryBindings } from "./infrastructure/sentry.ts";
 import { cloudErrorTunnel } from "./implementation/error-tunnel.ts";
 import { cloudSentry } from "./implementation/error-reporting.ts";
-import { authRateLimitSwitchBindings, cloudOrigin, customDomain } from "./infrastructure/stage.ts";
+import {
+  authRateLimitSwitchBindings,
+  cloudOrigin,
+  customDomain,
+  productionApiWorkerName,
+  productionStage,
+  stageName,
+} from "./infrastructure/stage.ts";
+import { roleHostRoutes } from "./infrastructure/role-hosts.ts";
+import { redirectTo, withRoleHosts } from "./implementation/host-roles.ts";
+import { hasSessionCookie } from "./contracts/browser.ts";
 import { clientMetadataBinding } from "./infrastructure/client-metadata.ts";
 import { appDataSupervisors } from "./infrastructure/app-data.ts";
 import { cloudDevelopment } from "./contracts/development.ts";
@@ -134,8 +147,14 @@ export default Api.make(
     const analytics = yield* postHogBindings;
     const sentry = yield* sentryBindings;
     const site = yield* cloudSite;
+    // v1's edge binds to production's Worker by name.
+    const pinnedName =
+      Option.getOrUndefined(yield* stageName) === productionStage
+        ? { name: productionApiWorkerName }
+        : {};
     return {
       main: import.meta.url,
+      ...pinnedName,
       ...(yield* cloudObservability),
       env: {
         ...(yield* telemetryBindings),
@@ -155,6 +174,8 @@ export default Api.make(
       build: workerBuild("api"),
       // Auth callbacks and the dashboard share the configured canonical origin.
       ...(origin === undefined ? {} : { domain: yield* customDomain(origin) }),
+      // The role hosts are zone routes, not custom domains: they order no certificate.
+      ...(dev ? {} : yield* roleHostRoutes),
       // The database's cloud region is a proximity hint, not a Cloudflare data center or a
       // change to local development routing.
       ...(placement === undefined ? {} : { placement }),
@@ -188,7 +209,8 @@ export default Api.make(
     const reportErrors = yield* cloudSentry;
     const errorTunnel = yield* cloudErrorTunnel;
     const email = yield* cloudEmail.pipe(Effect.orDie);
-    const auth = yield* cloudAuth(email.send);
+    const onboarding = yield* cloudOnboarding.pipe(Effect.orDie);
+    const auth = yield* cloudAuth(email.send, yield* Onboarding.pipe(Effect.provide(onboarding)));
     const welcomeEmails = yield* cloudWelcomeEmails(email.welcome);
     yield* AppWorkflows;
     yield* Provisioning;
@@ -288,7 +310,14 @@ export default Api.make(
       Effect.scoped,
       Effect.catch(() => Effect.logWarning("Site asset retention failed")),
     );
-    const dashboard = cloudDashboard(yield* Cloudflare.Workers.bindWorker(Dashboard));
+    const dashboard = cloudDashboard(yield* Cloudflare.Workers.bindWorker(Dashboard), {
+      resourceOrigins: auth.resourceOrigins,
+      // Passkeys made before the dashboard moved belong to the deployment's own host. They stay
+      // unusable under the rollback switch: the relying party remains the role hosts' domain.
+      formerPasskeyHost: Option.isSome(auth.hosts.roles)
+        ? new URL(auth.hosts.deployment).hostname
+        : null,
+    });
     const appUi = hostedAppUi(
       appAddresses(auth.origin, yield* cloudAppUiBase.pipe(Effect.orDie)),
       appDomains.status,
@@ -357,11 +386,12 @@ export default Api.make(
       "agent-grant-expiry": agentGrantExpiry,
     } satisfies Record<BackgroundJob, unknown>;
 
-    const onboarding = yield* cloudOnboarding.pipe(Effect.orDie);
     const egress = yield* cloudEgress;
     const clientMetadata = yield* clientMetadataSetting(auth.origin).pipe(Effect.orDie);
     // Only /openapi.json and preparing the Executor catalog app read the document.
-    const document = lazyHostedApiDocument(() => executorCloudApiDocument(auth.origin));
+    // Clients and the Executor app call the API at its canonical origin.
+    const apiOrigin = auth.resourceOrigins.api[0];
+    const document = lazyHostedApiDocument(() => executorCloudApiDocument(apiOrigin));
     // Only framework lookups and the published skills read the large authoring reference.
     const authoring = Effect.promise(() => import("./implementation/executor-authoring.ts")).pipe(
       Effect.map(({ executorAuthoringSkills }) => executorAuthoringSkills),
@@ -371,7 +401,7 @@ export default Api.make(
       HttpRouter.provideRequest(yield* cloudSourceFormatter),
       Layer.provide(appUi.dashboard),
       Layer.provide(requestServices(auth.appSessions).layer),
-      HttpRouter.provideRequest(catalogLive(document.document, egress, clientMetadata)),
+      HttpRouter.provideRequest(catalogLive(document.document, egress, clientMetadata, apiOrigin)),
       Layer.provide(schedules.layer),
       Layer.provide(billing),
       Layer.provide(removals),
@@ -410,11 +440,8 @@ export default Api.make(
         ),
       ),
     ]);
-    const mcpRoutes = Layer.mergeAll(
-      HttpRouter.add("*", "/mcp", mcp.http),
-      HttpRouter.add("*", "/org/:organization/mcp", mcp.http),
-      HttpRouter.add("GET", "/.well-known/oauth-protected-resource", mcpProtectedResource),
-      HttpRouter.add("GET", "/.well-known/oauth-protected-resource/mcp", mcpProtectedResource),
+    // RFC 8414 metadata, at the issuer's path and at the root for clients that look there.
+    const authorizationServerRoutes = Layer.mergeAll(
       HttpRouter.add("GET", "/.well-known/oauth-authorization-server", mcpAuthorizationServer),
       HttpRouter.add(
         "GET",
@@ -422,11 +449,47 @@ export default Api.make(
         mcpAuthorizationServer,
       ),
     ).pipe(HttpRouter.provideRequest(auth.mcpIdentity));
-    const authoringRoutes = Layer.mergeAll(registryRoutes, gitRoutes).pipe(
-      HttpRouter.provideRequest(hostedAppGitAccess),
-      HttpRouter.provideRequest(executor),
-      Layer.provide(auth.identity),
-      Layer.provide(auth.apiIdentity),
+    const mcpRoutes = Layer.mergeAll(
+      HttpRouter.add("*", "/mcp", mcp.http),
+      HttpRouter.add("*", "/org/:organization/mcp", mcp.http),
+      HttpRouter.add("GET", "/.well-known/oauth-protected-resource", mcpProtectedResource),
+      HttpRouter.add("GET", "/.well-known/oauth-protected-resource/mcp", mcpProtectedResource),
+    ).pipe(HttpRouter.provideRequest(auth.mcpIdentity));
+    const apiDiscoveryRoutes = Layer.mergeAll(
+      HttpRouter.add("GET", "/api", apiChallenge),
+      HttpRouter.add("GET", "/.well-known/oauth-protected-resource/api", apiProtectedResource),
+    ).pipe(HttpRouter.provideRequest(auth.apiIdentity));
+    const appWebhookRoutes = HttpRouter.add(
+      "*",
+      "/api/webhooks/:appId/:subscriptionId",
+      hostedWebhookCallback,
+    ).pipe(HttpRouter.provideRequest(executor));
+    const withGitAccess = <A, E, R>(layer: Layer.Layer<A, E, R>) =>
+      layer.pipe(
+        HttpRouter.provideRequest(hostedAppGitAccess),
+        HttpRouter.provideRequest(executor),
+        Layer.provide(auth.identity),
+        Layer.provide(auth.apiIdentity),
+      );
+    const authoringRoutes = withGitAccess(Layer.mergeAll(registryRoutes, gitRoutes));
+    // Site pages run through the Worker (`worker-first-routes.ts`) and come from the assets.
+    // A file the current build lacks may be a retained docs file from an earlier build;
+    // anything else the assets do not hold gets the ordinary 404.
+    const sitePage = Effect.gen(function* () {
+      const response = yield* staticDocument();
+      if (response.status !== 404) return response;
+      const request = yield* HttpServerRequest.HttpServerRequest;
+      return retainedAssetPath.test(new URL(request.url, "http://localhost").pathname.slice(1))
+        ? yield* siteAssets.serve
+        : yield* notFoundDocument;
+    });
+    const siteRoutes = HttpRouter.addAll(
+      sitePageRoutes.map((page) => HttpRouter.route("GET", page, sitePage)),
+    );
+    // The site's first-party analytics proxy and error tunnel.
+    const siteTelemetryRoutes = Layer.mergeAll(
+      HttpRouter.add("*", "/api/:channel/*", analytics.proxy),
+      HttpRouter.add("POST", "/api/:channel/submit", errorTunnel),
     );
     const routes = Layer.mergeAll(
       HttpRouter.add("POST", "/api/internal/app-domains/resume", appDomains.control("resume")),
@@ -459,8 +522,8 @@ export default Api.make(
         HttpRouter.add("GET", `/${folder}/*`, siteAssets.serve),
       ),
       publishedSkillRoutes(authoring),
-      HttpRouter.add("*", "/api/:channel/*", analytics.proxy),
-      HttpRouter.add("POST", "/api/:channel/submit", errorTunnel),
+      siteRoutes,
+      siteTelemetryRoutes,
       browserTelemetry.pipe(HttpRouter.provideRequest(auth.identity)),
       HttpRouter.add("GET", "/", homepage(auth.cookiePrefix, analytics.hero, dashboard(null))),
       HttpRouter.add("GET", "/org/:organizationSlug", organizationRoot),
@@ -474,9 +537,7 @@ export default Api.make(
             )
           : HttpRouter.add("GET", route, dashboard(null)),
       ),
-      HttpRouter.add("*", "/api/webhooks/:appId/:subscriptionId", hostedWebhookCallback).pipe(
-        HttpRouter.provideRequest(executor),
-      ),
+      appWebhookRoutes,
       HttpRouter.add(
         "GET",
         "/api/auth/organization/list",
@@ -493,15 +554,13 @@ export default Api.make(
         clientMetadataDocument(clientMetadata),
       ).pipe(HttpRouter.provideRequest(auth.identity)),
       mcpRoutes,
+      authorizationServerRoutes,
       HttpRouter.add("GET", "/.well-known/openai-apps-challenge", openAiAppsChallenge),
       Layer.mergeAll(
         HttpRouter.add("GET", "/api/mcp/approvals/:requestId", mcp.approvals),
         HttpRouter.add("POST", "/api/mcp/approvals/:requestId", mcp.approvals),
       ).pipe(HttpRouter.provideRequest(auth.mcpIdentity)),
-      Layer.mergeAll(
-        HttpRouter.add("GET", "/api", apiChallenge),
-        HttpRouter.add("GET", "/.well-known/oauth-protected-resource/api", apiProtectedResource),
-      ).pipe(HttpRouter.provideRequest(auth.apiIdentity)),
+      apiDiscoveryRoutes,
     );
     // Routes are immutable per isolate; requestServices keeps live auth resources in each event.
     const handle = yield* routes.pipe(
@@ -509,8 +568,70 @@ export default Api.make(
       HttpRouter.toHttpEffect,
       Effect.provideService(Layer.CurrentMemoMap, memoMap),
     );
+    // Each role host has its own router, built from the same route layers, so it can serve no
+    // other path. Each build registers its routes in its own router.
+    const mcpHost = yield* Layer.mergeAll(
+      mcpRoutes,
+      authorizationServerRoutes,
+      // ChatGPT verifies the domain of the app's MCP URL, now `mcp.`, at this path.
+      HttpRouter.add("GET", "/.well-known/openai-apps-challenge", openAiAppsChallenge),
+    ).pipe(
+      Layer.provide(HttpServer.layerServices),
+      HttpRouter.toHttpEffect,
+      Effect.provideService(Layer.CurrentMemoMap, memoMap),
+    );
+    const apiHost = yield* Layer.mergeAll(
+      apiRoutes,
+      apiDiscoveryRoutes,
+      authorizationServerRoutes,
+      appWebhookRoutes,
+      // The Executor app reads its skills beside the API it calls.
+      publishedSkillRoutes(authoring),
+      // The public app registry, the SDK's and CLI's default host.
+      withGitAccess(registryRoutes),
+    ).pipe(
+      Layer.provide(HttpServer.layerServices),
+      HttpRouter.toHttpEffect,
+      Effect.provideService(Layer.CurrentMemoMap, memoMap),
+    );
+    // The paths v1's edge forwards from `executor.sh`. Issuer metadata is served here, never
+    // redirected: clients require the issuer to share an origin with the URL they fetched. A
+    // social provider's return answers with a redirect to the browser origin, where the
+    // sign-in's state cookie is.
+    const edgeHost = yield* Layer.mergeAll(
+      authorizationServerRoutes,
+      HttpRouter.add("GET", "/api/auth/callback/:provider", redirectTo(auth.origin, 302)),
+      // A connected-account sign-in's return opens the browser origin's callback page.
+      HttpRouter.add("GET", "/api/oauth/callback", hostedOAuthCallback).pipe(
+        HttpRouter.provideRequest(auth.identity),
+      ),
+      withGitAccess(gitRoutes),
+      // The public site. Nobody is signed in to v2 on the edge, so `/` is always the site's.
+      HttpRouter.add(
+        "GET",
+        "/",
+        experimentHomepage(
+          staticDocument,
+          analytics.hero,
+          Option.getOrUndefined(auth.hosts.sharedCookieDomain),
+        ).pipe(Effect.map(HttpServerResponse.setHeader("cache-control", "private, no-store"))),
+      ),
+      siteRoutes,
+      siteTelemetryRoutes,
+      publishedSkillRoutes(authoring),
+    ).pipe(
+      Layer.provide(HttpServer.layerServices),
+      HttpRouter.toHttpEffect,
+      Effect.provideService(Layer.CurrentMemoMap, memoMap),
+    );
+    const roleHosts = withRoleHosts(
+      auth.hosts,
+      (headers) => hasSessionCookie(new Headers(headers), auth.cookiePrefix),
+      { mcp: mcpHost, api: apiHost, edge: edgeHost },
+    );
     return {
       fetch: handle.pipe(
+        roleHosts,
         withNotFoundDocument,
         Effect.tapCause(reportCloudFailure),
         Effect.catchTag("AuthenticationUnavailable", () =>

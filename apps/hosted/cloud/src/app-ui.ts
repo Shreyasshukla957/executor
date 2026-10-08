@@ -18,7 +18,7 @@ import { cloudAppSessions } from "./infrastructure/app-sessions.ts";
 import { cloudAuthDatabase } from "./infrastructure/auth-database.ts";
 import { cloudServingProduct } from "./infrastructure/serving-product.ts";
 import { sentryBindings } from "./infrastructure/sentry.ts";
-import { cloudOrigin } from "./infrastructure/stage.ts";
+import { cloudHosts } from "./infrastructure/stage.ts";
 import { appDataSupervisors } from "./infrastructure/app-data.ts";
 import { Api } from "./infrastructure/api-worker.ts";
 import {
@@ -74,7 +74,8 @@ export default class AppPages extends Cloudflare.Worker<AppPages>()(
     const appSessions = yield* cloudAppSessions;
     const executor = yield* cloudServingProduct(yield* appDataSupervisors);
     const base = yield* cloudAppUiBase.pipe(Effect.orDie);
-    const appUi = hostedAppUi(appAddresses(yield* cloudOrigin.pipe(Effect.orDie), base));
+    // App pages send sign-in to the dashboard, on the browser origin.
+    const appUi = hostedAppUi(appAddresses((yield* cloudHosts.pipe(Effect.orDie)).browser, base));
     const services = requestServices(Layer.mergeAll(appSessions, executor));
     const notFound = HttpServerResponse.empty({ status: 404 });
     const protectedRoutes = Layer.mergeAll(

@@ -14,6 +14,7 @@ import { startCloudEnvironment } from "../support/cloud-environment.ts";
 import { localNpmRegistry } from "../support/npm-registry.ts";
 import { type FixtureControl, fixtureControlEnvironment } from "./fixtures.ts";
 import { RecordingPaceMs, Target } from "../support/platform.ts";
+import { roleHost } from "../support/role-hosts.ts";
 import { prepareCloudScenarios } from "./prepare-scenarios.ts";
 
 class RunFailed extends Schema.TaggedError<RunFailed>()("RunFailed", { message: Schema.String }) {}
@@ -47,6 +48,8 @@ export const runSuite = ({
   workers,
   defaultWorkers = 16,
   authRateLimit = false,
+  rollback = false,
+  oauthProxyPreview = false,
   attachment,
 }: {
   readonly target: "self-host" | "local" | "cloud" | "all" | "hosted";
@@ -57,6 +60,16 @@ export const runSuite = ({
   readonly defaultWorkers?: number;
   /** Start managed Cloud with the per-address auth limit on, for the scenarios that prove it. */
   readonly authRateLimit?: boolean;
+  /**
+   * Start managed Cloud with `CLOUD_BROWSER_ORIGIN=deployment`, the rollback switch, for the
+   * scenarios that prove it.
+   */
+  readonly rollback?: boolean;
+  /**
+   * Start a second managed Cloud as the OAuth proxy's production, and run against a test stage that
+   * signs in through it, for the scenarios that prove the proxy.
+   */
+  readonly oauthProxyPreview?: boolean;
   readonly attachment?: {
     readonly origin: string;
     readonly fixtures: typeof FixtureControl.Type;
@@ -107,6 +120,19 @@ export const runSuite = ({
           message:
             "The auth rate limit can be turned on only for managed Cloud. Use --target cloud without E2E_CLOUD_URL.",
         });
+      if (rollback && (authRateLimit || selected !== "cloud" || Option.isSome(cloud)))
+        return yield* new RunFailed({
+          message:
+            "The rollback switch can be turned on only for managed Cloud, without --auth-rate-limit. Use --target cloud without E2E_CLOUD_URL.",
+        });
+      if (
+        oauthProxyPreview &&
+        (authRateLimit || rollback || selected !== "cloud" || Option.isSome(cloud))
+      )
+        return yield* new RunFailed({
+          message:
+            "The OAuth proxy preview runs only on managed Cloud, without --auth-rate-limit or --rollback. Use --target cloud without E2E_CLOUD_URL.",
+        });
       const interactive = yield* Config.Boolean("E2E_INTERACTIVE").pipe(Config.withDefault(false));
       const observeUI = yield* Config.Boolean("E2E_UI_OBSERVE").pipe(Config.withDefault(false));
       if (observeUI && (selected !== "cloud" || Option.isSome(cloud)))
@@ -143,7 +169,11 @@ export const runSuite = ({
         ? "attached"
         : authRateLimit
           ? "rate-limited"
-          : "managed";
+          : rollback
+            ? "rolled-back"
+            : oauthProxyPreview
+              ? "oauth-proxy-preview"
+              : "managed";
       const plan = scenariosForSuite(selected === "hosted" ? "hosted" : "all", cloudMode);
       const filter = yield* Effect.try({
         try: () => new RegExp(name),
@@ -178,6 +208,11 @@ export const runSuite = ({
                     ? cloud.value
                     : `http://localhost:${yield* freePort}`
                   : `http://127.0.0.1:${yield* freePort}`;
+              // The OAuth proxy's production, beside the test stage this run tests.
+              const proxyProduction =
+                managedCloud && oauthProxyPreview
+                  ? Option.some(`http://localhost:${yield* freePort}`)
+                  : Option.none<string>();
               const metadata: typeof RunMetadata.Type = {
                 target,
                 origin,
@@ -185,7 +220,7 @@ export const runSuite = ({
                 runtime:
                   target === "cloud"
                     ? managedCloud
-                      ? `Local Cloud Worker + Postgres · no saved credentials · auth rate limit ${authRateLimit ? "on" : "off"}`
+                      ? `Local Cloud Worker + Postgres · no saved credentials · auth rate limit ${authRateLimit ? "on" : "off"}${rollback ? " · sign-in on the deployment origin" : ""}${oauthProxyPreview ? " · a test stage signing in through a second local Cloud's OAuth proxy" : ""}`
                       : "Cloud endpoint"
                     : target === "local" && Option.isSome(packagedEntry)
                       ? "Installed npm CLI + PGlite per scenario"
@@ -195,6 +230,11 @@ export const runSuite = ({
                 startedAt,
                 interactive,
                 diagnostics: "diagnostics/results.json",
+                ...(target === "cloud" && rollback ? { browserOrigin: "deployment" as const } : {}),
+                ...Option.match(proxyProduction, {
+                  onNone: () => ({}),
+                  onSome: (production) => ({ oauthProxyProduction: production }),
+                }),
               };
               const apiKey = Redacted.make(randomBytes(32).toString("hex"));
               yield* fs.writeFileString(`${directory}/run.json`, JSON.stringify(metadata, null, 2));
@@ -206,6 +246,26 @@ export const runSuite = ({
                   // Products this run starts build apps against the checkout's own apps release.
                   const registry =
                     target === "cloud" && !managedCloud ? undefined : yield* localNpmRegistry;
+                  // Production trusts the stage's browser origin, which it returns profiles to.
+                  const productionDirectory = path.join(directory, "oauth-proxy-production");
+                  if (Option.isSome(proxyProduction))
+                    yield* fs.makeDirectory(productionDirectory, { recursive: true, mode: 0o700 });
+                  const production = Option.isSome(proxyProduction)
+                    ? Option.some(
+                        yield* startCloudEnvironment({
+                          ...(registry === undefined ? {} : { npmRegistry: registry.url }),
+                          directory: productionDirectory,
+                          origin: proxyProduction.value,
+                          appPort: yield* freePort,
+                          databasePort: yield* freePort,
+                          commit,
+                          observeUI: false,
+                          authRateLimit: false,
+                          browserOrigin: "app",
+                          trustedOrigins: [roleHost(origin, "app")],
+                        }),
+                      )
+                    : Option.none();
                   const environment = managedCloud
                     ? yield* startCloudEnvironment({
                         ...(registry === undefined ? {} : { npmRegistry: registry.url }),
@@ -216,6 +276,14 @@ export const runSuite = ({
                         commit,
                         observeUI,
                         authRateLimit,
+                        browserOrigin: rollback ? "deployment" : "app",
+                        ...Option.match(production, {
+                          onNone: () => ({}),
+                          onSome: (production) => ({
+                            signInThrough: production.oauthProxy,
+                            prebuilt: true as const,
+                          }),
+                        }),
                       })
                     : undefined;
                   const preparedScenarios =

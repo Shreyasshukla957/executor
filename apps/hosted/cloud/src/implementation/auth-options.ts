@@ -8,7 +8,13 @@ import type { BetterAuthOptions } from "better-auth";
 import { APIError } from "better-auth/api";
 import { authOptions } from "@executor-js/hosted-server";
 import { HttpUrl } from "@executor-js/sdk/core";
-import { cloudOrigin } from "../infrastructure/stage.ts";
+import {
+  accountCallbackOrigin,
+  cloudHosts,
+  type AccountCallbackOrigin,
+  type CloudHosts,
+  type RoleHosts,
+} from "../infrastructure/stage.ts";
 import { passkey } from "@better-auth/passkey";
 import { emailOTP } from "better-auth/plugins/email-otp";
 import { organization } from "better-auth/plugins/organization";
@@ -37,7 +43,10 @@ const ProxyOrigin = Schema.String.check(
         return false;
       }
     },
-    { message: "OAUTH_PROXY_PRODUCTION_URL must be an HTTP(S) origin without a trailing slash" },
+    {
+      message:
+        "The OAuth proxy's production URL must be an HTTP(S) origin without a trailing slash",
+    },
   ),
 );
 
@@ -50,29 +59,74 @@ const OAuthProxySettings = Schema.Struct({
   secret: Schema.Option(Schema.Redacted(Schema.String.check(Schema.isMinLength(32)))),
 }).check(
   Schema.makeFilter((value) => Option.isSome(value.productionUrl) === Option.isSome(value.secret), {
-    message: "Set OAUTH_PROXY_PRODUCTION_URL and OAUTH_PROXY_SECRET together, or set neither",
+    message: "Set the OAuth proxy's production URL and secret together, or set neither",
   }),
 );
 
+/**
+ * Where social providers send sign-in back. With role hosts it is the edge (`executor.sh`), whose
+ * callback answers with a redirect to the same path on the browser origin: the sign-in's state
+ * cookie is host-only there, and the code exchange names the registered edge URI. Without role
+ * hosts it is the browser origin itself.
+ */
+const socialCallbackOrigin = (hosts: CloudHosts) =>
+  Option.match(hosts.roles, { onNone: () => hosts.browser, onSome: (roles) => roles.edge });
+
+/** The connected-account callback on the origin `setting` names. */
+const accountCallback = (setting: AccountCallbackOrigin, deployment: string, roles: RoleHosts) =>
+  HttpUrl.make(
+    new URL("/api/oauth/callback", setting === "deployment" ? deployment : roles.edge).href,
+  );
+
 /** Require both cloud social providers and reject blank credentials at startup. */
 export const cloudAuthSettings = Effect.gen(function* () {
-  const url = yield* cloudOrigin;
+  const hosts = yield* cloudHosts;
+  const url = hosts.browser;
+  const resourceOrigins = hosts.resourceOrigins;
+  const callbackOrigin = socialCallbackOrigin(hosts);
   const emulators = yield* cloudEmulators;
-  const oauthRedirectUri = yield* Config.String("EXECUTOR_OAUTH_CALLBACK_URL").pipe(
+  const configuredRedirectUri = yield* Config.String("EXECUTOR_OAUTH_CALLBACK_URL").pipe(
     Config.option,
     Effect.flatMap(Schema.decodeUnknownEffect(Schema.Option(HttpUrl))),
   );
-  // Emulators own direct callbacks. Do not resolve real proxy credentials in this mode,
-  // including retained deployment bindings from a previous non-emulated version.
-  const oauthProxy = Option.isSome(emulators)
-    ? Option.none()
-    : yield* Config.all({
-        productionUrl: Config.String("OAUTH_PROXY_PRODUCTION_URL").pipe(Config.option),
-        secret: Config.Redacted("OAUTH_PROXY_SECRET").pipe(Config.option),
-      }).pipe(
-        Effect.flatMap(Schema.decodeUnknownEffect(OAuthProxySettings)),
-        Effect.map(Option.all),
-      );
+  // With role hosts, connected-account sign-ins return to the callback `accountCallbackOrigin`
+  // selects, which sends the browser to the browser origin. Without them, an operator may set a
+  // relay.
+  const oauthRedirectUri = Option.isNone(hosts.roles)
+    ? configuredRedirectUri
+    : Option.isSome(configuredRedirectUri)
+      ? yield* Effect.die(
+          new Error(
+            "EXECUTOR_OAUTH_CALLBACK_URL is derived from the role hosts; remove it from this deployment",
+          ),
+        )
+      : Option.some(accountCallback(accountCallbackOrigin, hosts.deployment, hosts.roles.value));
+  // Emulated sign-ins never resolve the real proxy credentials, including bindings retained from
+  // a previous non-emulated version: they name production and its shared secret. A run that
+  // proves the proxy names an emulated one, whose production is another emulated deployment.
+  const proxyNames = Option.isSome(emulators)
+    ? {
+        productionUrl: "EXECUTOR_EMULATED_OAUTH_PROXY_PRODUCTION_URL",
+        secret: "EXECUTOR_EMULATED_OAUTH_PROXY_SECRET",
+      }
+    : { productionUrl: "OAUTH_PROXY_PRODUCTION_URL", secret: "OAUTH_PROXY_SECRET" };
+  const oauthProxy = yield* Config.all({
+    productionUrl: Config.String(proxyNames.productionUrl).pipe(Config.option),
+    secret: Config.Redacted(proxyNames.secret).pipe(Config.option),
+  }).pipe(Effect.flatMap(Schema.decodeUnknownEffect(OAuthProxySettings)), Effect.map(Option.all));
+  // The proxy's production is where its sign-ins return. A value naming this deployment's other
+  // hosts is stale configuration: production would proxy its own sign-ins to itself. The browser
+  // origin moves with `CLOUD_BROWSER_ORIGIN`; the callback origin does not, so neither does this.
+  if (
+    Option.isSome(oauthProxy) &&
+    oauthProxy.value.productionUrl !== callbackOrigin &&
+    [hosts.deployment, hosts.browser].includes(oauthProxy.value.productionUrl)
+  )
+    return yield* Effect.die(
+      new Error(
+        `${proxyNames.productionUrl} is ${oauthProxy.value.productionUrl}, this deployment's own origin; set it to ${callbackOrigin}, where its social sign-ins return`,
+      ),
+    );
   // Production must trust the stage origins it redirects signed-in profiles back to.
   const trustedOrigins = yield* Config.String("AUTH_TRUSTED_ORIGINS").pipe(
     Config.option,
@@ -118,6 +172,10 @@ export const cloudAuthSettings = Effect.gen(function* () {
   });
   return {
     url,
+    hosts,
+    resourceOrigins,
+    issuer: hosts.issuer,
+    callbackOrigin,
     oauthRedirectUri,
     oauthProxy,
     trustedOrigins,
@@ -132,8 +190,8 @@ export interface CloudBillingHooks {
 }
 
 /**
- * Keep the passkey relying-party identity pinned to the configured public origin. The caller
- * decides the per-address limit with `cloudAuthRateLimit`.
+ * Keep the passkey relying-party identity pinned to the configured hosts. The caller decides the
+ * per-address limit with `cloudAuthRateLimit`.
  */
 export const cloudAuthOptions = (
   settings: Effect.Success<typeof cloudAuthSettings> & { readonly rateLimitEnabled: boolean },
@@ -143,8 +201,19 @@ export const cloudAuthOptions = (
   onSignup?: (userId: string) => Promise<void>,
   onLogin?: (userId: string) => Promise<void>,
   onOperation?: (usage: NativeAuthUsage) => Promise<void>,
+  allowsOrganization?: (userId: string) => Promise<boolean>,
 ) => {
   const base = authOptions(settings, ipAddressHeaders);
+  // A test stage that signs in through production's proxy uses production's callback, which the
+  // proxy sets. Every other deployment names its own social callback origin explicitly.
+  const proxiedElsewhere = Option.exists(
+    settings.oauthProxy,
+    (proxy) => proxy.productionUrl !== settings.callbackOrigin,
+  );
+  const redirectURI = (provider: "google" | "github") =>
+    proxiedElsewhere
+      ? {}
+      : { redirectURI: `${settings.callbackOrigin}/api/auth/callback/${provider}` };
   return {
     ...base,
     rateLimit: { ...base.rateLimit, enabled: settings.rateLimitEnabled },
@@ -219,6 +288,10 @@ export const cloudAuthOptions = (
                 maxAge: 0,
                 sameSite: "lax",
                 secure: new URL(settings.url).protocol === "https:",
+                ...Option.match(settings.hosts.sharedCookieDomain, {
+                  onNone: () => ({}),
+                  onSome: (domain) => ({ domain }),
+                }),
               });
           },
           before: async (session, context) => {
@@ -236,11 +309,13 @@ export const cloudAuthOptions = (
       ? {}
       : {
           google: {
+            ...redirectURI("google"),
             clientId: settings.googleClientId,
             clientSecret: Redacted.value(settings.googleClientSecret),
             includeGrantedScopes: false,
           },
           github: {
+            ...redirectURI("github"),
             clientId: settings.githubClientId,
             clientSecret: Redacted.value(settings.githubClientSecret),
             disableDefaultScope: true,
@@ -262,7 +337,7 @@ export const cloudAuthOptions = (
     plugins: [
       ...(onOperation === undefined ? [] : [nativeAuthAnalytics(onOperation)]),
       ...Option.match(settings.emulators, {
-        onSome: (services) => [emulatedSocialProviders(services)],
+        onSome: (services) => [emulatedSocialProviders(services, redirectURI)],
         onNone: () => [],
       }),
       // Login mail is part of the request: provider rejection must reach the UI.
@@ -284,14 +359,27 @@ export const cloudAuthOptions = (
       // The location guard runs last, because Better Auth runs after hooks in plugin order and
       // the proxy plugin's after hook rewrites the outgoing redirect. It checks that rewrite
       // wherever the plugin is registered, not only on the origin that acts as production.
+      //
+      // The plugin proxies a sign-in unless the request's origin is its production URL. Production
+      // is the edge (`executor.sh`), but its own sign-ins start on the browser origin (`app.`, or
+      // `v2.` under the rollback switch), so the plugin would proxy them to a completion endpoint
+      // the guard refuses. Production names itself as the current URL instead: every sign-in it
+      // starts is its own and returns through the edge directly. It still exchanges the codes of
+      // proxied sign-ins, which the plugin recognizes by their encrypted state, not by origin.
       ...Option.match(settings.oauthProxy, {
-        onSome: (proxy) => [
-          ...(proxy.productionUrl === settings.url
-            ? [oauthProxyProductionGuard(Redacted.value(proxy.secret))]
-            : []),
-          oAuthProxy({ productionURL: proxy.productionUrl, secret: Redacted.value(proxy.secret) }),
-          oauthProxyLocationGuard(),
-        ],
+        onSome: (proxy) => {
+          const secret = Redacted.value(proxy.secret);
+          const production = proxy.productionUrl === settings.callbackOrigin;
+          return [
+            ...(production ? [oauthProxyProductionGuard(secret)] : []),
+            oAuthProxy({
+              productionURL: proxy.productionUrl,
+              ...(production ? { currentURL: proxy.productionUrl } : {}),
+              secret,
+            }),
+            oauthProxyLocationGuard(),
+          ];
+        },
         onNone: () => [],
       }),
       ...base.plugins,
@@ -301,6 +389,11 @@ export const cloudAuthOptions = (
           : {
               membershipLimit: (_user, organization) => billing.memberLimit(organization.id),
             }),
+        // Team setup's v1 decision also governs Better Auth's own create endpoint, so a
+        // signed-in account that belongs on Executor v1 cannot create a v2 organization here.
+        ...(allowsOrganization === undefined
+          ? {}
+          : { allowUserToCreateOrganization: (user) => allowsOrganization(user.id) }),
         disableOrganizationDeletion: true,
         requireEmailVerificationOnInvitation: true,
         sendInvitationEmail: ({ email, id, organization }) =>
@@ -333,7 +426,13 @@ export const cloudAuthOptions = (
           );
         },
       }),
-      passkey({ rpID: new URL(settings.url).hostname, rpName: "Executor", origin: settings.url }),
+      // The relying party is the role hosts' domain (`executor.sh`), so passkeys survive a later
+      // move of the dashboard between hosts under it. Ceremonies run on the browser origin.
+      passkey({
+        rpID: settings.hosts.passkey.rpId,
+        rpName: "Executor",
+        origin: settings.hosts.passkey.origin,
+      }),
     ],
   };
 };

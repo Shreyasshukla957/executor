@@ -19,7 +19,7 @@ import {
   Tracer,
 } from "effect";
 import { developmentDatabase } from "./development.ts";
-import { cloudOrigin, testStage, type TestStage } from "./stage.ts";
+import { cloudOrigin, roleHostsJobEnvironment, testStage, type TestStage } from "./stage.ts";
 import { postgresUrl, previewDatabase } from "./preview-database.ts";
 
 /** Both SQL adapters create schema objects as the stable owner, not the rotating login. */
@@ -45,6 +45,8 @@ const preparedPreviewDatabase = (stage: TestStage) =>
             // The same logical id as `cloudSecrets`, so the job signs with the secret the Worker will verify.
             BETTER_AUTH_SECRET: (yield* Random("AuthSecret")).text,
             BETTER_AUTH_URL: stage.origin,
+            // Auth setup provisions the OAuth resources at the role hosts too.
+            ...(yield* roleHostsJobEnvironment),
           },
           memo: false,
           timeout: "5 minutes",
@@ -147,6 +149,8 @@ const productionDatabase = Effect.gen(function* () {
       DATABASE_URL: migrationRole.origin.pipe(Output.map(migrationUrl)),
       BETTER_AUTH_URL: yield* cloudOrigin,
       BETTER_AUTH_SECRET: yield* Config.Redacted("BETTER_AUTH_SECRET"),
+      // Auth setup provisions the OAuth resources at the role hosts too.
+      ...(yield* roleHostsJobEnvironment),
     },
     memo: false,
     timeout: "5 minutes",

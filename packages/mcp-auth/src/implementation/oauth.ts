@@ -28,8 +28,8 @@ import {
   defaultResource,
   grantTarget,
   mcpOAuthResources,
-  mcpResource,
   OAuthResourceProvisioningFailed,
+  type ResourceOrigins,
 } from "../contracts/grant.ts";
 import {
   Connection,
@@ -132,7 +132,16 @@ const redirectIdentity = (value: string) => {
 
 /** Hosts select and authorize their own resource (an organization for hosted, an instance for local). */
 export interface GrantOAuthOptions {
+  /** The browser origin that serves sign-in and consent; same-origin checks compare against it. */
   readonly origin: string;
+  /** Where the MCP and API resources that tokens are issued for are served. */
+  readonly resourceOrigins: ResourceOrigins;
+  /**
+   * The authorization server's issuer identifier, exact and without a trailing slash. It may
+   * name another host than `origin` (RFC 8414): metadata, `iss` and introspection name it, while
+   * every endpoint stays on `origin`. Hosts that serve one origin use `${origin}/api/auth`.
+   */
+  readonly issuer: string;
   /**
    * Choose and authorize the consent's resource. A scoped connection fixes it as `required`;
    * the host still checks access and rejects a conflicting explicit choice.
@@ -179,8 +188,9 @@ const GrantPage = Schema.Struct({
 const grantBatch = 200;
 /** Missing grant records fail closed, including credentials issued before this plugin was installed. */
 export const grantOAuthPlugins = (settings: GrantOAuthOptions) => {
-  const { origin } = settings;
+  const { origin, resourceOrigins } = settings;
   const options = {
+    issuer: settings.issuer,
     scopes: settings.scopes,
     resources: settings.resources,
     resourceSeedMode: "manual",
@@ -222,6 +232,12 @@ export const grantOAuthPlugins = (settings: GrantOAuthOptions) => {
     // audience, and grants still bind each token to exactly one of them.
     enforcePerClientResources: false,
   } satisfies OAuthOptions<Scope[]>;
+  /** Insert a connection's missing resources at every MCP origin; existing rows are kept. */
+  const seedConnectionResources = (context: OAuthResourceSeedContext, connection: ConnectionId) =>
+    seedOAuthResources(context, {
+      ...options,
+      resources: mcpOAuthResources(resourceOrigins.mcp, connection),
+    });
   const get = (context: GenericEndpointContext, id: GrantId) =>
     authCall(() =>
       context.context.adapter.findOne({ model: "mcpGrant", where: [{ field: "id", value: id }] }),
@@ -324,17 +340,18 @@ export const grantOAuthPlugins = (settings: GrantOAuthOptions) => {
       if (session === null) return yield* Effect.fail(new APIError("UNAUTHORIZED"));
       return session.user.id;
     });
+  /** The consent's one resource and what it names; its tokens carry exactly that audience. */
   const consentTarget = (value: unknown) =>
     parse(Schema.Struct({ resources: Schema.Array(Schema.String) }), value).pipe(
       Effect.flatMap(({ resources }) => {
-        const target = grantTarget(origin, resources);
-        return target === undefined
+        const target = grantTarget(resourceOrigins, resources);
+        return target === undefined || resources[0] === undefined
           ? Effect.fail(new APIError("UNAUTHORIZED"))
-          : Effect.succeed(target);
+          : Effect.succeed({ target, resource: resources[0] });
       }),
       Effect.mapError(() => new APIError("UNAUTHORIZED")),
     );
-  const targetFor = (context: GenericEndpointContext, row: typeof Record.Type) =>
+  const consentFor = (context: GenericEndpointContext, row: typeof Record.Type) =>
     authCall(() =>
       context.context.adapter.findOne({
         model: "oauthConsent",
@@ -345,6 +362,8 @@ export const grantOAuthPlugins = (settings: GrantOAuthOptions) => {
         ],
       }),
     ).pipe(Effect.flatMap(consentTarget));
+  const targetFor = (context: GenericEndpointContext, row: typeof Record.Type) =>
+    consentFor(context, row).pipe(Effect.map(({ target }) => target));
   /** Consent and narrowing refuse a policy that even the grant's own URL could not serve. */
   const requireServable = (policy: GrantPolicy, target: GrantTarget) =>
     approvalRefusal(policy, target) === undefined
@@ -369,12 +388,11 @@ export const grantOAuthPlugins = (settings: GrantOAuthOptions) => {
       const row = yield* get(context, claims.grant_id);
       if (row.userId !== claims.sub || row.clientId !== claims.client_id)
         return yield* Effect.fail(new APIError("UNAUTHORIZED"));
-      const target = yield* targetFor(context, row);
+      const { target, resource } = yield* consentFor(context, row);
       const audiences = typeof claims.aud === "string" ? [claims.aud] : claims.aud;
-      const audience = target.kind === "api" ? `${origin}/api` : mcpResource(origin, target);
       if (
         audiences.length !== 1 ||
-        audiences[0] !== audience ||
+        audiences[0] !== resource ||
         target.kind !== kind ||
         !claims.scope.split(" ").includes(kind === "api" ? "executor" : "mcp")
       )
@@ -413,7 +431,7 @@ export const grantOAuthPlugins = (settings: GrantOAuthOptions) => {
             {
               field: "identifier",
               operator: "in",
-              value: mcpOAuthResources(origin, row.id).map((item) => item.identifier),
+              value: mcpOAuthResources(resourceOrigins.mcp, row.id).map((item) => item.identifier),
             },
           ],
           update: { disabled: true },
@@ -814,7 +832,9 @@ export const grantOAuthPlugins = (settings: GrantOAuthOptions) => {
             if (!usable.has(grant.id) || disabled.has(grant.clientId)) return [];
             const consent = consentOf.get(grant.id);
             const target =
-              consent === undefined ? undefined : grantTarget(origin, consent.resources ?? []);
+              consent === undefined
+                ? undefined
+                : grantTarget(resourceOrigins, consent.resources ?? []);
             if (consent === undefined || target === undefined) return [];
             const connection =
               grant.connection == null ? undefined : connectionOf.get(grant.connection);
@@ -1006,12 +1026,7 @@ export const grantOAuthPlugins = (settings: GrantOAuthOptions) => {
                   ? yield* connectionView(existing)
                   : yield* Effect.fail(new APIError("CONFLICT"));
               // Resources exist before the URL is shown, so the first authorization can use it.
-              yield* authCall(() =>
-                seedOAuthResources(ctx.context, {
-                  ...options,
-                  resources: mcpOAuthResources(origin, input.id),
-                }),
-              );
+              yield* authCall(() => seedConnectionResources(ctx.context, input.id));
               const now = new Date();
               const row = yield* authCall(() =>
                 ctx.context.adapter.create({
@@ -1192,7 +1207,7 @@ export const grantOAuthPlugins = (settings: GrantOAuthOptions) => {
               const targets = new Map<GrantId, GrantTarget>();
               for (const consent of consents) {
                 if (consent.referenceId === null || consent.resources == null) continue;
-                const target = grantTarget(origin, consent.resources);
+                const target = grantTarget(resourceOrigins, consent.resources);
                 if (target !== undefined) targets.set(consent.referenceId, target);
               }
               if (targets.size === 0) return [];
@@ -1319,7 +1334,7 @@ export const grantOAuthPlugins = (settings: GrantOAuthOptions) => {
               input.value.request_uri !== undefined
             )
               return;
-            const resource = defaultResource(origin, input.value.scope);
+            const resource = defaultResource(resourceOrigins.mcp[0], input.value.scope);
             if (resource === undefined)
               throw new APIError("BAD_REQUEST", {
                 error: "invalid_target",
@@ -1341,7 +1356,7 @@ export const grantOAuthPlugins = (settings: GrantOAuthOptions) => {
                 if (!body.accept) return;
                 const userId = yield* browser(ctx);
                 const target = grantTarget(
-                  origin,
+                  resourceOrigins,
                   new URLSearchParams(body.oauth_query).getAll("resource"),
                 );
                 if (target === undefined)
@@ -1442,6 +1457,12 @@ export const grantOAuthPlugins = (settings: GrantOAuthOptions) => {
     provisionResources: (context: OAuthResourceSeedContext) =>
       Effect.tryPromise({
         try: () => seedOAuthResources(context, options),
+        catch: () => new OAuthResourceProvisioningFailed(),
+      }),
+    /** The same insert-only seed a new connection gets, for a connection that already exists. */
+    provisionConnectionResources: (context: OAuthResourceSeedContext, connection: ConnectionId) =>
+      Effect.tryPromise({
+        try: () => seedConnectionResources(context, connection),
         catch: () => new OAuthResourceProvisioningFailed(),
       }),
     authenticate: access,

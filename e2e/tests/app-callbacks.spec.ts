@@ -14,6 +14,8 @@ import { Actors } from "../support/actors.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { App, Resource } from "../support/contracts.ts";
 import { appsManifest } from "../support/apps-release.ts";
+import { Target } from "../support/platform.ts";
+import { targetHosts } from "../support/role-hosts.ts";
 
 const files = [
   {
@@ -75,7 +77,8 @@ layer(HostedLive, { excludeTestServices: true })("App calls during outside waits
       context,
       Effect.gen(function* () {
         const api = yield* Api,
-          actors = yield* Actors;
+          actors = yield* Actors,
+          target = yield* Target;
         const prefix = `/api/organizations/${actors.organization.id}`;
         const name = `Callbacks ${randomUUID().slice(0, 8)}`;
         const created: { app?: string; account?: string; profile?: string } = {};
@@ -146,6 +149,13 @@ layer(HostedLive, { excludeTestServices: true })("App calls during outside waits
           ),
         );
         expect(subscriptions.map((subscription) => subscription.status)).toEqual(["active"]);
+        // A new subscription registers on the canonical API origin (Cloud's `api.`).
+        expect(
+          subscriptions.map((subscription) => new URL(subscription.callbackUrl).origin),
+        ).toEqual([targetHosts(target).api]);
+        expect(new URL(subscriptions[0]?.callbackUrl ?? "").pathname).toMatch(
+          new RegExp(`^/api/webhooks/${app}/[^/]+$`),
+        );
 
         const call = (tool: "slow" | "events", kind: "mutation" | "query") =>
           api.request(actors.owner, "POST", `${prefix}/apps/${app}/tools/call`, {

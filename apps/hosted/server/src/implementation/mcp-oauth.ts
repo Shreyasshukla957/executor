@@ -1,6 +1,6 @@
 import { ApiKeyId } from "../contracts/api-keys.ts";
 import { browserPersonalTokenAccess, apiKeyAccess, requirePinnedOrganization } from "./api-keys.ts";
-import { ApprovalMode, GrantId, mcpOAuthResources } from "@executor-js/mcp-auth";
+import { ApprovalMode, type ConnectionId, GrantId, mcpOAuthResources } from "@executor-js/mcp-auth";
 
 /** Hosted membership composes with the shared OAuth grant lifecycle. */
 import type { BetterAuthPlugin, GenericEndpointContext } from "@better-auth/core";
@@ -11,6 +11,7 @@ import {
   authCall,
   runAuth,
   type GrantAccess,
+  type GrantOAuthOptions,
   type OAuthResourceSeedContext,
 } from "@executor-js/mcp-auth/oauth";
 import { AuthenticationUnavailable } from "../contracts/auth.ts";
@@ -55,13 +56,24 @@ const membership = (
     ),
   );
 
-const hostedGrantOAuth = (origin: string) =>
+/**
+ * The browser origin serves sign-in and consent; the resource origins name MCP and API audiences;
+ * the issuer identifies the authorization server, possibly on another host.
+ */
+export type HostedOAuthOrigins = Pick<GrantOAuthOptions, "origin" | "resourceOrigins" | "issuer">;
+
+const hostedGrantOAuth = ({ origin, resourceOrigins, issuer }: HostedOAuthOrigins) =>
   grantOAuthPlugins({
     origin,
+    resourceOrigins,
+    issuer,
     scopes: ["mcp", "executor", "offline_access"],
     resources: [
-      ...mcpOAuthResources(origin),
-      { identifier: `${origin}/api`, allowedScopes: ["executor", "offline_access"] },
+      ...mcpOAuthResources(resourceOrigins.mcp),
+      ...resourceOrigins.api.map((resourceOrigin) => ({
+        identifier: `${resourceOrigin}/api`,
+        allowedScopes: ["executor", "offline_access"],
+      })),
     ],
     selectResource: (ctx, userId, required) =>
       Effect.gen(function* () {
@@ -140,12 +152,24 @@ const projectPatAccess = (
   });
 
 /** Provision the host's fixed resources before serving OAuth requests. */
-export const provisionHostedOAuthResources = (origin: string, context: OAuthResourceSeedContext) =>
-  hostedGrantOAuth(origin).provisionResources(context);
+export const provisionHostedOAuthResources = (
+  origins: HostedOAuthOrigins,
+  context: OAuthResourceSeedContext,
+) => hostedGrantOAuth(origins).provisionResources(context);
+
+/**
+ * Insert one existing connection's missing resources at every resource origin, as a new
+ * connection gets them. Existing resource rows are never changed.
+ */
+export const provisionHostedConnectionResources = (
+  origins: HostedOAuthOrigins,
+  context: OAuthResourceSeedContext,
+  connection: ConnectionId,
+) => hostedGrantOAuth(origins).provisionConnectionResources(context, connection);
 
 /** A consent binds a new grant to the selected organization; refresh retains its identity. */
-export const mcpOAuthPlugins = (origin: string) => {
-  const oauth = hostedGrantOAuth(origin);
+export const mcpOAuthPlugins = (origins: HostedOAuthOrigins) => {
+  const oauth = hostedGrantOAuth(origins);
   const projectAccess = (ctx: GenericEndpointContext, grant: GrantAccess) =>
     Effect.gen(function* () {
       const organization = yield* Schema.decodeUnknownEffect(OrganizationId)(grant.resource).pipe(
@@ -178,7 +202,7 @@ export const mcpOAuthPlugins = (origin: string) => {
                   .lookupBrowser(ctx)
                   .pipe(Effect.flatMap((grant) => projectAccess(ctx, grant)));
               const target = yield* parsePatGrant(ctx.body.id);
-              const identity = yield* browserPersonalTokenAccess(ctx, origin, target.token);
+              const identity = yield* browserPersonalTokenAccess(ctx, origins.origin, target.token);
               return yield* projectPatAccess(ctx, identity, target.organization, target.mode);
             }),
           ),

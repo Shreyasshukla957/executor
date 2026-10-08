@@ -82,7 +82,7 @@ const jobs = {
   cloud: {
     target: "cloud",
     pattern:
-      "Cloud onboarding|Cloud OAuth callbacks|Cloud product events|Cloud feedback|Cloud tracks an unusable OAuth|app query traces|observability retains|browser decode and startup|Browser connection failures explain|optimistic replay failures|private app crash reports|Platform admin impersonation|Cloud reports the framework pin|Cloud deploys fail promptly when the compiler does not answer|refuses every stored state Better Auth refuses|Billing reconciles only while visible|A dashboard read refreshed while in flight|Cloud finishes a slow app's tool listing|Cloud remembers a stalled tool listing|Cloud keeps each JSON Schema definition a tool listing repeats once|definitions share a name and length but not their JSON|definition names are long and of one length|Cloud MCP session objects (?:hold|make)|Cloud MCP request spans say whether|database failure while verifying an API key|Cloud cron wakes the schedule coordinator|Cloud runs a due schedule and requested profile setup while|app evaluation failures explain the likely cause|client request rejections are recorded on their request span|failure text reaches its caller|an app request Executor's network failed to send|MCP tool calls deliver their tool name and outcome|Executor time|Cloud serves a tool listing its isolate cannot keep|Cloud writes the background refresh of a stale tool listing|Owners delete an organization with every app|Hosted MCP negotiates older protocol versions|Hosted MCP ends a cancelled call|Cloud copies each build's browser files",
+      "Cloud onboarding|Cloud sign-in (?:keeps a new v1|skips the v1 check)|Cloud OAuth callbacks|Cloud product events|Cloud feedback|Cloud tracks an unusable OAuth|app query traces|observability retains|browser decode and startup|Browser connection failures explain|optimistic replay failures|private app crash reports|Platform admin impersonation|Cloud reports the framework pin|Cloud deploys fail promptly when the compiler does not answer|refuses every stored state Better Auth refuses|Billing reconciles only while visible|A dashboard read refreshed while in flight|Cloud finishes a slow app's tool listing|Cloud remembers a stalled tool listing|Cloud keeps each JSON Schema definition a tool listing repeats once|definitions share a name and length but not their JSON|definition names are long and of one length|Cloud MCP session objects (?:hold|make)|Cloud MCP request spans say whether|database failure while verifying an API key|Cloud cron wakes the schedule coordinator|Cloud runs a due schedule and requested profile setup while|app evaluation failures explain the likely cause|client request rejections are recorded on their request span|failure text reaches its caller|an app request Executor's network failed to send|MCP tool calls deliver their tool name and outcome|Executor time|Cloud serves a tool listing its isolate cannot keep|Cloud writes the background refresh of a stale tool listing|Owners delete an organization with every app|Hosted MCP negotiates older protocol versions|Hosted MCP ends a cancelled call|Cloud copies each build's browser files",
   },
   // The scenarios above share one local Cloud and collector, and their span and latency checks
   // stall when more scenarios load it. These assert no such bound, so they start their own.
@@ -90,6 +90,14 @@ const jobs = {
     target: "cloud",
     pattern:
       "Cloud SSO SAML accepts|Safari reports only the page's own failures|Cloud cron triggers run their jobs|Cloud support dialog lists every channel|Hosted feedback enforces its API contract|Executor's catalog calls an app's own cache methods|Executor app is installed by its request|Request and workflow attempts at one team|remote skill catalog|a skill read without a revision|abandons a GitHub skills load",
+  },
+  // Cloud's hosts: role hosts, the edge and sign-in on `app.`. Run in `cloud-product`, their
+  // load kept the team installation's workflow span from arriving within its 30-second wait, so
+  // they start their own local Cloud too.
+  "cloud-domains": {
+    target: "cloud",
+    pattern:
+      "cloud role hosts serve only|a grant is for its one resource|role host resource seed|Cloud request spans name the host|Cloud sign-in explains that a passkey|Cloud connected-account sign-ins return through|Cloud serves its site for the edge|Cloud's API host serves the SDK|Cloud's own social sign-ins on app\\.",
   },
   "cloud-workers": {
     target: "cloud",
@@ -112,6 +120,19 @@ const jobs = {
     cloudMode: "rate-limited",
     pattern:
       "Cloud limits sign-in and OAuth client registration per address|Cloud counts two first requests from one address|Cloud reports a Better Auth query the database failed",
+  },
+  // Managed Cloud serves sign-in on `app.`; this job starts one with the rollback switch on.
+  "cloud-rollback": {
+    target: "cloud",
+    cloudMode: "rolled-back",
+    pattern:
+      "Cloud's rollback switch serves sign-in|Cloud's own social sign-ins under the rollback switch",
+  },
+  // Managed Cloud is the OAuth proxy's production; this job runs a test stage signing in through it.
+  "cloud-oauth-proxy-preview": {
+    target: "cloud",
+    cloudMode: "oauth-proxy-preview",
+    pattern: "A test stage signs in through production's OAuth proxy",
   },
 } as const satisfies Record<
   string,
@@ -808,7 +829,7 @@ NodeRuntime.runMain(
         message: [
           "Every scenario e2e/test-plan.ts schedules must run in CI, or it goes stale without anyone noticing:",
           ...uncovered,
-          'Add a scenario to a job pattern in e2e/ci-selection.ts; a Cloud scenario without runtime "managed" or "rate-limited" runs in Cloud tests on main. Otherwise mark the target not-run with its reason in e2e/test-plan.ts, or add it to notRunInCi in e2e/ci-selection.ts with why no CI job runs it.',
+          'Add a scenario to a job pattern in e2e/ci-selection.ts; a Cloud scenario without runtime "managed", "rate-limited" or "rolled-back" runs in Cloud tests on main. Otherwise mark the target not-run with its reason in e2e/test-plan.ts, or add it to notRunInCi in e2e/ci-selection.ts with why no CI job runs it.',
         ].join("\n"),
       });
     const changed =

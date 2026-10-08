@@ -43,11 +43,16 @@ export const selfHostAuth = Effect.gen(function* () {
     try: () => auth.$context,
     catch: () => new AuthenticationUnavailable(),
   });
-  yield* provisionHostedOAuthResources(settings.url, context).pipe(
+  const origins = {
+    origin: settings.url,
+    resourceOrigins: settings.resourceOrigins,
+    issuer: settings.issuer,
+  };
+  yield* provisionHostedOAuthResources(origins, context).pipe(
     Effect.mapError(() => new AuthenticationUnavailable()),
   );
   const identity = Layer.succeed(Authentication, {
-    origin: settings.url,
+    ...origins,
     oauthRedirectUri: Option.getOrUndefined(settings.oauthRedirectUri),
     current: (headers) =>
       Effect.tryPromise({
@@ -75,9 +80,9 @@ export const selfHostAuth = Effect.gen(function* () {
       ),
   });
   const mcpIdentity = Layer.succeed(McpAuthentication, {
-    origin: settings.url,
+    ...origins,
     authenticate: (headers, mode, organization) =>
-      mcpBearerAccess(settings.url, { headers, mode, organization }).pipe(
+      mcpBearerAccess(origins, { headers, mode, organization }).pipe(
         Effect.provideService(SqlClient.SqlClient, sql),
         Effect.tap(({ access }) =>
           Effect.annotateCurrentSpan("executor.organization.id", access.organization),
@@ -98,9 +103,9 @@ export const selfHostAuth = Effect.gen(function* () {
     ),
   });
   const apiIdentity = Layer.succeed(ApiAuthentication, {
-    origin: settings.url,
+    ...origins,
     authenticate: (headers, organization) =>
-      apiBearerAccess(settings.url, { headers, organization }).pipe(
+      apiBearerAccess(origins, { headers, organization }).pipe(
         Effect.provideService(SqlClient.SqlClient, sql),
         Effect.tap(({ access }) =>
           Effect.annotateCurrentSpan("executor.organization.id", access.organization),

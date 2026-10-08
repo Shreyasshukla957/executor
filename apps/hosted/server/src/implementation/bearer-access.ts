@@ -21,7 +21,6 @@ import {
   GrantPolicy,
   grantAuthorization,
   grantTarget,
-  mcpResource,
   type ApprovalMode,
   type GrantTarget,
 } from "@executor-js/mcp-auth";
@@ -40,7 +39,7 @@ import { McpAccess, McpForbidden, McpForbiddenReason, McpUnauthorized } from "..
 import { AuthenticationUnavailable, Unauthorized } from "../contracts/auth.ts";
 import { OrganizationForbidden } from "../contracts/organization.ts";
 import { isApiKey } from "./api-keys.ts";
-import { patGrantId } from "./mcp-oauth.ts";
+import { patGrantId, type HostedOAuthOrigins } from "./mcp-oauth.ts";
 
 /**
  * Why a bearer was refused, before translation into the MCP or API contract. A valid credential
@@ -245,7 +244,7 @@ const loadOAuth = (
 /** An OAuth grant for `kind`, as `@executor-js/mcp-auth` and hosted membership authorize it. */
 const oauthAccess = (
   sql: SqlClient.SqlClient,
-  origin: string,
+  { origin, resourceOrigins }: HostedOAuthOrigins,
   kind: "mcp" | "api",
   token: string,
   request: BearerRequest,
@@ -313,15 +312,13 @@ const oauthAccess = (
       row.grantResource.length === 0
     )
       return yield* unauthorized;
-    const target: GrantTarget | undefined =
-      row.consentResources === null
-        ? undefined
-        : grantTarget(origin, strings(row.consentResources) ?? []);
+    // The consent's one resource, at any of this deployment's origins, is the token's audience.
+    const consented = row.consentResources === null ? [] : (strings(row.consentResources) ?? []);
+    const target: GrantTarget | undefined = grantTarget(resourceOrigins, consented);
     if (target === undefined) return yield* unauthorized;
-    const audience = target.kind === "api" ? `${origin}/api` : mcpResource(origin, target);
     if (
       audiences.length !== 1 ||
-      audiences[0] !== audience ||
+      audiences[0] !== consented[0] ||
       target.kind !== kind ||
       !scopes.includes(kind === "api" ? "executor" : "mcp")
     )
@@ -489,7 +486,7 @@ const patAccess = (sql: SqlClient.SqlClient, token: string, request: BearerReque
 
 /** MCP authority for an OAuth grant or a PAT, with live grant, connection and membership. */
 export const mcpBearerAccess = (
-  origin: string,
+  origins: HostedOAuthOrigins,
   request: BearerRequest & { readonly mode?: ApprovalMode | undefined },
 ) =>
   Effect.gen(function* () {
@@ -497,7 +494,7 @@ export const mcpBearerAccess = (
     const token = bearer(request.headers);
     if (token === undefined) return yield* unauthorized;
     if (!isApiKey(token)) {
-      const grant = yield* oauthAccess(sql, origin, "mcp", token, request);
+      const grant = yield* oauthAccess(sql, origins, "mcp", token, request);
       return McpAccess.make({
         userId: grant.userId,
         clientId: grant.clientId,
@@ -528,7 +525,7 @@ export const mcpBearerAccess = (
   );
 
 /** Executor API authority for an OAuth grant or a PAT, with the organization's slug. */
-export const apiBearerAccess = (origin: string, request: BearerRequest) =>
+export const apiBearerAccess = (origins: HostedOAuthOrigins, request: BearerRequest) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const token = bearer(request.headers);
@@ -545,7 +542,7 @@ export const apiBearerAccess = (origin: string, request: BearerRequest) =>
             organizationSlug: key.organizationSlug,
           })),
         )
-      : yield* oauthAccess(sql, origin, "api", token, request).pipe(
+      : yield* oauthAccess(sql, origins, "api", token, request).pipe(
           Effect.map((grant) => ({
             userId: grant.userId,
             access: grant.access,

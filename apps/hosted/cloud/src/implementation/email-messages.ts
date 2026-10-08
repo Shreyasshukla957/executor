@@ -95,6 +95,12 @@ export const invitationEmailMessage = ({
   };
 };
 
+/** The docs live on the browser origin; the MCP endpoint is on the canonical MCP origin. */
+export interface WelcomeEmailOrigins {
+  readonly origin: string;
+  readonly resourceOrigin: string;
+}
+
 /**
  * A personal, all-lowercase welcome with matching text and HTML; recipient names are
  * escaped, never markup. It carries one starter prompt with the deployment's MCP URL and
@@ -104,13 +110,12 @@ export const welcomeEmailMessage = (
   email: string,
   name: string,
   links: UnsubscribeLinks,
-  origin: string,
+  origins: WelcomeEmailOrigins,
 ): AuthEmail => {
-  // IaC serves the docs and MCP endpoint on the same canonical cloud origin.
-  const docsUrl = `${origin}/docs`;
+  const docsUrl = `${origins.origin}/docs`;
   const firstName = name.trim().split(/\s+/)[0];
   const greeting = firstName && !firstName.includes("@") ? `hey ${firstName},` : "hey there,";
-  const starterPrompt = `add the executor mcp server at ${origin}/mcp, then read the executor docs at ${docsUrl} and work out how you can best use executor to help me.`;
+  const starterPrompt = `add the executor mcp server at ${origins.resourceOrigin}/mcp, then read the executor docs at ${docsUrl} and work out how you can best use executor to help me.`;
   const paragraphs = [
     greeting,
     "i'm rhys, founder of executor - thanks for signing up!",

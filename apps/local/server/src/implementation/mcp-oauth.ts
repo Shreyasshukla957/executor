@@ -10,6 +10,7 @@ import {
   requestedMcpAddress,
   mcpResource,
   mcpResourceMetadataUrl,
+  singleResourceOrigin,
 } from "@executor-js/mcp-auth";
 import { makeAuthDatabase } from "@executor-js/mcp-auth/node-database";
 import type { ConnectionId, ConnectionPolicy } from "@executor-js/mcp-auth/connections";
@@ -78,10 +79,13 @@ export const makeLocalMcpOAuth = (config: ServerConfig, pairing: LocalAuth, cryp
         "",
       );
     });
+    // Local serves its browser pages and its MCP resources on one origin.
     const oauth = grantOAuthPlugins({
       origin,
+      resourceOrigins: singleResourceOrigin(origin),
+      issuer: `${origin}/api/auth`,
       scopes: ["mcp", "offline_access"],
-      resources: mcpOAuthResources(origin),
+      resources: mcpOAuthResources([origin]),
       selectResource: (_ctx, _userId, required) =>
         required === undefined || required === "local"
           ? Effect.succeed("local")

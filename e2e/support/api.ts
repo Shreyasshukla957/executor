@@ -4,6 +4,7 @@ import { Cookies, HttpClient, HttpClientRequest } from "effect/http";
 import { randomBytes } from "node:crypto";
 import { Evidence } from "./evidence.ts";
 import { Target, type Response } from "./platform.ts";
+import { isMcpPath, targetHosts } from "./role-hosts.ts";
 
 import { BrowserCookies } from "../sdk/contracts.ts";
 export { BrowserCookies } from "../sdk/contracts.ts";
@@ -67,7 +68,10 @@ export class SessionClients extends Context.Service<SessionClients, Sessions>()(
     Effect.gen(function* () {
       const target = yield* Target,
         client = yield* HttpClient.HttpClient;
-      const origin = target.metadata.origin;
+      // Sessions belong to the browser origin, Cloud's `app.` host: its cookies are host-only
+      // there, wherever the fixture that issued them ran.
+      const origin = targetHosts(target).browser;
+      const deployment = targetHosts(target).deployment;
       const session = (initial?: Redacted.Redacted<BrowserCookies>) =>
         Effect.gen(function* () {
           let initialJar = Cookies.empty;
@@ -77,7 +81,7 @@ export class SessionClients extends Context.Service<SessionClients, Sessions>()(
               cookie.name,
               decodeURIComponent(cookie.value),
               {
-                domain: cookie.domain,
+                domain: new URL(origin).hostname,
                 path: cookie.path,
                 httpOnly: cookie.httpOnly,
                 secure: cookie.secure,
@@ -118,8 +122,11 @@ export class SessionClients extends Context.Service<SessionClients, Sessions>()(
               Effect.scoped(
                 Effect.gen(function* () {
                   // Relative product URLs only. Never forward an actor's cookies to another origin.
-                  const url = new URL(path, origin);
-                  if (url.origin !== origin)
+                  // MCP and its discovery are served at the resource origins, never the browser
+                  // origin; they go to the deployment origin, which serves both.
+                  const base = isMcpPath(new URL(path, origin).pathname) ? deployment : origin;
+                  const url = new URL(path, base);
+                  if (url.origin !== base)
                     return yield* new RequestFailed({
                       method,
                       path: "cross-origin request rejected",
@@ -188,7 +195,7 @@ export class Api extends Context.Service<Api, Sessions>()("e2e/Api") {
       const target = yield* Target,
         evidence = yield* Evidence,
         clients = yield* SessionClients;
-      const origin = target.metadata.origin;
+      const origin = targetHosts(target).browser;
       return Api.of({
         session: clients.session,
         request: (actor, method, path, data, headers = {}) =>

@@ -306,6 +306,11 @@ export interface OAuthOptions {
   /** Host transport policy for callbacks, discovery and every token request. */
   readonly urlPolicy: UrlPolicy;
   readonly clientMetadataUrl?: string;
+  /**
+   * A fixed prefix for every sign-in's OAuth `state`, so a proxy in front of a shared callback
+   * URL can tell this host's callbacks apart without a lookup. The random part is unchanged.
+   */
+  readonly statePrefix?: string;
 }
 
 /**

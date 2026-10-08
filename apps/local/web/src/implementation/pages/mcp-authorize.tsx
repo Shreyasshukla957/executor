@@ -3,7 +3,7 @@ import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { useState } from "react";
 import { Exit } from "effect";
 import { AsyncResult } from "effect/reactivity";
-import { grantTarget } from "@executor-js/mcp-auth/grants";
+import { grantTarget, singleResourceOrigin } from "@executor-js/mcp-auth/grants";
 import {
   McpConsentLayout,
   McpConsentLoading,
@@ -19,7 +19,7 @@ export function LocalMcpAuthorizePage() {
   const query = page.search.slice(1),
     params = new URLSearchParams(query);
   const id = params.get("client_id") ?? "";
-  const target = grantTarget(page.origin, params.getAll("resource"));
+  const target = grantTarget(singleResourceOrigin(page.origin), params.getAll("resource"));
   const destination = consentDestination(params.get("redirect_uri"));
   const client = useAtomValue(localMcpClientAtom(id));
   const submit = useAtomSet(localMcpConsentAtom, { mode: "promiseExit" });

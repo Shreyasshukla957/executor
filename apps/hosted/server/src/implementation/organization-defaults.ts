@@ -31,10 +31,13 @@ const State = Schema.Struct({
 });
 const Accounts = Schema.Struct({ accounts: Schema.Record(Schema.String, AccountId) });
 
-/** Install once, then create missing user accounts or repair automatic selections. Completed setup is read-only. */
+/**
+ * Install once, then create missing user accounts or repair automatic selections. Completed setup
+ * is read-only. The Executor app calls this installation's API at its resource origin.
+ */
 export const organizationDefaults = (
   executor: Executor,
-  origin: string,
+  resourceOrigin: string,
   document: Effect.Effect<HostedApiDocument>,
   requireVerifiedEmail = true,
 ) =>
@@ -63,7 +66,7 @@ export const organizationDefaults = (
         const owner = organizationOwner(organization);
         if (!state.initialized) {
           const { defaultExecutorAppSource } = yield* executorApp;
-          const source = yield* defaultExecutorAppSource(origin, yield* document);
+          const source = yield* defaultExecutorAppSource(resourceOrigin, yield* document);
           const existing = (yield* executor.apps.list({ owner, name: "Executor" }))[0];
           if (existing === undefined) {
             yield* executor.apps.deploy({ owner, name: "Executor", files: source.files }).pipe(
@@ -106,7 +109,7 @@ export const organizationDefaults = (
           const deployment = yield* executor.apps.source({ owner, app: app.id });
           if (deployment.id !== app.activeDeployment) return;
           const { defaultExecutorAppSource } = yield* executorApp;
-          const source = yield* defaultExecutorAppSource(origin, yield* document);
+          const source = yield* defaultExecutorAppSource(resourceOrigin, yield* document);
           if (!sourceFilesEqual(deployment.files, source.files)) {
             // A failed upgrade keeps the working installation, and member setup continues.
             const upgraded = yield* Effect.gen(function* () {
@@ -138,10 +141,10 @@ export const organizationDefaults = (
           const deployment = yield* executor.apps.source({ owner, app: app.id });
           if (deployment.id !== app.activeDeployment) return;
           const { defaultExecutorAppSource, executorAppSource } = yield* executorApp;
-          const source = yield* defaultExecutorAppSource(origin, yield* document);
+          const source = yield* defaultExecutorAppSource(resourceOrigin, yield* document);
           if (!sourceFilesEqual(deployment.files, source.files)) {
             // Upgrade only the untouched, unconfigured catalog version. Preserve user edits and connections.
-            const catalog = yield* executorAppSource(origin, yield* document);
+            const catalog = yield* executorAppSource(resourceOrigin, yield* document);
             if (!sourceFilesEqual(deployment.files, catalog.files)) return;
             const workspace = yield* executor.apps.workspace({ owner, app: app.id });
             if (!pinnedOnly(workspace.files, deployment.files)) return;

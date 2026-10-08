@@ -6,6 +6,7 @@ import { HttpClient, HttpClientRequest } from "effect/http";
 import {
   PreviewCommit,
   PreviewNumber,
+  previewBrowserOrigin,
   previewOrigin,
   previewOwner,
   previewRepository,
@@ -128,9 +129,11 @@ const stale = Command.make("stale", {}, () =>
 const verify = Command.make("verify", { number }, ({ number }) =>
   Effect.gen(function* () {
     const client = yield* HttpClient.HttpClient;
-    const origin = previewOrigin(number);
+    const deployment = previewOrigin(number);
+    // Health is the deployment's; sign-in, its pages and its session are on the browser origin.
+    const origin = previewBrowserOrigin(number);
     for (const path of ["/health", "/login", "/api/auth/get-session"]) {
-      const response = yield* client.get(`${origin}${path}`);
+      const response = yield* client.get(`${path === "/health" ? deployment : origin}${path}`);
       if (response.status !== 200)
         return yield* new TestStageFailed({
           message: `Preview ${path} returned HTTP ${response.status}.`,
@@ -204,7 +207,7 @@ const verify = Command.make("verify", { number }, ({ number }) =>
         });
     }
     yield* Console.log(
-      `Verified preview health, login, assets, session and social sign-in redirects: ${origin}`,
+      `Verified preview health, login, assets, session and social sign-in redirects: ${deployment}`,
     );
   }).pipe(Effect.timeout("2 minutes")),
 );

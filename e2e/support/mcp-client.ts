@@ -23,6 +23,8 @@ const make = Effect.gen(function* () {
         readonly connection?: string;
         /** Runs while a native client holds an approval request, before it accepts. */
         readonly whileApproving?: Effect.Effect<void, unknown>;
+        /** Another origin that serves the product's MCP endpoint, such as a Cloud role host. */
+        readonly origin?: string;
       } = {},
     ) =>
       Effect.gen(function* () {
@@ -103,7 +105,7 @@ const make = Effect.gen(function* () {
               return response;
             }),
           );
-        const endpoint = new URL(`${target.metadata.origin}/mcp`);
+        const endpoint = new URL(`${options.origin ?? target.metadata.origin}/mcp`);
         if (options.connection !== undefined)
           endpoint.searchParams.set("connection", options.connection);
         if (options.mode !== undefined) endpoint.searchParams.set("elicitation_mode", options.mode);

@@ -72,8 +72,13 @@ export interface ExecutorCache {
 export interface ExecutorInputs {
   /** Executor tables, app data and the catalog live here. Migrated by the host before use. */
   readonly database: ExecutorDatabase;
-  /** Public origin: webhook callbacks and the address of a stored catalog. */
+  /** Public origin: the address of a stored catalog, and of webhook callbacks by default. */
   readonly origin?: string;
+  /**
+   * Origin new webhook subscriptions register their callbacks on; defaults to `origin`.
+   * Existing subscriptions keep the callback URL they stored.
+   */
+  readonly webhookOrigin?: string;
   /** The Git backend behind app source. The executor derives revision storage from it. */
   readonly git: RepositoryBackend;
   readonly blobs: BlobStorage;

@@ -68,7 +68,7 @@ Use your PAT as the bearer token. The organization URL names where calls run:
   "mcpServers": {
     "executor": {
       "type": "http",
-      "url": "https://v2.executor.sh/org/<organization-id-or-slug>/mcp",
+      "url": "https://mcp.executor.sh/org/<organization-id-or-slug>/mcp",
       "headers": { "Authorization": "Bearer <YOUR_PAT>" }
     }
   }

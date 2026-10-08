@@ -38,6 +38,8 @@ export const httpSpanAttributeAllowlist: ReadonlySet<string> = new Set([
   "url.scheme",
   // Path only. `url.full` and `url.query` carry the query string, so neither is listed.
   "url.path",
+  // The router's matched path template, such as `/api/organizations/:organization`; no values.
+  "http.route",
   "http.request.header.content-type",
   "http.request.header.content-length",
   "http.request.header.user-agent",

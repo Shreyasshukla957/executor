@@ -179,6 +179,11 @@ export const HostedApi = HttpApi.make("executor-hosted")
           organization: OrganizationId,
           slug: Schema.NonEmptyString,
           role: OrganizationRole,
+          /**
+           * Where this host serves app Git remotes, canonical first. They may be on other origins
+           * than this API; a client signed in here uses its session for remotes on each of them.
+           */
+          gitOrigins: Schema.NonEmptyArray(Schema.String),
         }),
         error: [Unauthorized, OrganizationForbidden, AuthenticationUnavailable],
       }).annotate(OpenApi.Override, { security: [{ oauth: ["executor"] }] }),

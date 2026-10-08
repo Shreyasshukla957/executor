@@ -10,6 +10,7 @@ import { Actors } from "./actors.ts";
 import { Browser } from "./browser.ts";
 import { Evidence } from "./evidence.ts";
 import { Target, driver } from "./platform.ts";
+import { targetHosts } from "./role-hosts.ts";
 
 const Tokens = Schema.Struct({
   access_token: Schema.NonEmptyString,
@@ -210,11 +211,14 @@ const make = Effect.gen(function* () {
     http = yield* HttpClient.HttpClient,
     evidence = yield* Evidence;
   const origin = target.metadata.origin;
-  const exchange = (fields: Record<string, string>) =>
+  const hosts = targetHosts(target);
+  // Cloud names its issuer on the edge (`executor.sh`), with every endpoint on the browser origin.
+  const issuer = `${target.metadata.target === "cloud" ? hosts.edge : origin}/api/auth`;
+  const exchange = (fields: Record<string, string>, tokenOrigin: string = hosts.browser) =>
     Effect.scoped(
       Effect.gen(function* () {
         const response = yield* http.execute(
-          HttpClientRequest.post(`${origin}/api/auth/oauth2/token`).pipe(
+          HttpClientRequest.post(`${tokenOrigin}/api/auth/oauth2/token`).pipe(
             HttpClientRequest.bodyUrlParams(fields),
           ),
         );
@@ -229,34 +233,52 @@ const make = Effect.gen(function* () {
       Effect.timeout("30 seconds"),
       Effect.mapError(() => new OAuthFailed({ operation: "token exchange", status: 0 })),
     );
-  const refreshResponse = (grant: Grant) =>
-    exchange({
-      grant_type: "refresh_token",
-      client_id: grant.clientId,
-      refresh_token: Redacted.value(grant.tokens).refresh_token,
-      resource: grant.resource,
-    });
+  const refreshResponse = (grant: Grant, tokenOrigin?: string) =>
+    exchange(
+      {
+        grant_type: "refresh_token",
+        client_id: grant.clientId,
+        refresh_token: Redacted.value(grant.tokens).refresh_token,
+        resource: grant.resource,
+      },
+      tokenOrigin,
+    );
   /**
    * `omitted` sends no RFC 8707 `resource` to the authorization or token endpoint, as some
    * MCP clients do; the grant must still bind to the discovered resource.
+   */
+  /** Discovery at another host the product serves, such as a Cloud role host; no cookies. */
+  const discoverAt = (resourceOrigin: string, path: string) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const response = yield* http.execute(HttpClientRequest.get(`${resourceOrigin}${path}`));
+        return { status: response.status, body: yield* response.json };
+      }),
+    ).pipe(
+      Effect.timeout("30 seconds"),
+      Effect.mapError(() => new OAuthFailed({ operation: "resource discovery", status: 0 })),
+    );
+  /**
+   * `resourceOrigin` is where the client found the resource: the product's own origin, or another
+   * origin that serves the same resources. Discovery runs as a client's does, without cookies:
+   * the resource names the issuer, and the issuer's own origin serves its metadata. Sign-in and
+   * consent stay on the browser origin.
    */
   const authorizeClient = (
     kind: "mcp" | "api",
     connection?: string,
     resourceParameter: "sent" | "omitted" = "sent",
     client: ClientOptions = e2eClient,
+    resourceOrigin: string = origin,
   ) =>
     Effect.gen(function* () {
       // A scoped connection has its own MCP URL, OAuth resource and discovery document.
       const query = connection === undefined ? "" : `?connection=${encodeURIComponent(connection)}`;
-      const resourceUrl = `${origin}/${kind}${query}`;
+      const resourceUrl = `${resourceOrigin}/${kind}${query}`;
       // Playwright network traces contain cookies and authorization codes. Keep the video only.
       yield* browser.omitNetworkTrace;
-      const resource = yield* api.request(
-        actors.owner,
-        "GET",
-        `/.well-known/oauth-protected-resource/${kind}${query}`,
-      );
+      const discoveryPath = `/.well-known/oauth-protected-resource/${kind}${query}`;
+      const resource = yield* discoverAt(resourceOrigin, discoveryPath);
       yield* ok("resource discovery", resource.status);
       const metadata = yield* body(
         Schema.Struct({
@@ -265,15 +287,13 @@ const make = Effect.gen(function* () {
         }),
         resource,
       );
-      if (
-        metadata.resource !== resourceUrl ||
-        !metadata.authorization_servers.includes(`${origin}/api/auth`)
-      )
+      if (metadata.resource !== resourceUrl || !metadata.authorization_servers.includes(issuer))
         return yield* new OAuthFailed({ operation: "resource metadata", status: resource.status });
-      const discovery = yield* api.request(
-        actors.owner,
-        "GET",
-        "/.well-known/oauth-authorization-server/api/auth",
+      // RFC 8414: the issuer's path follows the well-known prefix, on the issuer's origin.
+      const issuerUrl = new URL(issuer);
+      const discovery = yield* discoverAt(
+        issuerUrl.origin,
+        `/.well-known/oauth-authorization-server${issuerUrl.pathname}`,
       );
       yield* ok("authorization discovery", discovery.status);
       const endpoints = yield* body(
@@ -286,10 +306,10 @@ const make = Effect.gen(function* () {
         discovery,
       );
       if (
-        endpoints.issuer !== `${origin}/api/auth` ||
-        endpoints.authorization_endpoint !== `${origin}/api/auth/oauth2/authorize` ||
-        endpoints.token_endpoint !== `${origin}/api/auth/oauth2/token` ||
-        endpoints.registration_endpoint !== `${origin}/api/auth/oauth2/register`
+        endpoints.issuer !== issuer ||
+        endpoints.authorization_endpoint !== `${hosts.browser}/api/auth/oauth2/authorize` ||
+        endpoints.token_endpoint !== `${hosts.browser}/api/auth/oauth2/token` ||
+        endpoints.registration_endpoint !== `${hosts.browser}/api/auth/oauth2/register`
       )
         return yield* new OAuthFailed({
           operation: "authorization endpoints",
@@ -465,8 +485,9 @@ const make = Effect.gen(function* () {
     connection?: string,
     resourceParameter: "sent" | "omitted" = "sent",
     client: ClientOptions = e2eClient,
+    resourceOrigin: string = origin,
   ) =>
-    authorizeClient(kind, connection, resourceParameter, client).pipe(
+    authorizeClient(kind, connection, resourceParameter, client, resourceOrigin).pipe(
       Effect.flatMap(({ authorized, exchanged }) =>
         tokensOf(Tokens, exchanged).pipe(
           Effect.map((tokens): Grant => ({ ...authorized, tokens })),
@@ -480,6 +501,9 @@ const make = Effect.gen(function* () {
     authorizeWithoutResource: authorize("mcp", undefined, "omitted"),
     /** Authorize a scoped connection's own MCP URL through the same browser consent. */
     authorizeConnection: (connection: string) => authorize("mcp", connection),
+    /** Authorize the MCP or API resource a client discovered at another origin. */
+    authorizeAt: (kind: "mcp" | "api", resourceOrigin: string) =>
+      authorize(kind, undefined, "sent", e2eClient, resourceOrigin),
     /** Authorize the plain MCP URL for a client registered under its own name. */
     authorizeNamed: (name: string) =>
       authorize("mcp", undefined, "sent", { name, offlineAccess: true }),
@@ -492,9 +516,13 @@ const make = Effect.gen(function* () {
           ),
         ),
       ),
-    refresh: (grant: Grant) =>
+    /**
+     * Refresh at the token endpoint on `tokenOrigin`, by default the browser origin's: another
+     * origin's is where a client that discovered the endpoints elsewhere keeps sending it.
+     */
+    refresh: (grant: Grant, tokenOrigin?: string) =>
       Effect.gen(function* () {
-        const response = yield* refreshResponse(grant);
+        const response = yield* refreshResponse(grant, tokenOrigin);
         yield* ok("refresh grant", response.status);
         const tokens = yield* body(Tokens, response).pipe(
           Effect.map(Redacted.make),

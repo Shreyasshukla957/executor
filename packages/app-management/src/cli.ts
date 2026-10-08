@@ -51,7 +51,12 @@ import {
   appManagementApi,
 } from "./contracts/api.ts";
 import { frameworkApi } from "./contracts/framework.ts";
-import { RegistryOrigin, registryLogin, registrySession } from "./implementation/node-auth.ts";
+import {
+  RegistryOrigin,
+  gitSession,
+  registryLogin,
+  registrySession,
+} from "./implementation/node-auth.ts";
 
 /** Skill lookups report the host's failure tag or the missing option; never a response body. */
 class SkillLookupFailed extends Schema.TaggedError<SkillLookupFailed>()("SkillLookupFailed", {
@@ -476,7 +481,7 @@ export const appsCommand = (platform: string) =>
         Command.withHandler((args) =>
           manage(args.host, args.organization, (api, tenant) =>
             api.git({ params: { ...tenant, app: args.app } }),
-          ).pipe(Effect.flatMap((remote) => Console.log(args.host + remote.path))),
+          ).pipe(Effect.flatMap((remote) => Console.log(remote.url))),
         ),
       ),
       Command.make("commit", {
@@ -641,7 +646,7 @@ export const appsCommand = (platform: string) =>
       Command.make("credential", {
         action: Argument.Literals("action", ["get", "store", "erase"]).pipe(
           Argument.withDescription(
-            "Operation Git passes to the helper. get supplies the signed-in session for this host's Git paths; store and erase are ignored",
+            "Operation Git passes to the helper. get supplies the signed-in session for the remote's Git paths, including remotes on another origin than the host you signed in to; store and erase are ignored",
           ),
         ),
       }).pipe(
@@ -657,9 +662,9 @@ export const appsCommand = (platform: string) =>
                 return [line.slice(0, split), line.slice(split + 1)];
               }),
             );
-            const host = `${fields.get("protocol")}://${fields.get("host")}`;
-            if (!Schema.is(RegistryOrigin)(host)) return;
-            const session = Redacted.value(yield* registrySession(host));
+            const origin = `${fields.get("protocol")}://${fields.get("host")}`;
+            if (!Schema.is(RegistryOrigin)(origin)) return;
+            const session = Redacted.value(yield* gitSession(origin));
             if (!fields.get("path")?.startsWith(`git/${session.organization}/`)) return;
             yield* Stream.succeed(`username=executor\npassword=${session.accessToken}\n\n`).pipe(
               Stream.run(stdio.stdout()),

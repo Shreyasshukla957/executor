@@ -749,7 +749,14 @@ checks. Managed local Cloud does the same: the runner starts it with
 `TEST_STAGE_AUTH_RATE_LIMIT=false`, which Cloud honors only under `alchemy dev`
 on a loopback origin. `bun run e2e:cloud --auth-rate-limit` starts it with the
 limit on and runs only the scenarios whose Cloud plan declares
-`runtime: "rate-limited"`; CI runs them in their own step. Production (`v2`),
+`runtime: "rate-limited"`; CI runs them in their own step. Likewise
+`bun run e2e:cloud --rollback` starts it with Cloud's rollback switch on
+(`CLOUD_BROWSER_ORIGIN=deployment`, sign-in on the deployment origin) and runs
+only the scenarios declaring `runtime: "rolled-back"`. Managed local Cloud runs
+with Better Auth's OAuth proxy on, as the proxy's production (its edge), as
+production does. `bun run e2e:cloud --oauth-proxy-preview` also starts a second
+local Cloud as that production and tests a stage that signs in through it,
+running only the scenarios declaring `runtime: "oauth-proxy-preview"`. Production (`v2`),
 ordinary previews and every other deployed stage always retain rate limits,
 whatever their configuration; `bun run auth:rate-limit` (part of `check`)
 proves it. Local and
@@ -766,7 +773,7 @@ limit, and is reported separately from test time. Per-scenario setup, assertions
 and cleanup retain their separate 60-second deadlines. The suite owns all
 prepared organizations, including those whose tests never start after a failure.
 
-Only scenarios declaring `runtime: "managed"` or `runtime: "rate-limited"` require the local Cloud target
+Only scenarios declaring `runtime: "managed"`, `"rate-limited"` or `"rolled-back"` require the local Cloud target
 (for example, local telemetry collectors). Their deployed report says N/A with
 the reason. They run only in the Cloud jobs of local CI, so each must match a job pattern in
 `ci-selection.ts`; the `select` job fails on a scheduled scenario that no CI job runs. Claude Code's model-dependent scenario is

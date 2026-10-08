@@ -61,9 +61,13 @@ export * from "./contracts/mcp.ts";
 export {
   mcpBrowserGrantError,
   mcpConnectionStore,
+  provisionHostedConnectionResources,
   provisionHostedOAuthResources,
+  type HostedOAuthOrigins,
 } from "./implementation/mcp-oauth.ts";
 export { grantExpiry, type GrantExpiry } from "@executor-js/mcp-auth/oauth";
+export type { OriginList, ResourceOrigins } from "@executor-js/mcp-auth";
+export { ConnectionId, mcpOAuthResources, singleResourceOrigin } from "@executor-js/mcp-auth";
 export { apiBearerAccess, mcpBearerAccess } from "./implementation/bearer-access.ts";
 export {
   makeHostedMcp,

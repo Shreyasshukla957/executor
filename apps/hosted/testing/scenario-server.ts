@@ -72,6 +72,8 @@ const RemovalFailure = Schema.Struct({
 const main = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const origin = yield* Config.NonEmptyString("TEST_FIXTURE_ORIGIN");
+  // Where the dashboard and its cookie-authenticated API are served: Cloud's `app.` host.
+  const browserOrigin = yield* Config.NonEmptyString("TEST_FIXTURE_BROWSER_ORIGIN");
   const token = yield* Config.Redacted("TEST_FIXTURE_TOKEN");
   const output = yield* Config.NonEmptyString("TEST_FIXTURE_OUTPUT");
   const configured = yield* Semaphore.make(1);
@@ -304,9 +306,10 @@ const main = Effect.gen(function* () {
           yield* Effect.scoped(
             Effect.gen(function* () {
               const response = yield* http.execute(
-                HttpClientRequest.make("DELETE")(`${origin}/api/organizations/${cleanup.id}`, {
-                  headers: { cookie: owner.headers.cookie, origin },
-                }),
+                HttpClientRequest.make("DELETE")(
+                  `${browserOrigin}/api/organizations/${cleanup.id}`,
+                  { headers: { cookie: owner.headers.cookie, origin: browserOrigin } },
+                ),
               );
               const responseText = yield* response.text;
               if (response.status !== 200 && response.status !== 404) {

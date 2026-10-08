@@ -10,6 +10,7 @@ import {
   requestedMcpAddress,
   mcpResource,
   mcpResourceMetadataUrl,
+  requestResourceOrigin,
   type McpAddress,
 } from "@executor-js/mcp-auth";
 import {
@@ -241,22 +242,23 @@ export const authenticatedMcp = <E, R>(
       return HttpServerResponse.empty({
         status: 401,
         headers: {
-          "www-authenticate": `Bearer resource_metadata="${mcpResourceMetadataUrl(auth.origin, address)}", scope="mcp offline_access"`,
+          "www-authenticate": `Bearer resource_metadata="${mcpResourceMetadataUrl(requestResourceOrigin(auth.resourceOrigins.mcp, request.headers.host), address)}", scope="mcp offline_access"`,
         },
       });
     // Clients print a refusal's body after their own prefix, so it keeps the typed cause.
     return yield* refusedMcpRequest(access.failure);
   }).pipe(Effect.map(HttpServerResponse.setHeader("cache-control", "no-store")));
 
-/** RFC 9728 resource metadata for the request's configured auth origin. */
+/** RFC 9728 resource metadata naming the authorization server's issuer. */
 export const mcpProtectedResource = Effect.gen(function* () {
-  const { origin } = yield* McpAuthentication;
+  const { issuer, resourceOrigins } = yield* McpAuthentication;
   const request = yield* HttpServerRequest.HttpServerRequest;
-  const address = requestedMcpAddress(new URL(request.url, origin));
+  const resourceOrigin = requestResourceOrigin(resourceOrigins.mcp, request.headers.host);
+  const address = requestedMcpAddress(new URL(request.url, resourceOrigin));
   if (address === undefined) return invalidAddress;
   return HttpServerResponse.jsonUnsafe({
-    resource: mcpResource(origin, address),
-    authorization_servers: [`${origin}/api/auth`],
+    resource: mcpResource(resourceOrigin, address),
+    authorization_servers: [issuer],
     scopes_supported: ["mcp", "offline_access"],
     bearer_methods_supported: ["header"],
     resource_name: "Executor",

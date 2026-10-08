@@ -1,5 +1,9 @@
 import { hostedProfileHandlers } from "./profiles.ts";
-import { appManagementHandlers, frameworkHandlers } from "@executor-js/app-management";
+import {
+  AppGitOrigins,
+  appManagementHandlers,
+  frameworkHandlers,
+} from "@executor-js/app-management";
 import { HostedAppManagementApi, HostedFrameworkApi } from "../contracts/app-management.ts";
 import { hostedAppAccess } from "../app-management.ts";
 import { hostedResourceAccessHandlers } from "./resource-access.ts";
@@ -48,6 +52,7 @@ const apiContext = HttpApiBuilder.group(HostedApi, "context", (handlers) =>
           organization: grant.access.organization,
           slug: grant.organizationSlug,
           role: grant.access.role,
+          gitOrigins: (yield* AppGitOrigins)(request),
         };
       }),
     );

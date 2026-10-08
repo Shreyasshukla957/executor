@@ -1,12 +1,13 @@
-import { Effect, FileSystem, Path, Redacted, Schedule, Schema, Stream } from "effect";
+import { Clock, Effect, FileSystem, Path, Redacted, Schedule, Schema, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { HttpClient } from "effect/http";
 import { startAnalyticsCollector } from "./analytics-collector.ts";
 import { serveOtlpCollector } from "./otlp-collector.ts";
 import { randomBytes } from "node:crypto";
-import { createEmulatorFixture, emulatorRequest } from "./emulators.ts";
+import { createEmulatorFixture, EmulatorFixture, emulatorRequest } from "./emulators.ts";
 import { startCloudPostgres } from "./cloud-postgres.ts";
 import { startFixtureControl, fixtureRequest } from "../sdk/fixtures.ts";
+import { roleHost } from "./role-hosts.ts";
 
 class CloudStartFailed extends Schema.TaggedError<CloudStartFailed>()("CloudStartFailed", {
   operation: Schema.String,
@@ -30,8 +31,28 @@ export const startCloudEnvironment = (input: {
    * scenarios that prove it.
    */
   readonly authRateLimit: boolean;
+  /**
+   * Which host serves the dashboard and sign-in: `app.` of the origin, or, with the rollback
+   * switch (`CLOUD_BROWSER_ORIGIN=deployment`), the origin itself.
+   */
+  readonly browserOrigin: "app" | "deployment";
   /** Registry the local Cloud compiler resolves app packages from. */
   readonly npmRegistry?: string;
+  /**
+   * Better Auth's OAuth proxy is on, as in production. Without this, this Cloud is the proxy's
+   * production: its edge exchanges the codes of stages that sign in through it. With it, this
+   * Cloud is such a test stage: it names that production's edge and secret, and uses its emulated
+   * providers, whose clients return to that edge.
+   */
+  readonly signInThrough?: {
+    readonly productionUrl: string;
+    readonly secret: Redacted.Redacted<string>;
+    readonly services: typeof EmulatorFixture.Type.services;
+  };
+  /** Another local Cloud of this run built the Worker; a second build would rewrite its files. */
+  readonly prebuilt?: true;
+  /** Origins beside the SSO issuer that this Cloud trusts, such as a stage proxying through it. */
+  readonly trustedOrigins?: ReadonlyArray<string>;
 }) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem,
@@ -39,10 +60,24 @@ export const startCloudEnvironment = (input: {
     const processes = yield* ChildProcessSpawner.ChildProcessSpawner,
       http = yield* HttpClient.HttpClient;
     const cloud = path.resolve("apps/hosted/cloud");
+    const browser = input.browserOrigin === "app" ? roleHost(input.origin, "app") : input.origin;
     const directory = path.resolve(input.directory);
     const stage = `e2e-${randomBytes(8).toString("hex")}`;
     const container = `executor-${stage}`;
-    const fixture = yield* createEmulatorFixture(input.origin);
+    const fixture =
+      input.signInThrough === undefined
+        ? yield* createEmulatorFixture(input.origin)
+        : Redacted.make(
+            EmulatorFixture.make({
+              version: 4,
+              origin: input.origin,
+              services: input.signInThrough.services,
+            }),
+          );
+    const oauthProxy = {
+      productionUrl: input.signInThrough?.productionUrl ?? roleHost(input.origin, "edge"),
+      secret: input.signInThrough?.secret ?? Redacted.make(randomBytes(32).toString("hex")),
+    };
     yield* Effect.addFinalizer(() =>
       Effect.forEach(
         Object.values(Redacted.value(fixture).services),
@@ -105,6 +140,13 @@ export const startCloudEnvironment = (input: {
       CLOUD_DEV_DATABASE_PASSWORD: databasePassword,
       CLOUD_DEV_EXTERNAL_DATABASE: "true",
       EXECUTOR_EMULATORS: JSON.stringify(Redacted.value(fixture).services),
+      // Every account this run creates is new to the v1 check; scenarios backdate one to skip it.
+      V1_MEMBERSHIP_CHECK_SINCE: new Date(yield* Clock.currentTimeMillis).toISOString(),
+      // Serve the role hosts as production does, at `app.`, `mcp.` and `api.` of the origin's host.
+      EXECUTOR_ROLE_HOSTS_DOMAIN: new URL(input.origin).hostname,
+      CLOUD_BROWSER_ORIGIN: input.browserOrigin,
+      EXECUTOR_EMULATED_OAUTH_PROXY_PRODUCTION_URL: oauthProxy.productionUrl,
+      EXECUTOR_EMULATED_OAUTH_PROXY_SECRET: Redacted.value(oauthProxy.secret),
     };
     yield* fs.makeDirectory(env.ALCHEMY_HOME, { recursive: true, mode: 0o700 });
     const dockerHost = (yield* processes.string(
@@ -160,7 +202,14 @@ export const startCloudEnvironment = (input: {
     const ssoIssuer = yield* processes.spawn(
       ChildProcess.make(
         "node",
-        ["apps/hosted/testing/sso-idp.ts", "--directory", directory, "--application", input.origin],
+        [
+          "apps/hosted/testing/sso-idp.ts",
+          "--directory",
+          directory,
+          // SSO returns to the browser origin, where sign-in runs.
+          "--application",
+          browser,
+        ],
         {
           env: { PATH: env.PATH, NODE_ENV: "test" },
           extendEnv: false,
@@ -188,21 +237,27 @@ export const startCloudEnvironment = (input: {
       dockerEnv,
       log: `${directory}/postgres.log`,
     });
-    const built = yield* processes.exitCode(
-      ChildProcess.make("bun", ["run", "framework:build"], {
-        cwd: cloud,
-        env,
-        extendEnv: false,
-        stdout: "inherit",
-        stderr: "inherit",
-      }),
-    );
+    const built =
+      input.prebuilt === true
+        ? 0
+        : yield* processes.exitCode(
+            ChildProcess.make("bun", ["run", "framework:build"], {
+              cwd: cloud,
+              env,
+              extendEnv: false,
+              stdout: "inherit",
+              stderr: "inherit",
+            }),
+          );
     if (built !== 0)
       return yield* new CloudStartFailed({ operation: "Build the actual Cloud Worker" });
     const server = yield* processes.spawn(
       ChildProcess.make("node", ["scripts/dev.ts", "--stage", stage], {
         cwd: cloud,
-        env: { ...env, AUTH_TRUSTED_ORIGINS: sso.origin },
+        env: {
+          ...env,
+          AUTH_TRUSTED_ORIGINS: [sso.origin, ...(input.trustedOrigins ?? [])].join(","),
+        },
         extendEnv: false,
         stdout: "pipe",
         stderr: "pipe",
@@ -231,7 +286,7 @@ export const startCloudEnvironment = (input: {
         ),
       ),
     );
-    const fixtures = yield* startFixtureControl(input.origin, directory);
+    const fixtures = yield* startFixtureControl(input.origin, directory, browser);
     yield* fixtureRequest(fixtures, "/configure", {
       origin: input.origin,
       stage: "local",
@@ -240,5 +295,10 @@ export const startCloudEnvironment = (input: {
       databaseName: "executor",
       databaseUsername: "executor",
     });
-    return { emulators, fixtures, origin: input.origin };
+    return {
+      emulators,
+      fixtures,
+      origin: input.origin,
+      oauthProxy: { ...oauthProxy, services: Redacted.value(fixture).services },
+    };
   });

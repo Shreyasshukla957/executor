@@ -63,7 +63,10 @@ export const AppOperationError = Schema.Union(appOperationErrors);
 /** Authoring controls need product permissions and clone metadata, without reading Git contents. */
 const authoringFields = {
   namespace: Schema.NullOr(Schema.String),
+  /** The remote's path. Clients released before `gitUrl` add it to the host they called. */
   gitPath: Schema.String,
+  /** The absolute clone URL, on the origin where the host serves Git. */
+  gitUrl: Schema.String,
   canEdit: Schema.Boolean,
 };
 /** Permissions and clone location for controls that do not need a source snapshot. */
@@ -236,11 +239,12 @@ export const appManagementApi = <I extends HttpApiMiddleware.AnyId, S>(
         ),
         HttpApiEndpoint.get("git", "/apps/:app/git", {
           params: app,
-          success: Schema.Struct({ path: Schema.String }),
+          // `path` stays for clients released before `url`, which add it to the host they called.
+          success: Schema.Struct({ path: Schema.String, url: Schema.String }),
           error: appOperationErrors,
         }).annotate(
           OpenApi.Description,
-          "Read the authenticated Git clone path. Ordinary Git pushes update source but do not deploy it.",
+          "Read the authenticated Git clone URL, which may be on another origin than this API, and its path. Ordinary Git pushes update source but do not deploy it.",
         ),
         HttpApiEndpoint.post("publish", "/apps/:app/publication", {
           params: app,

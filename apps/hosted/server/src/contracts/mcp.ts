@@ -1,4 +1,4 @@
-import { Grant, GrantId, type ApprovalMode } from "@executor-js/mcp-auth";
+import { Grant, GrantId, type ApprovalMode, type ResourceOrigins } from "@executor-js/mcp-auth";
 import type {
   Connection,
   ConnectionId,
@@ -126,7 +126,12 @@ export interface McpConnectionStore {
 export class McpAuthentication extends Context.Service<
   McpAuthentication,
   {
+    /** The browser origin: dashboard, sign-in, cookies and Origin checks. */
     readonly origin: string;
+    /** The origins of MCP and API OAuth resources; the first is canonical. They may differ from the browser origin. */
+    readonly resourceOrigins: ResourceOrigins;
+    /** The authorization server's exact issuer identifier, which discovery names. */
+    readonly issuer: string;
     readonly authenticate: (
       headers: Headers,
       mode?: ApprovalMode,

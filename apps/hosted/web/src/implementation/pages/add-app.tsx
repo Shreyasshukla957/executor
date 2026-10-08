@@ -1,4 +1,4 @@
-import { usePageUrl } from "@executor-js/dashboard-start/page";
+import { useMcpOrigin } from "../resource-origin.ts";
 import { reportBrowserUsage } from "../../contracts/product-analytics.ts";
 import { appManagement } from "../../contracts/app-management.ts";
 import { useAtomMount } from "@effect/atom-react";
@@ -22,7 +22,7 @@ type Selection =
   | { readonly kind: "publication"; readonly publication: typeof Publication.Type };
 /** Public publications and integration templates share Add app and the same organization-owned app records. */
 export function AddAppPage() {
-  const page = usePageUrl();
+  const mcpOrigin = useMcpOrigin();
   const atoms = useDashboardAtoms();
   useAtomMount(atoms.catalog);
   const { organization, slug: organizationSlug } = useOrganizationRoute();
@@ -59,7 +59,7 @@ export function AddAppPage() {
         Failure={HostedFailure}
         key={selection.entry.id}
         entry={selection.entry}
-        endpoint={`${page.origin}/mcp`}
+        endpoint={`${mcpOrigin}/mcp`}
         onBack={back}
         onInstalled={installed}
       />

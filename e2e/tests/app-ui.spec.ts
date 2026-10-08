@@ -25,6 +25,7 @@ import { McpClient } from "../support/mcp-client.ts";
 import { managementApp } from "../support/management-app.ts";
 import { holdQuery } from "../support/query-transition.ts";
 import { appsManifest } from "../support/apps-release.ts";
+import { targetHosts } from "../support/role-hosts.ts";
 
 type Span = (typeof SpanQuery.Type)["data"][number]["span"];
 type ServerSpan = { readonly traceId: string; readonly spanId: string };
@@ -219,9 +220,11 @@ layer(HostedLive, { excludeTestServices: true })("Private app pages", (it) => {
             }),
           ),
         )(configurationFile.content);
-        expect(configuration.source.url).toBe(`${target.metadata.origin}/openapi.json`);
-        expect(configuration.baseUrl).toBe(target.metadata.origin);
-        expect(configuration.allowedOrigin).toBe(new URL(target.metadata.origin).origin);
+        // The Executor app calls the API at its canonical origin.
+        const apiOrigin = targetHosts(target).api;
+        expect(configuration.source.url).toBe(`${apiOrigin}/openapi.json`);
+        expect(configuration.baseUrl).toBe(apiOrigin);
+        expect(configuration.allowedOrigin).toBe(new URL(apiOrigin).origin);
         expect(configuration.securitySchemes).toEqual(apiDocument.components.securitySchemes);
       }),
     ),

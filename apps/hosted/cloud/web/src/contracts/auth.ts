@@ -51,6 +51,14 @@ export const verifyCodeAtom = BrowserAtoms.fn(
       Effect.asVoid,
     ),
 );
+/**
+ * The host whose passkeys stopped working when the dashboard moved off it, sent with each
+ * server-rendered document. Null where the dashboard has not moved.
+ */
+export const formerPasskeyHostAtom = Atom.make<string | null>(null).pipe(
+  Atom.serializable({ key: "cloud:former-passkey-host", schema: Schema.NullOr(Schema.String) }),
+  Atom.keepAlive,
+);
 /** Start the browser's WebAuthn ceremony only after an explicit click. */
 export const passkeySignInAtom = BrowserAtoms.fn((redirect: string) =>
   authRequest((options) => cloudAuthClient.signIn.passkey({}, options)).pipe(

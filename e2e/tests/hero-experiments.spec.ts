@@ -2,6 +2,8 @@ import { expect, layer } from "@effect/vitest";
 import { Effect } from "effect";
 import { Browser } from "../support/browser.ts";
 import { TestLive, withCase } from "../support/case.ts";
+import { Target } from "../support/platform.ts";
+import { targetHosts } from "../support/role-hosts.ts";
 import { scenarios } from "../test-plan.ts";
 
 const readHero = Effect.gen(function* () {
@@ -24,13 +26,15 @@ layer(TestLive, { excludeTestServices: true })("Hero experiments", (it) => {
       context,
       Effect.gen(function* () {
         const browser = yield* Browser;
+        // The site's homepage, Cloud's on the edge (`executor.sh`).
+        const home = `${targetHosts(yield* Target).edge}/`;
         yield* browser.use("Block scripts before navigation", (page) =>
           page.route("**/*", (route) =>
             route.request().resourceType() === "script" ? route.abort() : route.continue(),
           ),
         );
         const response = yield* browser.use("Open the server-rendered homepage", (page) =>
-          page.goto("/"),
+          page.goto(home),
         );
         if (response === null) return yield* Effect.die("Missing document response");
         const html = yield* browser.use("Read the original HTML", () => response.text());
@@ -53,7 +57,7 @@ layer(TestLive, { excludeTestServices: true })("Hero experiments", (it) => {
           "outcome-build",
         ]) {
           const preview = yield* browser.use(`Preview ${variant}`, (page) =>
-            page.goto(`/?hero=${variant}`),
+            page.goto(`${home}?hero=${variant}`),
           );
           expect((yield* readHero).variant).toBe(variant);
           const steps = yield* browser.use("The hero has three steps", (page) =>
@@ -63,7 +67,7 @@ layer(TestLive, { excludeTestServices: true })("Hero experiments", (it) => {
           expect(preview?.headers()["x-robots-tag"]).toBe("noindex");
           yield* browser.checkpoint(`Mobile hero ${variant}`);
         }
-        yield* browser.use("Return from previews", (page) => page.goto("/"));
+        yield* browser.use("Return from previews", (page) => page.goto(home));
         expect((yield* readHero).variant).toBe(initial.variant);
       }),
     ),
