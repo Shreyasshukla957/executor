@@ -285,6 +285,8 @@ export const browserOriginSetting = Config.Literals(
  * - `edge` (`executor.sh`) is the origin v1's edge forwards a fixed set of paths from. The
  *   identifiers clients and providers store live there: the issuer, the social sign-in and
  *   connected-account callbacks.
+ * - `site` serves the site and its documentation: the edge with role hosts, whose site pages
+ *   every other host redirects to, and the deployment origin without them.
  * - `issuer` is exact, without a trailing slash; its endpoints stay on `browser`.
  * - `gitOrigins` serve app Git remotes, canonical first: the edge, whose remote URLs never move,
  *   then the deployment origin, where earlier clones' remotes point.
@@ -295,6 +297,7 @@ export interface CloudHosts {
   readonly deployment: string;
   readonly browser: string;
   readonly roles: Option.Option<RoleHosts>;
+  readonly site: string;
   readonly resourceOrigins: ResourceOrigins;
   readonly issuer: string;
   readonly gitOrigins: readonly [string, ...string[]];
@@ -320,6 +323,7 @@ export const cloudHostsAt = (deployment: string) =>
       deployment,
       browser,
       roles,
+      site: Option.match(roles, { onNone: () => deployment, onSome: (r) => r.edge }),
       resourceOrigins: resourceOriginsFor(canonicalResourceOrigin, deployment, roles),
       issuer: `${Option.match(roles, { onNone: () => deployment, onSome: (r) => r.edge })}/api/auth`,
       gitOrigins: Option.match(roles, {

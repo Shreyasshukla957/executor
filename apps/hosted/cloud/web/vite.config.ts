@@ -12,8 +12,6 @@ export default mergeConfig(
     port: 4412,
   }),
   {
-    // Cloud's IaC serves documentation beside the dashboard on every stage.
-    define: { "import.meta.env.VITE_EXECUTOR_DOCS_BASE_URL": JSON.stringify("/docs/") },
     environments: {
       ssr: {
         define: Object.fromEntries(

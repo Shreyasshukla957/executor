@@ -10,4 +10,6 @@ export interface CloudDocumentContext extends HostedDocument {
    * (`v2.executor.sh`); null while the dashboard still serves its own host.
    */
   readonly formerPasskeyHost: string | null;
+  /** Where the deployment serves its documentation, as an absolute URL ending in `/`. */
+  readonly documentation: string;
 }

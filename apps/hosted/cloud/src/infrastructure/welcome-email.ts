@@ -30,7 +30,7 @@ export const cloudWelcomeEmails = (send: SendWelcomeEmail) =>
             secrets.authSecret.pipe(
               Effect.flatMap((secret) => unsubscribeLinks(origin, secret, id, email)),
             ),
-          { origin, resourceOrigin },
+          { site: hosts.site, resourceOrigin },
           user,
         ).pipe(Effect.provide(database)),
       );

@@ -102,7 +102,12 @@ const main = Effect.scoped(
       proxied ? new URL(`http://${listenHost}`) : origin,
       apiOrigin,
       // The development renderer serves the dashboard on its own origin.
-      { resourceOrigins: yield* resourceOriginsAt(origin.origin), formerPasskeyHost: null },
+      {
+        resourceOrigins: yield* resourceOriginsAt(origin.origin),
+        formerPasskeyHost: null,
+        // The development dashboard proxies documentation to the Worker on its own origin.
+        documentation: new URL("/docs/", origin).href,
+      },
     );
     const marketing = yield* marketingFiles(path.join(marketingRoot, "dist"));
     const routes = Layer.mergeAll(

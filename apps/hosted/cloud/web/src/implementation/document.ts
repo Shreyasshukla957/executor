@@ -7,6 +7,7 @@ import { OnboardingReady } from "../../../src/contracts/onboarding.ts";
 import type { CloudDocumentContext } from "../contracts/document.ts";
 import { entryTeamAtom } from "../contracts/onboarding.ts";
 import { formerPasskeyHostAtom } from "../contracts/auth.ts";
+import { documentationBaseAtom } from "@executor-js/hosted-web/contracts/documentation";
 import { documentPasskeyEnrollmentAtom } from "../contracts/passkey-enrollment.ts";
 
 /** Server only: the context the Worker passed with this document request. */
@@ -23,6 +24,7 @@ export const cloudServerValues = (document: CloudDocumentContext) => {
   const shared = [
     ...hostedServerValues(document),
     Atom.initialValue(formerPasskeyHostAtom, document.formerPasskeyHost),
+    Atom.initialValue(documentationBaseAtom, document.documentation),
   ];
   if (entry === null || entry.session === null) return shared;
   // The Worker read the browser's enrollment cookie; the page cannot read it on the server.

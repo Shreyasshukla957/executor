@@ -95,9 +95,12 @@ export const invitationEmailMessage = ({
   };
 };
 
-/** The docs live on the browser origin; the MCP endpoint is on the canonical MCP origin. */
+/**
+ * The docs live on the site origin, the edge when the deployment has role hosts; the MCP
+ * endpoint is on the canonical MCP origin.
+ */
 export interface WelcomeEmailOrigins {
-  readonly origin: string;
+  readonly site: string;
   readonly resourceOrigin: string;
 }
 
@@ -112,7 +115,7 @@ export const welcomeEmailMessage = (
   links: UnsubscribeLinks,
   origins: WelcomeEmailOrigins,
 ): AuthEmail => {
-  const docsUrl = `${origins.origin}/docs`;
+  const docsUrl = `${origins.site}/docs`;
   const firstName = name.trim().split(/\s+/)[0];
   const greeting = firstName && !firstName.includes("@") ? `hey ${firstName},` : "hey there,";
   const starterPrompt = `add the executor mcp server at ${origins.resourceOrigin}/mcp, then read the executor docs at ${docsUrl} and work out how you can best use executor to help me.`;

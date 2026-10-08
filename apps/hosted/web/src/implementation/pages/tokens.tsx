@@ -43,9 +43,7 @@ import {
 import { organizationsAtom } from "../../contracts/organization.ts";
 import { OrganizationAvatar } from "../components/organization.tsx";
 import { useAccountOrganization } from "../components/account.tsx";
-import { documentationUrl } from "../../contracts/documentation.ts";
-
-const tokenDocsUrl = documentationUrl("api-keys/#personal-access-tokens");
+import { useDocumentationUrl } from "../documentation.ts";
 
 /** The organization select value: one organization id, or the whole account. */
 const fullAccount = "account";
@@ -66,6 +64,7 @@ export function TokensPage({
   const date = (value: string | null) => (value === null ? "Never" : <LocalTime value={value} />);
   const { organizations, memberships, selected } = useAccountOrganization(reference);
   const retryOrganizations = useAtomRefresh(organizationsAtom);
+  const tokenDocsUrl = useDocumentationUrl("api-keys/#personal-access-tokens");
   /** A pinned key names its organization; one the user has left keeps a plain label. */
   const pinnedOrganization = (key: ApiKeySummary) =>
     key.metadata?.organization === undefined

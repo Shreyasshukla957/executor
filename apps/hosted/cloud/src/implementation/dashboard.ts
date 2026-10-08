@@ -15,6 +15,8 @@ export interface CloudPageHosts {
   readonly resourceOrigins: ResourceOrigins;
   /** The host whose passkeys stopped working when the dashboard moved off it, if it moved. */
   readonly formerPasskeyHost: string | null;
+  /** Where the deployment serves its documentation, as an absolute URL ending in `/`. */
+  readonly documentation: string;
 }
 
 /**
@@ -25,7 +27,12 @@ export const cloudDocumentContext =
   (hosts: CloudPageHosts) => (entry: CloudEntryPage | null) => (api: DocumentApi) =>
     Effect.gen(function* () {
       const document = yield* hostedDocumentContext(hosts.resourceOrigins)(api);
-      return { ...document, entry, formerPasskeyHost: hosts.formerPasskeyHost };
+      return {
+        ...document,
+        entry,
+        formerPasskeyHost: hosts.formerPasskeyHost,
+        documentation: hosts.documentation,
+      };
     });
 
 /**

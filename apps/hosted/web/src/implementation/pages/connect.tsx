@@ -1,4 +1,3 @@
-import { usePageUrl } from "@executor-js/dashboard-start/page";
 import { Link } from "@tanstack/react-router";
 import { Button } from "@executor-js/ui/components/button";
 import { Code } from "@executor-js/ui/dashboard/code";
@@ -17,7 +16,7 @@ import {
   revokeMcpConnectionAtom,
   saveMcpConnectionAtom,
 } from "../../contracts/mcp-connections.ts";
-import { documentationUrl } from "../../contracts/documentation.ts";
+import { useDocumentationUrl } from "../documentation.ts";
 import { useResourceOrigins } from "../resource-origin.ts";
 
 /** Headless setup: a personal access token against this organization's own addresses. */
@@ -68,11 +67,10 @@ function PersonalTokenSetup({
 
 /** The member's full-access URL, scoped connections and connected agents for this organization. */
 export function ConnectPage() {
-  const page = usePageUrl();
   const origins = useResourceOrigins();
   const mcpOrigin = origins.mcp[0];
   const { organization } = useOrganizationRoute();
-  const docs = new URL(documentationUrl(), page.origin).href;
+  const docs = useDocumentationUrl();
   return (
     <ScopedConnectionsPage
       key={organization}

@@ -317,6 +317,8 @@ export default Api.make(
       formerPasskeyHost: Option.isSome(auth.hosts.roles)
         ? new URL(auth.hosts.deployment).hostname
         : null,
+      // Documentation is a site page, served by the edge when the deployment has role hosts.
+      documentation: new URL("/docs/", auth.hosts.site).href,
     });
     const appUi = hostedAppUi(
       appAddresses(auth.origin, yield* cloudAppUiBase.pipe(Effect.orDie)),

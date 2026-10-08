@@ -358,7 +358,7 @@ const make = Effect.gen(function* () {
         );
         if (
           !prompt.includes(endpoint) ||
-          !prompt.includes(`${targetHosts(target).browser}/docs/`) ||
+          !prompt.includes(`${targetHosts(target).edge}/docs/`) ||
           !prompt.includes("help me get my first app set up")
         )
           return yield* new OnboardingFailed({
