@@ -335,9 +335,7 @@ export const startManagedServer = (
           // Only scenarios that declare this in the reviewed test plan may write rows directly.
           const declared = Object.values(scenarios).some(
             (scenario) =>
-              scenario.title === target.scenarioLabel &&
-              "legacyStorage" in scenario &&
-              scenario.legacyStorage === true,
+              scenario.title === target.scenarioLabel && scenario.legacyStorage === true,
           );
           if (!declared || target.metadata.target === "cloud")
             return HttpServerResponse.empty({ status: 403 });

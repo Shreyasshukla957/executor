@@ -15,10 +15,8 @@ import { Target } from "../support/platform.ts";
 import { createProfile, selectProfileAccounts } from "../support/profiles.ts";
 import { requestGate } from "../support/request-gate.ts";
 import { appsManifest, databaseFiles } from "../support/apps-release.ts";
-import { scenarios } from "../test-plan.ts";
+import { appWorkerBudgetLimit as limit, scenarios } from "../test-plan.ts";
 
-/** The limits the scenarios configure as `EXECUTOR_APP_WORKERS` in their plans. */
-const limit = Number(scenarios.appWorkerBudget.serverEnvironment.EXECUTOR_APP_WORKERS);
 /** Apps and account selections beyond the limit: two apps with three accounts each. */
 const beyondLimit = { apps: 2, accountsPerApp: 3, database: false };
 

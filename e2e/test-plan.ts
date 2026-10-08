@@ -49,14 +49,28 @@ const cloudOnboarding = {
   local: na("Local uses device pairing instead of Cloud account onboarding."),
 };
 
+/** App Workers the budget scenarios keep loaded; their spec asserts this limit. */
+export const appWorkerBudgetLimit = 2;
+/** A relay callback in a valid form other than its serialization, which the SDK sends. */
+export const oauthRelayCallback =
+  "https://Relay.Executor.example:443/api/oauth/callback?tenant=fixture";
+
+/**
+ * Keeps each scenario name but gives every value the plan type. A literal type per scenario makes
+ * any expression over all of them a union that grows with the plan, and TypeScript refuses one past
+ * about a thousand members (TS2590). Values are still checked against the plan, extra keys included.
+ */
+const plan = <Name extends string>(scenarios: { readonly [_ in Name]: typeof TestPlan.Type }) =>
+  scenarios;
+
 /** Scenario names and applicability used by both test declarations and test selection. */
-export const scenarios = {
+export const scenarios = plan({
   appWorkerBudget: {
     fixtures: "actors",
     file: "app-worker-budget.spec.ts",
     title:
       "at most the configured number of app Workers stay loaded as apps and account selections grow",
-    serverEnvironment: { EXECUTOR_APP_WORKERS: "2" },
+    serverEnvironment: { EXECUTOR_APP_WORKERS: String(appWorkerBudgetLimit) },
     targets: {
       "self-host": scheduled,
       cloud: na("Cloudflare unloads Cloud's app Workers itself."),
@@ -88,7 +102,7 @@ export const scenarios = {
     file: "app-worker-budget.spec.ts",
     title:
       "local keeps at most the configured number of app Workers loaded as apps and account selections grow",
-    serverEnvironment: { EXECUTOR_APP_WORKERS: "2" },
+    serverEnvironment: { EXECUTOR_APP_WORKERS: String(appWorkerBudgetLimit) },
     targets: {
       local: scheduled,
       "self-host": na("Hosted budgets are covered through organization routes."),
@@ -3009,9 +3023,7 @@ export const scenarios = {
       "a host with a client metadata document signs in without registering a client, and still registers where the server does not accept documents",
     serverEnvironment: {
       EXECUTOR_OAUTH_CLIENT_METADATA_URL: "https://executor.example/oauth/client-metadata.json",
-      // A relay callback in a valid form other than its serialization, which the SDK sends.
-      EXECUTOR_OAUTH_CALLBACK_URL:
-        "https://Relay.Executor.example:443/api/oauth/callback?tenant=fixture",
+      EXECUTOR_OAUTH_CALLBACK_URL: oauthRelayCallback,
     },
     targets: {
       "self-host": scheduled,
@@ -5559,9 +5571,7 @@ export const scenarios = {
     title: "Cloud passkey enrollment retains errors and focus during session refresh",
     targets: cloudOnboarding,
   },
-} as const satisfies Record<string, typeof TestPlan.Type>;
-
-const allScenarios: ReadonlyArray<typeof TestPlan.Type> = Object.values(scenarios);
+});
 
 /**
  * How the run reaches Cloud. Managed Cloud is local and turns the per-address auth limit off, as
@@ -5579,8 +5589,7 @@ const cloudRuntimeReasons = {
 
 /** Hosted parity includes every scenario scheduled on both hosted products. */
 export const scenariosForSuite = (suite: "all" | "hosted", cloudMode: CloudMode = "managed") =>
-  // Widened to the plan type: a union over every scenario literal is too large to check.
-  allScenarios
+  Object.values(scenarios)
     .filter(
       (scenario) =>
         suite === "all" ||
