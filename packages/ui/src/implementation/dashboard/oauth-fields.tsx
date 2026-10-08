@@ -95,6 +95,9 @@ export function OAuthFields<A, E>({
   const [customClient, setManual] = useState(manualClient);
   const manual = customClient || (setup !== "unresolved" && setup.mode === "client-required");
   const machine = setup !== "unresolved" && setup.grant === "client_credentials";
+  const userScopes =
+    setup !== "unresolved" && setup.grant === "authorization_code" ? (setup.userScopes ?? []) : [];
+  const requested = setup === "unresolved" ? 0 : setup.scopes.length + userScopes.length;
   const method = setup === "unresolved" ? "none" : setup.tokenEndpointAuthMethod;
   // An undeclared method accepts either a public client or one with a secret.
   const acceptsSecret = method !== "none";
@@ -227,7 +230,7 @@ export function OAuthFields<A, E>({
               </Button>
             )}
           </div>
-          {setup !== "unresolved" && (setup.mode === "saved" || setup.scopes.length > 0) ? (
+          {setup !== "unresolved" && (setup.mode === "saved" || requested > 0) ? (
             <details className="group/advanced min-w-0 border-t pt-3">
               <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 rounded-sm text-xs font-medium text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
                 <HugeiconsIcon
@@ -237,6 +240,11 @@ export function OAuthFields<A, E>({
                   aria-hidden
                 />
                 <span>Advanced</span>
+                {requested > 0 && (
+                  <span className="font-normal tabular-nums">
+                    · {requested} {requested === 1 ? "permission" : "permissions"} requested
+                  </span>
+                )}
               </summary>
               <div className="space-y-4 pt-4">
                 {setup.mode === "saved" && (
@@ -263,31 +271,8 @@ export function OAuthFields<A, E>({
                     </Button>
                   </div>
                 )}
-                {setup.scopes.length > 0 && (
-                  <section className="space-y-2">
-                    <h3 className="flex items-center gap-2 text-xs font-medium">
-                      <span>Required permissions</span>
-                      <span className="font-normal tabular-nums text-muted-foreground">
-                        {setup.scopes.length}
-                      </span>
-                    </h3>
-                    <div
-                      role="region"
-                      aria-label="Required permissions"
-                      tabIndex={0}
-                      className="flex max-h-[min(14rem,30dvh)] flex-wrap gap-1.5 overflow-y-auto overscroll-contain rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-                    >
-                      {setup.scopes.map((scope) => (
-                        <code
-                          key={scope}
-                          className="max-w-full rounded bg-muted px-2 py-1 text-xs break-all"
-                        >
-                          {scope}
-                        </code>
-                      ))}
-                    </div>
-                  </section>
-                )}
+                <Permissions label="Requested permissions" scopes={setup.scopes} />
+                <Permissions label="User token permissions" scopes={userScopes} />
               </div>
             </details>
           ) : (
@@ -299,5 +284,36 @@ export function OAuthFields<A, E>({
         </div>
       </div>
     </>
+  );
+}
+
+/** What sign-in asks the provider for, shown before the user leaves for its consent page. */
+function Permissions({
+  label,
+  scopes,
+}: {
+  readonly label: string;
+  readonly scopes: readonly string[];
+}) {
+  if (scopes.length === 0) return null;
+  return (
+    <section className="space-y-2">
+      <h3 className="flex items-center gap-2 text-xs font-medium">
+        <span>{label}</span>
+        <span className="font-normal tabular-nums text-muted-foreground">{scopes.length}</span>
+      </h3>
+      <div
+        role="region"
+        aria-label={label}
+        tabIndex={0}
+        className="flex max-h-[min(14rem,30dvh)] flex-wrap gap-1.5 overflow-y-auto overscroll-contain rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+      >
+        {scopes.map((scope) => (
+          <code key={scope} className="max-w-full rounded bg-muted px-2 py-1 text-xs break-all">
+            {scope}
+          </code>
+        ))}
+      </div>
+    </section>
   );
 }

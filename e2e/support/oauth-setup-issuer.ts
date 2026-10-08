@@ -217,6 +217,8 @@ export const oauthSetupIssuer = Effect.gen(function* () {
   let scopes = ["read"];
   /** A narrower scope requirement advertised by the resource's Bearer challenge. */
   let challengeScopes: readonly string[] | undefined;
+  /** Scopes the issuer grants separately but refuses together, as `invalid_scope`. */
+  let exclusiveScopes: readonly string[] | undefined;
   /** An exact metadata override models OIDC published away from its declared issuer. */
   let metadataOverrideIssuer: string | undefined;
   let metadataOverrideStatus = 200;
@@ -350,11 +352,17 @@ export const oauthSetupIssuer = Effect.gen(function* () {
         const code = randomUUID();
         nonceRequested = params.get("nonce") !== null;
         authorizationScope = params.get("scope");
+        const requested = authorizationScope?.split(" ") ?? [];
+        const refusal =
+          authorizeError ??
+          (requested.filter((scope) => exclusiveScopes?.includes(scope)).length > 1
+            ? "invalid_scope"
+            : undefined);
         const callback = new URL(redirect);
-        if (authorizeError === undefined) {
+        if (refusal === undefined) {
           codes.set(code, { clientId, redirect, challenge, nonce: params.get("nonce") });
           callback.searchParams.set("code", code);
-        } else callback.searchParams.set("error", authorizeError);
+        } else callback.searchParams.set("error", refusal);
         callback.searchParams.set("state", params.get("state") ?? "");
         if (callbackIssuer !== undefined) callback.searchParams.set("iss", callbackIssuer);
         // The managed host advertises a separate callback relay; model its browser return.
@@ -897,6 +905,8 @@ export const oauthSetupIssuer = Effect.gen(function* () {
       readonly pathDiscovery?: typeof pathDiscovery;
       readonly scopes?: readonly string[];
       readonly challengeScopes?: readonly string[] | null;
+      /** Refuse an authorization request naming more than one of these; null accepts any. */
+      readonly exclusiveScopes?: readonly string[] | null;
       readonly metadataOverrideIssuer?: string | null;
       readonly metadataOverrideStatus?: number;
       readonly authMethods?: readonly string[];
@@ -971,6 +981,8 @@ export const oauthSetupIssuer = Effect.gen(function* () {
         if (input.scopes !== undefined) scopes = [...input.scopes];
         if (input.challengeScopes !== undefined)
           challengeScopes = input.challengeScopes === null ? undefined : input.challengeScopes;
+        if (input.exclusiveScopes !== undefined)
+          exclusiveScopes = input.exclusiveScopes === null ? undefined : input.exclusiveScopes;
         if (input.metadataOverrideIssuer !== undefined)
           metadataOverrideIssuer =
             input.metadataOverrideIssuer === null ? undefined : input.metadataOverrideIssuer;

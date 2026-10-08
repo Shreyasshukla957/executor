@@ -1450,7 +1450,8 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
         return yield* new OAuthProtocolFailed({ reason: "invalid_response" });
       const issuerUrl = yield* secureUrl(issuer);
       // Authored scopes win. MCP challenges name the operations' required scopes; the
-      // resource metadata's scope list is the default only when the challenge omits it.
+      // resource metadata's scope list is the default only when the challenge omits it. The list
+      // never widens a challenge: an issuer can support two scopes and refuse them together.
       const scopes = new Set(method.scopes ?? read.scopes ?? resourceScopes(found) ?? []);
       const { server, audienceFromScopes, document } = yield* resolveIssuer(
         issuerUrl,

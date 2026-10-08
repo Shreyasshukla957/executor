@@ -13,7 +13,7 @@ export const executorSkillDigests: Readonly<Record<string, string>> = {
   "app-authoring/ui.md": "ac9751f5f45b0196e46e1deffa09cb302c7e43099bcc247ec455f8808b539542",
   "app-authoring/webhooks.md": "b7f43ad7af7fe1093cdc957cdec5f43bc98115d3c3237af1788cdd68d7fd9fce",
   "app-authoring/workflows.md": "9e517eaf6f461ac07fd2d29a03f0d545e79cfcbcfedbed5b8432e7b41392257b",
-  "code-mode/SKILL.md": "9a29d404836ccf944b63f355a482e0db61b3434003907fe9a9a436a5b5a10959",
+  "code-mode/SKILL.md": "024737442d4e573700f1f1f3b7ede2a440a3bc93e967c19a68e516f734751f46",
   "executor/SKILL.md": "580e2e296e8665c950d41197e4bf2df639be12f6ee3ec8ce51d27129dd0774ff",
   "executor/feedback.md": "11397bd260917e5a21e92897a19368d0426bf5944a7c081adc2c061d1ea797cd"
 };

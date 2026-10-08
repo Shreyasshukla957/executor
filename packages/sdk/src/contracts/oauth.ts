@@ -42,6 +42,11 @@ export const OAuthClientSetup = Schema.Union([
     grant: Schema.Literal("authorization_code"),
     /** Omitted when the provider does not declare one; the client secret is then optional. */
     tokenEndpointAuthMethod: Schema.optional(OAuthClientAuth),
+    /**
+     * Permissions requested for the signed-in user's own token through Slack's `user_scope`
+     * authorization parameter, beside `scopes`. Omitted when the provider sends none.
+     */
+    userScopes: Schema.optional(Schema.Array(Schema.String)),
   }),
   Schema.Struct({
     ...clientSetup,

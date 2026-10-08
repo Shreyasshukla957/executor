@@ -95,7 +95,8 @@ arguments or source, and never search their files for tokens. The Executor app
 - Local: `accountConnect.issue`, then `accountConnections.get` to check it.
 - Hosted: `accounts.connect`, then `accounts.connection` to check it. Hosted
   management calls need the organization: call `context.get({})` first and pass
-  its `organization` as `path.organization`.
+  its `organization` as `path.organization`. For an OAuth sign-in,
+  `accounts.oauthSetup` lists the scopes it will request; tell the user.
 
 Search for these tools and read their input types first. Give the user the
 returned URL. After they finish, check the connection in a new execution, then

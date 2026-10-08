@@ -350,6 +350,18 @@ const exchangeFailed = (error: OAuthProtocolFailed) => {
 };
 
 /**
+ * Slack's `user_scope` authorization parameter lists, comma-separated, the permissions for the
+ * signed-in user's own token. A declared parameter replaces the endpoint's own, as authorization does.
+ */
+const userScopes = (endpoint: string, params: Readonly<Record<string, string>> | undefined) => [
+  ...new Set(
+    (params?.["user_scope"] ?? new URL(endpoint).searchParams.get("user_scope") ?? "")
+      .split(/[\s,]+/u)
+      .filter((scope) => scope !== ""),
+  ),
+];
+
+/**
  * A client entered with a secret uses Basic, which RFC 6749 section 2.3.1 requires servers to
  * support, unless the server advertises only the body form. A server accepting both says nothing
  * about how this client was registered (RFC 7591 section 2). Declared endpoints advertise
@@ -540,21 +552,26 @@ export const makeOAuth = (
           : registration === "manual"
             ? "client-required"
             : "automatic";
-        return method.grant === "client_credentials"
-          ? {
-              mode,
-              scopes: discovered.scopes,
-              grant: method.grant,
-              tokenEndpointAuthMethod: method.tokenEndpointAuthMethod,
-            }
-          : {
-              mode,
-              scopes: discovered.scopes,
-              grant: "authorization_code",
-              ...(discovered.tokenEndpointAuthMethod === undefined
-                ? {}
-                : { tokenEndpointAuthMethod: discovered.tokenEndpointAuthMethod }),
-            };
+        if (method.grant === "client_credentials")
+          return {
+            mode,
+            scopes: discovered.scopes,
+            grant: method.grant,
+            tokenEndpointAuthMethod: method.tokenEndpointAuthMethod,
+          };
+        const user =
+          discovered.grant === "authorization_code"
+            ? userScopes(discovered.server.authorization_endpoint, discovered.authorizationParams)
+            : [];
+        return {
+          mode,
+          scopes: discovered.scopes,
+          grant: "authorization_code",
+          ...(discovered.tokenEndpointAuthMethod === undefined
+            ? {}
+            : { tokenEndpointAuthMethod: discovered.tokenEndpointAuthMethod }),
+          ...(user.length === 0 ? {} : { userScopes: user }),
+        };
       }),
       Effect.withSpan("oauth.setup"),
     );
