@@ -18,6 +18,14 @@ import { prepareCloudScenarios } from "./prepare-scenarios.ts";
 
 class RunFailed extends Schema.TaggedError<RunFailed>()("RunFailed", { message: Schema.String }) {}
 import { freePort } from "../support/ports.ts";
+
+/**
+ * Managed Cloud workers share one local Cloud Worker and one telemetry collector, so more cores add
+ * no capacity. On a 16-vCPU runner, eight workers left 12 cores idle and finished no sooner than
+ * six, but doubled the Worker's `/health` p95, tripled the collector's refused exports and took a
+ * 19-second scenario to 49 seconds.
+ */
+const sharedCloudWorkers = 6;
 const CloudOrigin = Schema.String.check(
   Schema.makeFilter(
     (text) => {
@@ -36,13 +44,17 @@ const CloudOrigin = Schema.String.check(
 export const runSuite = ({
   target: selected,
   name = "",
-  workers = 16,
+  workers,
+  defaultWorkers = 16,
   authRateLimit = false,
   attachment,
 }: {
   readonly target: "self-host" | "local" | "cloud" | "all" | "hosted";
   readonly name?: string;
-  readonly workers?: number;
+  /** Files run at once on every target. Overrides `defaultWorkers` and the managed Cloud cap. */
+  readonly workers?: number | undefined;
+  /** Files run at once when `workers` is unset. Managed local Cloud runs at most six. */
+  readonly defaultWorkers?: number;
   /** Start managed Cloud with the per-address auth limit on, for the scenarios that prove it. */
   readonly authRateLimit?: boolean;
   readonly attachment?: {
@@ -61,7 +73,7 @@ export const runSuite = ({
     Effect.gen(function* () {
       yield* Schema.decodeUnknownEffect(
         Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 32 })),
-      )(workers);
+      )(workers ?? defaultWorkers);
       const fs = yield* FileSystem.FileSystem,
         path = yield* Path.Path,
         processes = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -157,6 +169,9 @@ export const runSuite = ({
               const directory = path.join(root, target);
               yield* fs.makeDirectory(`${directory}/report`, { recursive: true, mode: 0o700 });
               const managedCloud = target === "cloud" && Option.isNone(cloud);
+              const targetWorkers =
+                workers ??
+                (managedCloud ? Math.min(defaultWorkers, sharedCloudWorkers) : defaultWorkers);
               const origin =
                 target === "cloud"
                   ? Option.isSome(cloud)
@@ -184,7 +199,7 @@ export const runSuite = ({
               const apiKey = Redacted.make(randomBytes(32).toString("hex"));
               yield* fs.writeFileString(`${directory}/run.json`, JSON.stringify(metadata, null, 2));
               yield* Console.log(
-                `Testing ${target}: ${target === "cloud" ? origin : target === "local" && Option.isSome(packagedEntry) ? `installed CLI at ${packagedEntry.value}` : "isolated server per scenario"}`,
+                `Testing ${target}: ${target === "cloud" ? origin : target === "local" && Option.isSome(packagedEntry) ? `installed CLI at ${packagedEntry.value}` : "isolated server per scenario"} · ${interactive || observeUI ? 1 : targetWorkers} workers`,
               );
               const code = yield* Effect.scoped(
                 Effect.gen(function* () {
@@ -217,7 +232,7 @@ export const runSuite = ({
                             fixtures: attachment.fixtures,
                           }),
                           appUiBaseUrl: attachment.appUiBaseUrl,
-                          workers,
+                          workers: targetWorkers,
                           scenarios: plan
                             .filter(
                               (scenario: typeof TestPlan.Type) =>
@@ -285,7 +300,7 @@ export const runSuite = ({
                             : { E2E_WORKFLOW_HOLD_MS: process.env.E2E_WORKFLOW_HOLD_MS }),
                           E2E_PREPARED_SCENARIOS: JSON.stringify(preparedScenarios),
                           E2E_TEST_NAME: name,
-                          E2E_WORKERS: String(interactive || observeUI ? 1 : workers),
+                          E2E_WORKERS: String(interactive || observeUI ? 1 : targetWorkers),
                           E2E_TARGET: target,
                           E2E_CLOUD_MODE: cloudMode,
                           ...(registry === undefined ? {} : { E2E_NPM_REGISTRY: registry.url }),

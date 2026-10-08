@@ -126,9 +126,10 @@ or HTTP failure. All origin probes start together. Fallback
 organization cleanup uses the worker bound and preserves release order within
 each scenario, including when another organization's cleanup fails.
 
-Files run in parallel with one worker per two CPUs by default, up to 16. Each worker
-runs its own product server and browser. Use `--workers 1` through `--workers 32` to
-set the bound. A file's cases retain their declared sequence.
+Files run in parallel with one worker per two CPUs by default, up to 16. Each self-host
+and local worker runs its own product server and browser. Managed Cloud workers share one
+local Cloud Worker and collector, so that target runs at most six. Use `--workers 1`
+through `--workers 32` to set the bound for every target. A file's cases retain their declared sequence.
 Interactive recordings use one worker. Filters load only applicable files.
 Each unattended test has a 60-second timeout, except the 1,000-account self-host
 inventory case, which has 120 seconds. Cleanup hooks retain a separate
