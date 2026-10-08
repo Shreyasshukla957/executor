@@ -30,8 +30,10 @@ export const platforms = [
     platform: "darwin",
     arch: "x64",
     runner: "macos-15-intel",
-    // Two cold PGlite processes starve each other on the native Intel runner.
-    cliWorkers: 1,
+    // Two cold PGlite processes starve each other on the native Intel runner, and one worker
+    // takes about 47 minutes for the suite darwin arm64 already runs on the same source. The
+    // Intel build still runs the credential and desktop release checks.
+    cliWorkers: 0,
     desktopOs: "mac",
     extension: "dmg",
   },
