@@ -12,10 +12,18 @@ import {
   type V2Service,
 } from "./marketing";
 
-// On executor.sh only v1's terms of service (and their asset root) still go to
-// v1's `executor-marketing` worker; v2 serves the rest of marketing.
+// On executor.sh only v1's legal pages (terms, privacy policy and Google OAuth
+// disclosure) and their asset root still go to v1's `executor-marketing`
+// worker; v2 serves the rest of marketing.
 describe("isMarketingPath", () => {
-  const v1Marketing = ["/terms", "/terms/", "/_v1-marketing/Layout.css", "/_v1-marketing/_ph/e"];
+  const v1Marketing = [
+    "/terms",
+    "/terms/",
+    "/privacy",
+    "/google-oauth",
+    "/_v1-marketing/Layout.css",
+    "/_v1-marketing/_ph/e",
+  ];
   for (const pathname of v1Marketing) {
     it(`sends ${pathname} to v1's marketing worker`, () => {
       expect(isMarketingPath(pathname)).toBe(true);
@@ -25,12 +33,14 @@ describe("isMarketingPath", () => {
   const notV1Marketing = [
     "/",
     "/home",
-    "/privacy",
     "/pricing",
     "/blog",
+    "/google-workspace",
     "/_astro/app.css",
     "/_astro/_ph/e",
     "/termsandconditions",
+    "/privacy-team/mcp",
+    "/google-oauthx",
     "/_v1-marketingx",
     "/login",
   ];
@@ -55,9 +65,11 @@ describe("marketingProxyRequest", () => {
     expect(proxied?.method).toBe("POST");
     expect(proxied?.headers.get("x-request-id")).toBe("request-1");
     await expect(proxied?.json()).resolves.toEqual({ event: "test" });
-    expect(marketingProxyRequest(new Request("https://executor.sh/terms"))?.url).toBe(
-      "https://executor.sh/terms",
-    );
+    for (const path of ["/terms", "/privacy", "/google-oauth"]) {
+      expect(marketingProxyRequest(new Request(`https://executor.sh${path}`))?.url).toBe(
+        `https://executor.sh${path}`,
+      );
+    }
   });
 
   it("leaves the homepage and v2's marketing to the v2 edge", () => {
@@ -150,7 +162,8 @@ describe("parseV2Edge", () => {
     V2: service,
     V2_SIGN_UP_URL: "https://app.executor.sh/login?mode=signup",
     V2_OAUTH_STATE_PREFIX: "x2.",
-    V2_TELEMETRY_PATHS: "/api/0123456789abcdef,/api/fedcba9876543210",
+    V2_ANALYTICS_PROXY_PATH: "/api/0123456789abcdef",
+    V2_ERROR_TUNNEL_PATH: "/api/fedcba9876543210/submit",
   };
 
   it("is off when no setting is present", () => {
@@ -161,7 +174,8 @@ describe("parseV2Edge", () => {
     expect(typeof parseV2Edge({ ...settings, V2: undefined })).toBe("string");
     expect(typeof parseV2Edge({ ...settings, V2_SIGN_UP_URL: undefined })).toBe("string");
     expect(typeof parseV2Edge({ ...settings, V2_OAUTH_STATE_PREFIX: undefined })).toBe("string");
-    expect(typeof parseV2Edge({ ...settings, V2_TELEMETRY_PATHS: undefined })).toBe("string");
+    expect(typeof parseV2Edge({ ...settings, V2_ANALYTICS_PROXY_PATH: undefined })).toBe("string");
+    expect(typeof parseV2Edge({ ...settings, V2_ERROR_TUNNEL_PATH: undefined })).toBe("string");
     expect(typeof parseV2Edge({ V2_OAUTH_STATE_PREFIX: "x2." })).toBe("string");
   });
 
@@ -182,8 +196,8 @@ describe("parseV2Edge", () => {
     }
   });
 
-  it("refuses telemetry roots outside /api/<16 hex>", () => {
-    for (const paths of [
+  it("refuses an analytics proxy path other than /api/<16 lowercase hex>", () => {
+    for (const path of [
       "",
       "/api/0123456789abcde",
       "/api/0123456789abcdef0",
@@ -192,10 +206,27 @@ describe("parseV2Edge", () => {
       "/api/0123456789abcdef/submit",
       "/api/connections",
       "/0123456789abcdef",
-      "/api/0123456789abcdef,",
-      "/api/0123456789abcdef;/api/fedcba9876543210",
+      " /api/0123456789abcdef",
+      "/api/0123456789abcdef,/api/fedcba9876543210",
     ]) {
-      expect(typeof parseV2Edge({ ...settings, V2_TELEMETRY_PATHS: paths })).toBe("string");
+      expect(typeof parseV2Edge({ ...settings, V2_ANALYTICS_PROXY_PATH: path })).toBe("string");
+    }
+  });
+
+  it("refuses an error tunnel path other than /api/<16 lowercase hex>/submit", () => {
+    for (const path of [
+      "",
+      "/api/fedcba9876543210",
+      "/api/fedcba9876543210/",
+      "/api/fedcba9876543210/submit/",
+      "/api/fedcba9876543210/submitx",
+      "/api/FEDCBA9876543210/submit",
+      "/api/fedcba987654321/submit",
+      "/api/fedcba9876543210/e",
+      "/fedcba9876543210/submit",
+      " /api/fedcba9876543210/submit",
+    ]) {
+      expect(typeof parseV2Edge({ ...settings, V2_ERROR_TUNNEL_PATH: path })).toBe("string");
     }
   });
 
@@ -204,30 +235,23 @@ describe("parseV2Edge", () => {
     if (edge === null || typeof edge === "string") return expect.unreachable("settings must parse");
     expect(edge.signUpUrl.href).toBe("https://app.executor.sh/login?mode=signup");
     expect(edge.oauthStatePrefix).toBe("x2.");
-    expect(edge.telemetryPaths).toEqual(["/api/0123456789abcdef", "/api/fedcba9876543210"]);
+    expect(edge.analyticsProxyPath).toBe("/api/0123456789abcdef");
+    expect(edge.errorTunnelPath).toBe("/api/fedcba9876543210/submit");
     expect(typeof parseV2Edge({ ...settings, V2_OAUTH_STATE_PREFIX: "v2~" })).toBe("object");
-    const spaced = parseV2Edge({
-      ...settings,
-      V2_TELEMETRY_PATHS: " /api/0123456789abcdef , /api/fedcba9876543210 ",
-    });
-    if (spaced === null || typeof spaced === "string") {
-      return expect.unreachable("settings must parse");
-    }
-    expect(spaced.telemetryPaths).toEqual(["/api/0123456789abcdef", "/api/fedcba9876543210"]);
   });
 });
 
 describe("v2EdgeResponse", () => {
   const SIGN_UP_URL = "https://v2.executor.sh/login?mode=signup";
   const STATE_PREFIX = "x2.";
-  const TELEMETRY_PATHS = "/api/0123456789abcdef";
 
   /** The edge's settings with `service` as v2's Worker. */
   const settings = (service: V2Service, signUpUrl = SIGN_UP_URL): V2EdgeEnv => ({
     V2: service,
     V2_SIGN_UP_URL: signUpUrl,
     V2_OAUTH_STATE_PREFIX: STATE_PREFIX,
-    V2_TELEMETRY_PATHS: TELEMETRY_PATHS,
+    V2_ANALYTICS_PROXY_PATH: "/api/0123456789abcdef",
+    V2_ERROR_TUNNEL_PATH: "/api/fedcba9876543210/submit",
   });
 
   /** A v2 service that records what it receives and answers with `respond`. */
@@ -430,7 +454,8 @@ describe("v2EdgeResponse connected-account callback", () => {
     V2: service,
     V2_SIGN_UP_URL: "https://app.executor.sh/login?mode=signup",
     V2_OAUTH_STATE_PREFIX: "x2.",
-    V2_TELEMETRY_PATHS: "/api/0123456789abcdef",
+    V2_ANALYTICS_PROXY_PATH: "/api/0123456789abcdef",
+    V2_ERROR_TUNNEL_PATH: "/api/fedcba9876543210/submit",
   });
 
   const recordingService = () => {
@@ -564,7 +589,8 @@ describe("v2EdgeResponse connected-account callback", () => {
 });
 
 // v2's marketing site answers executor.sh: the landing page without a v1
-// session, its pages, files, assets and docs, and its telemetry proxies.
+// session, its pages, files, assets and docs, and its telemetry proxies. A
+// pattern is exact, or `/x/*` for everything that starts with `/x/`.
 describe("isV2MarketingPath", () => {
   const v2Marketing = [
     "/home",
@@ -573,8 +599,6 @@ describe("isV2MarketingPath", () => {
     "/blog/",
     "/blog/some-post",
     "/pricing",
-    "/privacy",
-    "/google-oauth",
     "/google-workspace",
     "/index.md",
     "/llms.txt",
@@ -588,6 +612,12 @@ describe("isV2MarketingPath", () => {
     "/docs/",
     "/docs/quickstart",
     "/docs/llms.txt",
+    // `apps` and `experiments` are reserved v1 organization slugs.
+    "/apps",
+    "/apps/",
+    "/apps/detail",
+    "/experiments/",
+    "/experiments/hero/b",
   ];
   for (const pathname of v2Marketing) {
     it(`sends ${pathname} to v2`, () => {
@@ -598,19 +628,31 @@ describe("isV2MarketingPath", () => {
   const v1Owned = [
     // The homepage depends on the session; see v2EdgeResponse.
     "/",
-    // v2 marketing paths that are unreserved v1 organization slugs.
-    "/apps",
-    "/apps/acme/tools",
+    // `/demo` is an unreserved v1 organization slug; v2 publishes nothing at
+    // a bare `/experiments`.
     "/demo",
     "/demo/workflows",
-    "/experiments/hero/b",
-    // v1's terms, and its dashboard's favicons.
+    "/experiments",
+    // Exact pages match only themselves, and directories only what is below
+    // them.
+    "/pricing/extra",
+    "/home/extra",
+    "/home/",
+    "/llms.txt/x",
+    "/_astro",
+    "/authors",
+    "/google-workspace/x",
+    // v1's legal pages, and its dashboard's favicons.
     "/terms",
+    "/privacy",
+    "/google-oauth",
     "/favicon.ico",
     "/favicon-32.png",
     "/apple-touch-icon.png",
     // Lookalikes and v1 routes.
     "/blogger",
+    "/appsmith",
+    "/experimentsx/a",
     "/docsearch",
     "/_astrox/app.css",
     "/home-team/policies",
@@ -632,7 +674,8 @@ describe("v2EdgeResponse marketing", () => {
     V2: service,
     V2_SIGN_UP_URL: "https://app.executor.sh/login?mode=signup",
     V2_OAUTH_STATE_PREFIX: "x2.",
-    V2_TELEMETRY_PATHS: "/api/0123456789abcdef,/api/fedcba9876543210",
+    V2_ANALYTICS_PROXY_PATH: "/api/0123456789abcdef",
+    V2_ERROR_TUNNEL_PATH: "/api/fedcba9876543210/submit",
   });
 
   const recordingService = (respond: () => Response = () => new Response("v2")) => {
@@ -737,12 +780,17 @@ describe("v2EdgeResponse marketing", () => {
   it("answers marketing with a 500 on broken settings", async () => {
     const { received, service } = recordingService();
 
-    const response = await v2EdgeResponse(new Request("https://executor.sh/pricing"), {
+    const brokenAnalytics = await v2EdgeResponse(new Request("https://executor.sh/pricing"), {
       ...settings(service),
-      V2_TELEMETRY_PATHS: "/api/nothex",
+      V2_ANALYTICS_PROXY_PATH: "/api/nothex",
+    });
+    const brokenTunnel = await v2EdgeResponse(new Request("https://executor.sh/pricing"), {
+      ...settings(service),
+      V2_ERROR_TUNNEL_PATH: "/api/fedcba9876543210",
     });
 
-    expect(response?.status).toBe(500);
+    expect(brokenAnalytics?.status).toBe(500);
+    expect(brokenTunnel?.status).toBe(500);
     expect(received).toHaveLength(0);
   });
 
@@ -793,6 +841,13 @@ describe("v2EdgeResponse marketing", () => {
   const v1Api = [
     // Another 16-hex root, and v1's own PostHog proxy (8 hex).
     "https://executor.sh/api/aaaaaaaaaaaaaaaa/e/",
+    "https://executor.sh/api/aaaaaaaaaaaaaaaa/submit",
+    // The error tunnel is forwarded exactly: not its root or other subpaths.
+    "https://executor.sh/api/fedcba9876543210",
+    "https://executor.sh/api/fedcba9876543210/",
+    "https://executor.sh/api/fedcba9876543210/e/",
+    "https://executor.sh/api/fedcba9876543210/submit/",
+    "https://executor.sh/api/fedcba9876543210/submit/x",
     "https://executor.sh/api/0a1b2c3d/e/",
     // Lookalikes of a configured root.
     "https://executor.sh/api/0123456789abcdef0/e/",
