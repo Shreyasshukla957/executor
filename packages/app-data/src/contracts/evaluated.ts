@@ -29,6 +29,33 @@ export const EvaluatedCommand = Schema.Union([
 ]);
 export type EvaluatedCommand = typeof EvaluatedCommand.Type;
 
-/** A read's reply: the kept body, or null when there is none evaluated since the last invalidation. */
-export const EvaluatedEntry = Schema.NullOr(Schema.Struct({ at: Time, body: Body }));
+/**
+ * How the supervisor that answered was running, for the caller's span: whether the command was
+ * the first its instance received, and how long its instance and its isolate had been running,
+ * on the supervisor's clock. A command that wakes the supervisor reads `woke` with both near 0.
+ */
+export const EvaluatedSupervisor = Schema.Struct({
+  woke: Schema.Boolean,
+  instanceMs: Time,
+  isolateMs: Time,
+});
+export type EvaluatedSupervisor = typeof EvaluatedSupervisor.Type;
+
+/**
+ * A read's reply: the kept body, or `missing` when there is none evaluated since the last
+ * invalidation. Supervisors deployed before `supervisor` was reported answer a miss with `null`;
+ * a caller from before then decodes `missing` as a failed read, which it also treats as a miss.
+ */
+export const EvaluatedEntry = Schema.Union([
+  Schema.Null,
+  Schema.Struct({ at: Time, body: Body, supervisor: Schema.optionalKey(EvaluatedSupervisor) }),
+  Schema.Struct({ missing: Schema.Literal(true), supervisor: EvaluatedSupervisor }),
+]);
 export type EvaluatedEntry = typeof EvaluatedEntry.Type;
+
+/** A write's reply. Callers from before `supervisor` was reported ignore it. */
+export const EvaluatedWritten = Schema.Struct({
+  kept: Schema.Boolean,
+  supervisor: EvaluatedSupervisor,
+});
+export type EvaluatedWritten = typeof EvaluatedWritten.Type;

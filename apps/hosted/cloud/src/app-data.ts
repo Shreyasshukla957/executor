@@ -67,9 +67,12 @@ const AppDataSupervisorLive = AppDataSupervisor.make(
           return response;
         }),
         alarm: () => supervisor.recover.pipe(Effect.orDie),
-        webSocketMessage: () => Effect.void,
-        webSocketClose: (socket: Cloudflare.WebSocket) => socket.close(1000, "Closed"),
-        webSocketError: (socket: Cloudflare.WebSocket) => socket.close(1011, "Reconnect"),
+        // Socket events can wake a hibernated supervisor too, so they count as calls it received.
+        webSocketMessage: () => supervisor.enter(Effect.void),
+        webSocketClose: (socket: Cloudflare.WebSocket) =>
+          supervisor.enter(socket.close(1000, "Closed")),
+        webSocketError: (socket: Cloudflare.WebSocket) =>
+          supervisor.enter(socket.close(1011, "Reconnect")),
       };
     });
   }),
