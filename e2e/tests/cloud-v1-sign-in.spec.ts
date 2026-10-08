@@ -114,7 +114,7 @@ layer(TestLive, { excludeTestServices: true })("Cloud v1 sign-in", (it) => {
           ]).then(([href, signOut, teamForm, pathname]) => ({ href, signOut, teamForm, pathname })),
         );
         expect(entry).toEqual({
-          href: "https://executor.sh",
+          href: "https://executor.sh/login",
           signOut: 1,
           teamForm: 0,
           pathname: "/create",

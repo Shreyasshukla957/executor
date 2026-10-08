@@ -184,7 +184,7 @@ function V1Workspace() {
       description="This email belongs to an organization on Executor v1. Keep using it there."
     >
       <Button asChild>
-        <a href="https://executor.sh">Open Executor v1</a>
+        <a href="https://executor.sh/login">Open Executor v1</a>
       </Button>
     </HostedEntry>
   );
