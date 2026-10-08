@@ -5,6 +5,7 @@ import { Effect, FileSystem, Path, Schema } from "effect";
 import { siteRedirects } from "../src/implementation/site-redirects.ts";
 import {
   RetainedAssetList,
+  retainedAssetCacheControl,
   retainedAssetFolders,
   retainedAssetList,
   retainedAssetPath,
@@ -185,14 +186,17 @@ const siteBuild = Effect.gen(function* () {
   // concatenated rather than merged into a set. Blume writes its rules already
   // prefixed with the /docs base, which is what gives the Markdown mirrors and
   // llms.txt their text/markdown and text/plain content types.
-  const headerFiles: Array<string> = [];
+  // Every name in a retained folder is content-hashed (checked above), so browsers cache those
+  // files for good instead of revalidating each on every visit. Only the asset layer answers them;
+  // the Worker's retained-file routes set the same value on an R2 copy.
+  const headerFiles: Array<string> = retainedAssetFolders.map(
+    (folder) => `/${folder}/*\n  Cache-Control: ${retainedAssetCacheControl}`,
+  );
   for (const directory of [marketing, dashboard, docs]) {
     const file = path.join(directory, "_headers");
     if (yield* fs.exists(file)) headerFiles.push((yield* fs.readFileString(file)).trim());
   }
-  if (headerFiles.length > 0) {
-    yield* fs.writeFileString(path.join(output, "_headers"), headerFiles.join("\n\n") + "\n");
-  }
+  yield* fs.writeFileString(path.join(output, "_headers"), headerFiles.join("\n\n") + "\n");
 }).pipe(Effect.provide(NodeServices.layer));
 
 NodeRuntime.runMain(siteBuild);

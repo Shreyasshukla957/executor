@@ -18,6 +18,12 @@ export const retainedAssetFolders = ["assets", "_astro", "docs/_astro"] as const
 export const retainedAssetPath =
   /^(?:assets|_astro|docs\/_astro)\/(?:fonts\/[0-9a-f]{16}|[^/]+[-.][\w-]{8})\.[a-z0-9]+$/;
 
+/**
+ * The `Cache-Control` of every retained file, from the static assets and from R2 alike. A name never
+ * changes meaning, so a browser keeps its copy for a year and never revalidates it.
+ */
+export const retainedAssetCacheControl = "public, max-age=31536000, immutable";
+
 /** The static asset the site build writes, listing the current build's retained files. */
 export const retainedAssetList = "/retained-assets.json";
 

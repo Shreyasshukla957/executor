@@ -7,6 +7,7 @@ import { Clock, Effect, Option, Schema } from "effect";
 import { HttpServerRequest, HttpServerResponse } from "effect/http";
 import {
   RetainedAssetList,
+  retainedAssetCacheControl,
   retainedAssetExpiryDays,
   retainedAssetList,
   retainedAssetPath,
@@ -70,8 +71,6 @@ const PassProgress = Schema.Struct({
   oldest: Schema.NumberFromString.check(Schema.isInt()),
 });
 
-const immutable = "public, max-age=31536000, immutable";
-
 /** Resolve the bucket during Worker initialization; the static assets are read per use. */
 export const cloudSiteAssets = Effect.gen(function* () {
   const bucket = yield* Cloudflare.R2.ReadWriteBucket(SiteAssets);
@@ -108,7 +107,7 @@ export const cloudSiteAssets = Effect.gen(function* () {
         catch: () => new SiteAssetsUnavailable({ path: `/${file}` }),
       });
       const written = yield* bucket.put(file, body, {
-        httpMetadata: { contentType, cacheControl: immutable },
+        httpMetadata: { contentType, cacheControl: retainedAssetCacheControl },
       });
       return { uploaded: written.uploaded.getTime(), copied: true };
     });
@@ -200,7 +199,7 @@ export const cloudSiteAssets = Effect.gen(function* () {
     return HttpServerResponse.stream(object.body, {
       contentType,
       contentLength: object.size,
-      headers: { "cache-control": immutable, etag: object.httpEtag },
+      headers: { "cache-control": retainedAssetCacheControl, etag: object.httpEtag },
     });
   }).pipe(Effect.withSpan("runtime.cloud.asset.retained"));
 

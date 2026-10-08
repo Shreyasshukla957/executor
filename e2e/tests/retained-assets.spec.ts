@@ -65,6 +65,30 @@ layer(HostedLive, { excludeTestServices: true })("Retained build assets", (it) =
             folder,
           ).toBe(true);
 
+        // Every listed name is content-hashed, so the static assets serve each folder's files for a
+        // browser to keep without revalidating.
+        for (const folder of ["assets/", "_astro/", "docs/_astro/"]) {
+          const file = list.files.find((listed) => listed.startsWith(folder));
+          expect(file, folder).toBeDefined();
+          const served = yield* Effect.scoped(
+            http.get(`${origin}/${file}`).pipe(
+              Effect.tap((response) => response.text),
+              Effect.map((response) => ({
+                status: response.status,
+                cacheControl: response.headers["cache-control"],
+              })),
+            ),
+          );
+          yield* evidence.json(`cache-${folder.slice(0, -1).replaceAll("/", "-")}.json`, {
+            file,
+            ...served,
+          });
+          expect(served, folder).toEqual({
+            status: 200,
+            cacheControl: "public, max-age=31536000, immutable",
+          });
+        }
+
         // Run the minute jobs until a copy finds every listed file already in R2.
         const tick = Effect.scoped(
           http
