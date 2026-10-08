@@ -142,6 +142,10 @@
     "VITE_PUBLIC_SITE_URL": "https://executor.sh",
     // Where /sign-up and /signup redirect: v2's sign-up page.
     "V2_SIGN_UP_URL": "https://v2.executor.sh/login?mode=signup",
+    // v2 starts every connected-account OAuth `state` with this prefix, and
+    // /api/oauth/callback requests carrying it go to v2. It must equal the
+    // prefix v2 mints.
+    "V2_OAUTH_STATE_PREFIX": "x2.",
     // Keeps the /__sentry-otel-verify probe live in production: Sentry
     // delivery failed silently for weeks (zero events after ~Jul 30 with an
     // active DSN), and without this there is no way to test the pipeline

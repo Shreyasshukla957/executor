@@ -7,7 +7,9 @@
 //  - sign-up goes to v2 (a redirect to v2's sign-up page);
 //  - a fixed list of v2 paths (sign-in issuer metadata, social sign-in
 //    callbacks, Git smart HTTP and the agent skills index) is forwarded to
-//    v2's Worker over a service binding.
+//    v2's Worker over a service binding;
+//  - so is a connected-account OAuth callback whose `state` carries v2's
+//    prefix.
 // v1 owns everything not listed. This module deliberately has no TanStack
 // Start or cloud application imports: the Worker entry calls it before
 // loading the Start server graph.
@@ -126,58 +128,93 @@ export interface V2Service {
   readonly fetch: (request: Request) => Promise<Response>;
 }
 
+/** v1's connected-account OAuth callback. v2 shares it on `executor.sh`:
+ *  a callback whose `state` starts with v2's prefix belongs to v2. */
+const OAUTH_CALLBACK_PATH = "/api/oauth/callback";
+
+/** A state prefix is URL-safe as is (so the query value carries it
+ *  unencoded) and includes a character outside base64url. v1's states are
+ *  base64url, so no v1 state can start with such a prefix. */
+const OAUTH_STATE_PREFIX_PATTERN = /^[A-Za-z0-9._~-]*[.~][A-Za-z0-9._~-]*$/;
+
+/** The edge's raw v2 settings, as the Worker environment holds them. */
+export interface V2EdgeEnv {
+  /** Service binding to v2's Worker. */
+  readonly V2?: V2Service;
+  /** Absolute URL of v2's sign-up page. */
+  readonly V2_SIGN_UP_URL?: string;
+  /** The prefix v2 puts on every connected-account OAuth `state`. */
+  readonly V2_OAUTH_STATE_PREFIX?: string;
+}
+
 /** What the edge needs to hand requests to v2. */
 export interface V2Edge {
   /** v2's Worker. */
   readonly service: V2Service;
   /** Absolute URL of v2's sign-up page (the `V2_SIGN_UP_URL` var). */
   readonly signUpUrl: URL;
+  /** v2's connected-account OAuth state prefix (the `V2_OAUTH_STATE_PREFIX` var). */
+  readonly oauthStatePrefix: string;
 }
 
 /**
  * Parse the edge's v2 settings from the Worker environment. Returns `null`
- * when neither is set (local dev, test workers), so v1 serves everything, and
- * the reason as a string when the deployment is broken: only one of them set,
- * or a sign-up URL that is not absolute.
+ * when none is set (local dev, test workers), so v1 serves everything, and
+ * the reason as a string when the deployment is broken: only some of them
+ * set, a sign-up URL that is not absolute, or a state prefix that could
+ * match a v1 state.
  */
-export const parseV2Edge = (
-  service: V2Service | undefined,
-  signUpUrl: string | undefined,
-): V2Edge | string | null => {
-  if (service === undefined && signUpUrl === undefined) return null;
-  if (service === undefined || signUpUrl === undefined) {
-    return "The V2 binding and V2_SIGN_UP_URL must be set together";
+export const parseV2Edge = (env: V2EdgeEnv): V2Edge | string | null => {
+  const service = env.V2;
+  const signUpUrl = env.V2_SIGN_UP_URL;
+  const oauthStatePrefix = env.V2_OAUTH_STATE_PREFIX;
+  if (service === undefined && signUpUrl === undefined && oauthStatePrefix === undefined) {
+    return null;
+  }
+  if (service === undefined || signUpUrl === undefined || oauthStatePrefix === undefined) {
+    return "The V2 binding, V2_SIGN_UP_URL and V2_OAUTH_STATE_PREFIX must be set together";
   }
   const parsed = URL.parse(signUpUrl);
   if (parsed === null || (parsed.protocol !== "https:" && parsed.protocol !== "http:")) {
     return "V2_SIGN_UP_URL must be an absolute http(s) URL";
   }
-  return { service, signUpUrl: parsed };
+  if (!OAUTH_STATE_PREFIX_PATTERN.test(oauthStatePrefix)) {
+    return "V2_OAUTH_STATE_PREFIX must be URL-safe and contain '.' or '~'";
+  }
+  return { service, signUpUrl: parsed, oauthStatePrefix };
 };
+
+/** Whether a connected-account callback carries v2's state prefix. Reads the
+ *  query only: a callback without `state` in its query stays with v1. */
+const isV2OAuthCallback = (url: URL, prefix: string): boolean =>
+  url.searchParams.get("state")?.startsWith(prefix) === true;
 
 /**
  * Answer a production request that belongs to v2: redirect sign-up (`GET`,
- * any query) to v2's sign-up page, or forward a {@link isV2Path} request to
+ * any query) to v2's sign-up page, or forward a {@link isV2Path} request, or
+ * a connected-account callback whose `state` starts with v2's prefix, to
  * v2's Worker and return its response unchanged (status, headers and body
- * stream). Returns `null` when v1 owns the request. Broken settings answer
- * the requests the edge owns with a 500 and leave the rest of v1 serving.
+ * stream). Returns `null` when v1 owns the request.
+ *
+ * Broken settings answer the requests the edge owns with a 500 and leave the
+ * rest of v1 serving. The callback is the exception: which callbacks are v2's
+ * depends on the settings, so v1 keeps every callback until they parse.
  */
-export const v2EdgeResponse = (
-  request: Request,
-  service: V2Service | undefined,
-  signUpUrl: string | undefined,
-): Promise<Response> | null => {
+export const v2EdgeResponse = (request: Request, env: V2EdgeEnv): Promise<Response> | null => {
   const url = new URL(request.url);
   if (url.hostname !== PRODUCTION_HOST) return null;
 
   const signUp = isSignUpPath(url.pathname) && request.method === "GET";
-  if (!signUp && !isV2Path(url.pathname)) return null;
-  const edge = parseV2Edge(service, signUpUrl);
+  const callback = url.pathname === OAUTH_CALLBACK_PATH;
+  if (!signUp && !callback && !isV2Path(url.pathname)) return null;
+  const edge = parseV2Edge(env);
   if (edge === null) return null;
   if (typeof edge === "string") {
     console.error(`executor.sh v2 edge misconfigured: ${edge}`);
+    if (callback) return null;
     return Promise.resolve(new Response("Service misconfigured", { status: 500 }));
   }
   if (signUp) return Promise.resolve(Response.redirect(edge.signUpUrl.href, 302));
+  if (callback && !isV2OAuthCallback(url, edge.oauthStatePrefix)) return null;
   return edge.service.fetch(v2ForwardRequest(request));
 };

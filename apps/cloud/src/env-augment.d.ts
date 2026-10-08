@@ -143,6 +143,9 @@ declare global {
       V2?: Fetcher;
       /** Absolute URL `/sign-up` and `/signup` redirect to. */
       V2_SIGN_UP_URL?: string;
+      /** Prefix of v2's connected-account OAuth `state`; `/api/oauth/callback`
+       *  requests whose state starts with it go to v2. */
+      V2_OAUTH_STATE_PREFIX?: string;
 
       // Shared with frontend
       VITE_PUBLIC_SITE_URL?: string;

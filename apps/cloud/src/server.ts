@@ -318,8 +318,9 @@ const cloudflareHandler = {
       prewarmAppPlane(ctx);
     }
 
-    // Sign-up and the fixed list of v2 paths on `executor.sh` go to v2.
-    const v2 = v2EdgeResponse(request, env.V2, env.V2_SIGN_UP_URL);
+    // Sign-up, the fixed list of v2 paths and v2's connected-account
+    // callbacks on `executor.sh` go to v2.
+    const v2 = v2EdgeResponse(request, env);
     if (v2) return v2;
 
     const marketingRequest = marketingProxyRequest(request);
