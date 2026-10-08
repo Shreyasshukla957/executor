@@ -74,7 +74,7 @@ export const receiveBrowserTelemetry = (signal: "traces" | "logs", build?: strin
         dropped: 0,
       },
       undefined,
-      build,
+      { build },
       "executor-web",
     );
     return HttpServerResponse.empty({ status: 202, headers: { "cache-control": "no-store" } });

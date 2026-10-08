@@ -25,12 +25,12 @@ export const makeTelemetryForwarder = Effect.gen(function* () {
       Effect.flatMap((drained) => (Option.isNone(drained) ? failed("shutdown") : Effect.void)),
     ),
   );
-  return (batch: TelemetryBatch, traceId: string, build?: string) =>
+  return (batch: TelemetryBatch, traceId: string, source: TelemetrySource) =>
     FiberSet.run(
       fibers,
       sender
         .withPermits(1)(
-          forwardTelemetry(batch, traceId, build).pipe(Effect.catch(() => failed("relay"))),
+          forwardTelemetry(batch, traceId, source).pipe(Effect.catch(() => failed("relay"))),
         )
         .pipe(
           pending.withPermitsIfAvailable(1),
@@ -177,11 +177,20 @@ const LogPayload = Schema.fromJsonString(
   }),
 );
 
+/**
+ * What the host knows about the records' source, from its own invocation rather than the records:
+ * the build that ran and, for an app isolate, the app's opaque ID. Both become resource attributes.
+ */
+export interface TelemetrySource {
+  readonly build?: string | undefined;
+  readonly app?: string | undefined;
+}
+
 /** Validate isolated records and export only this call's trace, using parent-owned credentials/identity. */
 export const forwardTelemetry = (
   batch: TelemetryBatch,
   traceId: string | undefined,
-  build: string | undefined,
+  { build, app }: TelemetrySource,
   service: "executor-app" | "executor-web" = "executor-app",
 ) =>
   Effect.gen(function* () {
@@ -195,6 +204,7 @@ export const forwardTelemetry = (
         ...(build === undefined
           ? []
           : [{ key: "executor.build.id", value: { stringValue: build } }]),
+        ...(app === undefined ? [] : [{ key: "executor.app.id", value: { stringValue: app } }]),
       ],
     };
     // A collector that refuses an export for now gets it again inside the three-second budget.

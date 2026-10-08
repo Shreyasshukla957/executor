@@ -250,7 +250,10 @@ export const appRuntime = (host: AppRuntimeHost) =>
           if (Result.isSuccess(collected) && collected.success.telemetry !== undefined) {
             const span = yield* Effect.currentSpan.pipe(Effect.option);
             if (Option.isSome(span))
-              yield* forward(collected.success.telemetry, span.value.traceId, build);
+              yield* forward(collected.success.telemetry, span.value.traceId, {
+                build,
+                app: input.app,
+              });
           }
           if (Result.isSuccess(collected) && collected.success.cacheChanged === true)
             yield* (yield* AppCacheChanges).changed(input.app);

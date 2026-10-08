@@ -79,6 +79,9 @@ export const selfHostAuth = Effect.gen(function* () {
     authenticate: (headers, mode, organization) =>
       mcpBearerAccess(settings.url, { headers, mode, organization }).pipe(
         Effect.provideService(SqlClient.SqlClient, sql),
+        Effect.tap(({ access }) =>
+          Effect.annotateCurrentSpan("executor.organization.id", access.organization),
+        ),
         Effect.withSpan("auth.authenticate"),
       ),
     browserGrant: (headers, id) =>
@@ -99,6 +102,9 @@ export const selfHostAuth = Effect.gen(function* () {
     authenticate: (headers, organization) =>
       apiBearerAccess(settings.url, { headers, organization }).pipe(
         Effect.provideService(SqlClient.SqlClient, sql),
+        Effect.tap(({ access }) =>
+          Effect.annotateCurrentSpan("executor.organization.id", access.organization),
+        ),
         Effect.withSpan("auth.authenticate"),
       ),
   });

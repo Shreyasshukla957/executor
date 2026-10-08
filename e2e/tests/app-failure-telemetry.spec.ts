@@ -241,14 +241,24 @@ const appException = (type: string) => ({
 });
 type Delivered = (typeof SpanQuery.Type)["data"][number];
 
-/** The resource the host supplies for every record it forwards from an app isolate. */
-const resource = ["service.name", "service.version", "deployment.environment.name"];
-const resourceTags = {
+/**
+ * The resource the host supplies for every record it forwards from an app isolate, including the
+ * build that ran and the ID of the app it invoked, from the host's own invocation.
+ */
+const resource = [
+  "service.name",
+  "service.version",
+  "deployment.environment.name",
+  "executor.build.id",
+  "executor.app.id",
+];
+const resourceTags = (app: string) => ({
   "service.name": "executor-app",
   "service.version": expect.any(String),
   "deployment.environment.name": expect.any(String),
   "executor.build.id": expect.any(String),
-};
+  "executor.app.id": app,
+});
 
 layer(HostedLive, { excludeTestServices: true })("App failure telemetry", (it) => {
   it.effect(scenarios.appFailureTelemetry.title, (context) =>
@@ -491,6 +501,32 @@ layer(HostedLive, { excludeTestServices: true })("App failure telemetry", (it) =
           failure: { step: "fails", errorName: "NonRetryableError", message: marker },
         });
 
+        // Each forwarded record names the app the host invoked: its evaluation, its calls and its
+        // logs, whatever app ran before it.
+        const invoked = (name: string) =>
+          name === "rewritten" || name === "rewrittenLog" ? rewriting.id : ordinary.id;
+        for (const [name, { spans }] of Object.entries(calls))
+          expect(
+            appSpans(spans).map(({ span }) => [span.operationName, span.tags["executor.app.id"]]),
+            `${name}: each forwarded span names the invoked app`,
+          ).toEqual(appSpans(spans).map(({ span }) => [span.operationName, invoked(name)]));
+        for (const [name, { spans }] of [
+          ["thrown", thrown],
+          ["rewritten", rewritten],
+        ] as const)
+          expect(
+            named(spans, "app.evaluate").length,
+            `${name}: the app's evaluation was forwarded`,
+          ).toBeGreaterThan(0);
+        for (const [name, { appLogs }] of [
+          ["unanswered", unanswered],
+          ["rewrittenLog", rewrittenLog],
+        ] as const)
+          expect(
+            appLogs.map(({ attributes }) => attributes["executor.app.id"]),
+            `${name}: each forwarded log names the invoked app`,
+          ).toEqual([invoked(name)]);
+
         for (const [name, { spans, logs }] of Object.entries(calls)) {
           // Span events carry exception messages and stacks; Axiom also keeps status messages.
           expect(JSON.stringify(spans), `${name}: the spans omit the app's text`).not.toContain(
@@ -538,7 +574,6 @@ layer(HostedLive, { excludeTestServices: true })("App failure telemetry", (it) =
                 (key) =>
                   !resource.includes(key) &&
                   ![
-                    "executor.build.id",
                     "executor.clock.type",
                     "executor.trace.parent_sampled",
                     "executor.operation",
@@ -566,8 +601,8 @@ layer(HostedLive, { excludeTestServices: true })("App failure telemetry", (it) =
         // The app's error: its name and code are not the framework's, so they are unrecognized.
         // The rewritten records keep only what the framework sent, plus the added exception, by
         // kind, and the added span under a fixed name.
-        const appCall = {
-          ...resourceTags,
+        const appCall = (app: string) => ({
+          ...resourceTags(app),
           "executor.clock.type": expect.any(String),
           "error.type": "unrecognized",
           "executor.failure.source": "app",
@@ -577,12 +612,12 @@ layer(HostedLive, { excludeTestServices: true })("App failure telemetry", (it) =
           "executor.elicitation.wait_ms": expect.stringMatching(/^\d+(\.\d+)?$/),
           "executor.authored_ms": expect.stringMatching(/^\d+(\.\d+)?$/),
           "executor.overhead_ms": expect.stringMatching(/^\d+(\.\d+)?$/),
-        };
+        });
         expect(named(thrown.spans, "app.call")).toMatchObject([
-          { tags: appCall, events: [appException("HostOperationFailed")] },
+          { tags: appCall(ordinary.id), events: [appException("HostOperationFailed")] },
         ]);
-        expect(named(thrown.spans, "app.call")[0]?.tags).toEqual(appCall);
-        expect(named(rewritten.spans, "app.call")[0]?.tags).toEqual(appCall);
+        expect(named(thrown.spans, "app.call")[0]?.tags).toEqual(appCall(ordinary.id));
+        expect(named(rewritten.spans, "app.call")[0]?.tags).toEqual(appCall(rewriting.id));
         expect(named(rewritten.spans, "app.call")[0]?.events).toEqual([
           appException("HostOperationFailed"),
           appException("unrecognized"),
@@ -592,7 +627,7 @@ layer(HostedLive, { excludeTestServices: true })("App failure telemetry", (it) =
             named(spans, "app.dispatch").map(({ tags }) => tags["executor.operation"]),
           ).toEqual(["call"]);
         expect(named(rewritten.spans, "app.unrecognized").map(({ tags }) => tags)).toEqual([
-          { ...resourceTags, "executor.operation": "call" },
+          { ...resourceTags(rewriting.id), "executor.operation": "call" },
         ]);
         expect(named(thrown.spans, "app.unrecognized")).toEqual([]);
 
@@ -607,11 +642,7 @@ layer(HostedLive, { excludeTestServices: true })("App failure telemetry", (it) =
         ]);
         for (const { appLogs } of [unanswered, rewrittenLog])
           for (const { attributes } of appLogs)
-            expect(
-              Object.keys(attributes).filter(
-                (key) => !resource.includes(key) && key !== "executor.build.id",
-              ),
-            ).toEqual([]);
+            expect(Object.keys(attributes).filter((key) => !resource.includes(key))).toEqual([]);
 
         if (cloud) {
           // Cloud's runner records the kind of each failed call, not its text.

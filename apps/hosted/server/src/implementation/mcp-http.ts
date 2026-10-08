@@ -165,9 +165,17 @@ export const dispatchHostedMcp = <E, R>(
     // move it to another organization. The same bearer keeps its user, client and grant.
     const headers = new Headers(request.headers);
     headers.delete("x-executor-organization");
-    const current = authentication
-      .authenticate(headers, address.mode, access.access.organization)
-      .pipe(Effect.flatMap(scoped), Effect.provideContext(services));
+    // The organization's opaque ID goes on the request's span and on each operation that rechecks
+    // (`mcp.tool.call`, `mcp.tool.resume`), so their latency can be split by organization.
+    const organization = { "executor.organization.id": access.access.organization };
+    yield* Effect.annotateCurrentSpan(organization);
+    const current = Effect.annotateCurrentSpan(organization).pipe(
+      Effect.andThen(
+        authentication.authenticate(headers, address.mode, access.access.organization),
+      ),
+      Effect.flatMap(scoped),
+      Effect.provideContext(services),
+    );
     const authorized: McpBackend<RequestError> = {
       ...backend,
       listSkills: (input) => current.pipe(Effect.flatMap((fresh) => fresh.listSkills(input))),

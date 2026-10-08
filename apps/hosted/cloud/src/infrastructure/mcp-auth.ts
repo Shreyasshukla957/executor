@@ -71,6 +71,9 @@ export const mcpAuthentication = (
         origin,
         authenticate: (headers, mode, organization) =>
           withSql(mcpBearerAccess(origin, { headers, mode, organization })).pipe(
+            Effect.tap(({ access }) =>
+              Effect.annotateCurrentSpan("executor.organization.id", access.organization),
+            ),
             Effect.withSpan("auth.authenticate"),
           ),
         browserGrant: (headers, id) =>

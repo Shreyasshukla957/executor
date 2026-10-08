@@ -6,7 +6,12 @@
 import { makeExecutionMemo } from "alchemy/Runtime/ExecutionMemo";
 import { Context, Effect, Layer, Option, Scope } from "effect";
 import { SqlClient, type SqlError } from "effect/sql";
-import { ConnectionReservations, cloudDatabaseConnection, cloudDatabasePool } from "./database.ts";
+import {
+  ConnectionReservations,
+  OpenedConnections,
+  cloudDatabaseConnection,
+  cloudDatabasePool,
+} from "./database.ts";
 import { ObjectDatabase, type SqlServices } from "./object-database.ts";
 
 /**
@@ -52,7 +57,9 @@ export const cloudInvocationDatabase = Layer.effect(
 
 /**
  * Run SQL on the client this invocation shares with Better Auth and the executor. Building it
- * opens no connection; a malformed URL is a deployment defect.
+ * opens no connection; a malformed URL is a deployment defect. The current span records whether
+ * a connection opened while the SQL ran (`db.connect.opened`), so a caller's cold and warm
+ * durations can be told apart. In a Durable Object a concurrent call's connection counts too.
  */
 export const invocationSql = Effect.map(
   InvocationDatabase,
@@ -60,12 +67,20 @@ export const invocationSql = Effect.map(
     <A, E>(effect: Effect.Effect<A, E, SqlClient.SqlClient>) =>
       database.pipe(
         Effect.orDie,
-        Effect.flatMap((services) =>
-          Effect.provideService(
+        Effect.flatMap((services) => {
+          const opened = Context.get(services, OpenedConnections);
+          const before = opened.count();
+          return Effect.provideService(
             effect,
             SqlClient.SqlClient,
             Context.get(services, SqlClient.SqlClient),
-          ),
-        ),
+          ).pipe(
+            Effect.ensuring(
+              Effect.suspend(() =>
+                Effect.annotateCurrentSpan("db.connect.opened", opened.count() > before),
+              ),
+            ),
+          );
+        }),
       ),
 );

@@ -7,7 +7,17 @@ import { AlchemyContext } from "alchemy/AlchemyContext";
 import { adopt } from "alchemy/AdoptPolicy";
 import { retain } from "alchemy/RemovalPolicy";
 import { PgClient } from "@effect/sql-pg";
-import { Config, Context, Duration, Effect, Option, Redacted, type Scope } from "effect";
+import {
+  Config,
+  Context,
+  Duration,
+  Effect,
+  Layer,
+  Option,
+  Redacted,
+  type Scope,
+  Tracer,
+} from "effect";
 import { developmentDatabase } from "./development.ts";
 import { cloudOrigin, testStage, type TestStage } from "./stage.ts";
 import { postgresUrl, previewDatabase } from "./preview-database.ts";
@@ -180,7 +190,8 @@ const connectAttemptTimeout = Duration.millis(2500);
  * on first use. Opening a connection gets a second attempt when the first fails or times out.
  * Each `sql.connect` span records its `db.connect.attempt`, and the second also records why the
  * first failed as `db.connect.retry_reason`. When both fail, the statement fails with the
- * driver's `SqlError`; statements themselves are never repeated.
+ * driver's `SqlError`; statements themselves are never repeated. Beside the client it provides
+ * {@link OpenedConnections}, its count of those spans.
  */
 export const cloudDatabasePool = (options: {
   readonly url: Redacted.Redacted;
@@ -188,12 +199,39 @@ export const cloudDatabasePool = (options: {
   readonly idleTimeout?: Duration.Input;
   readonly applicationName?: string;
 }) =>
-  PgClient.layer({
-    ...options,
-    prepare: false,
-    connectTimeout: connectAttemptTimeout,
-    connectRetries: 1,
-  });
+  Layer.effectContext(
+    Effect.gen(function* () {
+      // The pool opens connections with the tracer it was built with; counting its `sql.connect`
+      // spans there tells a caller whether its work opened one, without asking the pool.
+      const tracer = yield* Effect.tracer;
+      let opened = 0;
+      const counting = Tracer.make({
+        span: (span) => {
+          if (span.name === "sql.connect") opened += 1;
+          return tracer.span(span);
+        },
+        context: tracer.context,
+      });
+      const sql = yield* Layer.build(
+        PgClient.layer({
+          ...options,
+          prepare: false,
+          connectTimeout: connectAttemptTimeout,
+          connectRetries: 1,
+        }),
+      ).pipe(Effect.withTracer(counting));
+      return Context.add(sql, OpenedConnections, { count: () => opened });
+    }),
+  );
+
+/**
+ * How many connection attempts a {@link cloudDatabasePool} has started. Reading it before and
+ * after some work shows whether a connection opened meanwhile; it costs no I/O.
+ */
+export class OpenedConnections extends Context.Service<
+  OpenedConnections,
+  { readonly count: () => number }
+>()("executor/cloud/OpenedConnections") {}
 
 /**
  * Provided beside a SQL client, for a consumer that may have to give up a connection it reserved,

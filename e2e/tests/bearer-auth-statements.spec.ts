@@ -3,7 +3,9 @@
  * the caller's membership in one SQL statement. MCP authenticates every request and every tool
  * call inside `execute`, and each statement is a network round trip to Cloud's database, so the
  * statement count under `auth.authenticate` is the regression guard. The PAT and OAuth paths
- * read different rows, so both are checked, through MCP and through the Executor API.
+ * read different rows, so both are checked, through MCP and through the Executor API. Each
+ * `auth.authenticate` also names the organization it resolved, by its opaque ID, so its latency
+ * can be split by organization.
  */
 import { expect, layer } from "@effect/vitest";
 import { Effect, Layer, Redacted, Schedule, Schema } from "effect";
@@ -32,7 +34,10 @@ layer(HostedLive, { excludeTestServices: true })("Bearer authentication", (it) =
           mcp = yield* McpClient;
         const organization = actors.organization.id;
 
-        /** SQL statements under each `auth.authenticate` span of a completed request's trace. */
+        /**
+         * SQL statements under each `auth.authenticate` span of a completed request's trace, and
+         * the organization each recorded.
+         */
         const statements = (traceId: string) =>
           telemetry.query(traceId).pipe(
             Effect.flatMap((result) => {
@@ -56,14 +61,14 @@ layer(HostedLive, { excludeTestServices: true })("Bearer authentication", (it) =
                 return false;
               };
               return Effect.succeed(
-                roots.map(
-                  (root) =>
-                    result.data.filter(
-                      ({ span }) =>
-                        span.operationName === "sql.execute" &&
-                        under(root.span.spanId, span.parentSpanId),
-                    ).length,
-                ),
+                roots.map((root) => ({
+                  statements: result.data.filter(
+                    ({ span }) =>
+                      span.operationName === "sql.execute" &&
+                      under(root.span.spanId, span.parentSpanId),
+                  ).length,
+                  organization: root.span.tags["executor.organization.id"],
+                })),
               );
             }),
             Effect.retry({ schedule: Schedule.spaced("500 millis"), times: 40 }),
@@ -79,11 +84,16 @@ layer(HostedLive, { excludeTestServices: true })("Bearer authentication", (it) =
         );
         const expectOneStatement = (label: string, traceId: string) =>
           Effect.gen(function* () {
-            const counts = yield* statements(traceId);
-            yield* evidence.json(`${label}-auth-statements.json`, { traceId, counts });
-            expect(counts, `${label} authenticates with one SQL statement`).toEqual(
-              counts.map(() => 1),
-            );
+            const roots = yield* statements(traceId);
+            yield* evidence.json(`${label}-auth-statements.json`, { traceId, roots });
+            expect(
+              roots.map((root) => root.statements),
+              `${label} authenticates with one SQL statement`,
+            ).toEqual(roots.map(() => 1));
+            expect(
+              roots.map((root) => root.organization),
+              `${label} records the organization it authenticated for`,
+            ).toEqual(roots.map(() => organization));
           });
 
         const created = yield* api.request(actors.owner, "POST", "/api/auth/api-key/create", {

@@ -223,6 +223,9 @@ export const cloudAuth = (send: SendAuthEmail) =>
           origin: settings.url,
           authenticate: (headers, organization) =>
             withSql(apiBearerAccess(settings.url, { headers, organization })).pipe(
+              Effect.tap(({ access }) =>
+                Effect.annotateCurrentSpan("executor.organization.id", access.organization),
+              ),
               Effect.withSpan("auth.authenticate"),
             ),
         });

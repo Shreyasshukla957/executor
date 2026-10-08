@@ -273,10 +273,61 @@ layer(HostedLive, { excludeTestServices: true })("Cloud MCP session timing", (it
           // A call alone on its object.
           const beforeAlone = (yield* evidence.requests).length;
           yield* echo(first, "Call alone", "alone");
-          const [alone] = yield* found(since(beforeAlone), 1);
+          const [aloneCall] = yield* located(since(beforeAlone), 1);
+          const alone = aloneCall === undefined ? undefined : timing(aloneCall);
           yield* evidence.json("alone.json", alone);
           accounted(alone);
           expect(alone?.object, "Nothing else was being answered on the object").toBe(0);
+
+          // The call's spans name its organization by opaque ID, so their latency can be split by
+          // organization. Each authentication says whether it opened a database connection; the
+          // gateway's Worker event opens its own.
+          const attributed = yield* telemetry.query(aloneCall?.trace ?? "").pipe(
+            Effect.map((result) => result.data.map(({ span }) => span)),
+            Effect.flatMap((spans) =>
+              spans.some((span) => span.operationName === "mcp.tool.call")
+                ? Effect.succeed(spans)
+                : Effect.fail(new Error("The call's tool span has not reached Motel")),
+            ),
+            Effect.retry({ schedule: Schedule.spaced("500 millis"), times: 40 }),
+          );
+          const spansNamed = (name: string) =>
+            attributed.filter((span) => span.operationName === name);
+          for (const name of [
+            "mcp.session.forward",
+            "mcp.session.request",
+            "mcp.tool.call",
+            "auth.authenticate",
+          ]) {
+            const spans = spansNamed(name);
+            expect(spans.length, `The call recorded ${name}`).toBeGreaterThan(0);
+            expect(
+              spans.map((span) => span.tags["executor.organization.id"]),
+              `${name} names the call's organization`,
+            ).toEqual(spans.map(() => actors.organization.id));
+          }
+          const authentications = spansNamed("auth.authenticate");
+          expect(
+            authentications.map((span) => span.tags["db.connect.opened"]),
+            "Each authentication says whether it opened a connection",
+          ).toEqual(authentications.map(() => expect.stringMatching(/^(true|false)$/)));
+          const gateway = spansNamed("mcp.session.forward")[0];
+          expect(
+            authentications
+              .filter((span) => span.parentSpanId === gateway?.parentSpanId)
+              .map((span) => span.tags["db.connect.opened"]),
+            "The gateway's event opens a connection to authenticate",
+          ).toEqual(["true"]);
+          // The call's tool rechecks its grant on the session object, which the warm-up above and
+          // this call's own request have already connected. Nothing else runs on the object, so
+          // no other call's connection is counted either.
+          const toolSpan = spansNamed("mcp.tool.call")[0];
+          expect(
+            authentications
+              .filter((span) => span.parentSpanId === toolSpan?.spanId)
+              .map((span) => span.tags["db.connect.opened"]),
+            "The warm session's recheck opens no connection",
+          ).toEqual(["false"]);
 
           // A call waiting on its app holds a request open on its object. Another call on the same
           // object starts during it, and then a call on another object. Local Cloud runs every

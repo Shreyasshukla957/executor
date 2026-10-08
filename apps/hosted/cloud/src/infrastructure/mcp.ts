@@ -24,6 +24,7 @@ export const cloudMcp = Effect.gen(function* () {
   const sessions = yield* McpSession.from(McpServer);
   const forward = (access: Parameters<typeof mcpSessionKey>[0]) =>
     Effect.gen(function* () {
+      yield* Effect.annotateCurrentSpan("executor.organization.id", access.access.organization);
       const request = yield* HttpServerRequest.HttpServerRequest;
       const headers = yield* traceHeaders;
       const traced = request.modify({ headers: { ...request.headers, ...headers } });
