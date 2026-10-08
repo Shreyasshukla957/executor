@@ -11,7 +11,7 @@ import * as Sentry from "@sentry/cloudflare";
 import handler from "@tanstack/react-start/server-entry";
 
 import { isAppOwnedPath, servedByAppPlane } from "./app-paths";
-import { marketingProxyRequest, parseV2Edge, v2EdgeResponse } from "./edge/marketing";
+import { marketingProxyRequest, v2EdgeResponse } from "./edge/marketing";
 import { passthroughResponse } from "./edge/passthrough";
 import { withPrivateReferrerPolicy } from "./edge/referrer-policy";
 import { runWorkOsEventsSync } from "./auth/workos-events-runner";
@@ -319,8 +319,7 @@ const cloudflareHandler = {
     }
 
     // Sign-up and the fixed list of v2 paths on `executor.sh` go to v2.
-    const v2Edge = parseV2Edge(env.V2, env.V2_SIGN_UP_URL);
-    const v2 = v2Edge && v2EdgeResponse(request, v2Edge);
+    const v2 = v2EdgeResponse(request, env.V2, env.V2_SIGN_UP_URL);
     if (v2) return v2;
 
     const marketingRequest = marketingProxyRequest(request);

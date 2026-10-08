@@ -135,18 +135,22 @@ export interface V2Edge {
 
 /**
  * Parse the edge's v2 settings from the Worker environment. Returns `null`
- * when the binding or the sign-up URL is absent or the URL is not absolute,
- * so hosts without them (local dev, test workers) keep serving everything
- * from v1.
+ * when neither the binding nor the sign-up URL is set, so hosts without them
+ * (local dev, test workers) keep serving everything from v1. Throws when only
+ * one is set or the URL is not absolute, so a broken deployment fails loudly
+ * instead of silently serving sign-up from v1.
  */
 export const parseV2Edge = (
   service: V2Service | undefined,
   signUpUrl: string | undefined,
 ): V2Edge | null => {
-  if (service === undefined || signUpUrl === undefined) return null;
+  if (service === undefined && signUpUrl === undefined) return null;
+  if (service === undefined || signUpUrl === undefined) {
+    throw new Error("The V2 binding and V2_SIGN_UP_URL must be set together");
+  }
   const parsed = URL.parse(signUpUrl);
   if (parsed === null || (parsed.protocol !== "https:" && parsed.protocol !== "http:")) {
-    return null;
+    throw new Error("V2_SIGN_UP_URL must be an absolute http(s) URL");
   }
   return { service, signUpUrl: parsed };
 };
@@ -155,15 +159,22 @@ export const parseV2Edge = (
  * Answer a production request that belongs to v2: redirect sign-up (`GET`,
  * any query) to v2's sign-up page, or forward a {@link isV2Path} request to
  * v2's Worker and return its response unchanged (status, headers and body
- * stream). Returns `null` when v1 owns the request.
+ * stream). Returns `null` when v1 owns the request. The settings are parsed
+ * only for requests the edge owns, so a broken setting fails those requests
+ * and leaves the rest of v1 serving.
  */
-export const v2EdgeResponse = (request: Request, edge: V2Edge): Promise<Response> | null => {
+export const v2EdgeResponse = (
+  request: Request,
+  service: V2Service | undefined,
+  signUpUrl: string | undefined,
+): Promise<Response> | null => {
   const url = new URL(request.url);
   if (url.hostname !== PRODUCTION_HOST) return null;
 
-  if (isSignUpPath(url.pathname) && request.method === "GET") {
-    return Promise.resolve(Response.redirect(edge.signUpUrl.href, 302));
-  }
-  if (isV2Path(url.pathname)) return edge.service.fetch(v2ForwardRequest(request));
-  return null;
+  const signUp = isSignUpPath(url.pathname) && request.method === "GET";
+  if (!signUp && !isV2Path(url.pathname)) return null;
+  const edge = parseV2Edge(service, signUpUrl);
+  if (edge === null) return null;
+  if (signUp) return Promise.resolve(Response.redirect(edge.signUpUrl.href, 302));
+  return edge.service.fetch(v2ForwardRequest(request));
 };
