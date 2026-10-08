@@ -10,6 +10,11 @@ import { acceptedToken, accountCheckUpstream } from "../support/account-check-up
 import { appsManifest } from "../support/apps-release.ts";
 import { scenarios } from "../test-plan.ts";
 
+/** The synthetic photo the identity check reports; the browser request is answered locally. */
+const avatar = "https://avatars.example.test/u/4242.png";
+const pixel =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
 const Health = Schema.Struct({
   account: Schema.String,
   info: Schema.NullOr(
@@ -196,7 +201,7 @@ layer(HostedLive, { excludeTestServices: true })("Account health", (it) => {
           externalId: "user-4242",
           displayName: "Synthetic Person",
           username: "synthetic-person",
-          avatarUrl: "https://avatars.example.test/u/4242.png",
+          avatarUrl: avatar,
         });
         const reportedAt = healthy.infoCheckedAt;
         expect(reportedAt).not.toBeNull();
@@ -240,6 +245,13 @@ layer(HostedLive, { excludeTestServices: true })("Account health", (it) => {
 
         // The account's health shows why the last check failed.
         yield* browser.login(actors.owner);
+        yield* browser.use("Serve the reported photo from its external origin", (page) =>
+          page
+            .context()
+            .route(avatar, (route) =>
+              route.fulfill({ contentType: "image/png", body: Buffer.from(pixel, "base64") }),
+            ),
+        );
         yield* browser.use("Open the accounts with a failed check", (page) =>
           page
             .goto(`/org/${actors.organization.slug}/accounts`)
@@ -360,7 +372,31 @@ layer(HostedLive, { excludeTestServices: true })("Account health", (it) => {
         yield* browser.use("The list shows the new result", (page) =>
           page.locator('[data-check-status="healthy"][data-check-current="true"]').nth(1).waitFor(),
         );
+        // The reported photo stands beside the identity in the list.
+        expect(
+          yield* browser.use("The list shows the reported photo", (page) => {
+            const photo = page.locator(".account-identity [data-slot='avatar-image']").first();
+            return photo.waitFor({ state: "visible" }).then(() => photo.getAttribute("src"));
+          }),
+        ).toBe(avatar);
         yield* browser.checkpoint("Account list with check results");
+
+        // The app's accounts show each account with its reported photo.
+        yield* browser.use("Open the app's accounts", (page) =>
+          page.goto(
+            `/org/${actors.organization.slug}/apps/${identity.id}?view=accounts&profile=${identityProfile.id}`,
+          ),
+        );
+        expect(
+          yield* browser.use("The account row shows the reported photo", (page) => {
+            const photo = page
+              .locator(".accounts-section li")
+              .filter({ hasText: "Default" })
+              .locator("[data-slot='account-avatar'] [data-slot='avatar-image']");
+            return photo.waitFor({ state: "visible" }).then(() => photo.getAttribute("src"));
+          }),
+        ).toBe(avatar);
+        yield* browser.checkpoint("App accounts with the reported photo");
         expect(entry(yield* read(), identity)?.check).toMatchObject({
           status: "healthy",
           current: true,

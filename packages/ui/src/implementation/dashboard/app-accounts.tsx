@@ -4,7 +4,7 @@ import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { AsyncResult, type Atom } from "effect/reactivity";
 import { Exit, type Cause } from "effect";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { MoreHorizontalIcon, UserCircleIcon } from "@hugeicons/core-free-icons";
+import { MoreHorizontalIcon } from "@hugeicons/core-free-icons";
 import type {
   AccountAppHealth,
   App,
@@ -22,7 +22,7 @@ import {
   type FailureProps,
 } from "../../contracts/dashboard.ts";
 import { ProviderIcon } from "./common.tsx";
-import { AccountCheckResult } from "./account-health.tsx";
+import { AccountAvatar, AccountCheckResult } from "./account-health.tsx";
 import { EmptyState } from "./empty-state.tsx";
 import { Button } from "../components/button.tsx";
 import { Checkbox } from "../components/checkbox.tsx";
@@ -424,18 +424,14 @@ export function AppAccounts({
                                   className="size-4 shrink-0 cursor-pointer appearance-none rounded-full border border-input shadow-xs outline-none transition-shadow checked:border-[5px] checked:border-primary focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-default disabled:opacity-50 dark:bg-input/30"
                                 />
                               )}
+                              <AccountAvatar info={account?.health?.info} className="size-5" />
                               <span className="min-w-0 flex-1 break-words">
                                 {label ?? "Account disconnected"}
                               </span>
                             </label>
                           ) : (
                             <>
-                              <HugeiconsIcon
-                                icon={UserCircleIcon}
-                                size={16}
-                                className="shrink-0 text-muted-foreground"
-                                aria-hidden
-                              />
+                              <AccountAvatar info={account?.health?.info} className="size-5" />
                               <span className="min-w-0 flex-1 break-words [&_a:hover]:underline">
                                 {label ? (
                                   <AccountLink account={id}>{label}</AccountLink>
