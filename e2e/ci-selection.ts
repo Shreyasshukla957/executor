@@ -473,6 +473,7 @@ const suiteConfigs: Record<string, () => Promise<unknown>> = {
   "dashboard-file-names.config.ts": () => import("./dashboard-file-names.config.ts"),
   "desktop-recovery.config.ts": () => import("./desktop-recovery.config.ts"),
   "desktop-release.config.ts": () => import("./desktop-release.config.ts"),
+  "emulator-failures.config.ts": () => import("./emulator-failures.config.ts"),
   "docker-release.config.ts": () => import("./docker-release.config.ts"),
   "local-bootstrap.config.ts": () => import("./local-bootstrap.config.ts"),
   "pglite.config.ts": () => import("./pglite.config.ts"),
