@@ -135,22 +135,21 @@ export interface V2Edge {
 
 /**
  * Parse the edge's v2 settings from the Worker environment. Returns `null`
- * when neither the binding nor the sign-up URL is set, so hosts without them
- * (local dev, test workers) keep serving everything from v1. Throws when only
- * one is set or the URL is not absolute, so a broken deployment fails loudly
- * instead of silently serving sign-up from v1.
+ * when neither is set (local dev, test workers), so v1 serves everything, and
+ * the reason as a string when the deployment is broken: only one of them set,
+ * or a sign-up URL that is not absolute.
  */
 export const parseV2Edge = (
   service: V2Service | undefined,
   signUpUrl: string | undefined,
-): V2Edge | null => {
+): V2Edge | string | null => {
   if (service === undefined && signUpUrl === undefined) return null;
   if (service === undefined || signUpUrl === undefined) {
-    throw new Error("The V2 binding and V2_SIGN_UP_URL must be set together");
+    return "The V2 binding and V2_SIGN_UP_URL must be set together";
   }
   const parsed = URL.parse(signUpUrl);
   if (parsed === null || (parsed.protocol !== "https:" && parsed.protocol !== "http:")) {
-    throw new Error("V2_SIGN_UP_URL must be an absolute http(s) URL");
+    return "V2_SIGN_UP_URL must be an absolute http(s) URL";
   }
   return { service, signUpUrl: parsed };
 };
@@ -159,9 +158,8 @@ export const parseV2Edge = (
  * Answer a production request that belongs to v2: redirect sign-up (`GET`,
  * any query) to v2's sign-up page, or forward a {@link isV2Path} request to
  * v2's Worker and return its response unchanged (status, headers and body
- * stream). Returns `null` when v1 owns the request. The settings are parsed
- * only for requests the edge owns, so a broken setting fails those requests
- * and leaves the rest of v1 serving.
+ * stream). Returns `null` when v1 owns the request. Broken settings answer
+ * the requests the edge owns with a 500 and leave the rest of v1 serving.
  */
 export const v2EdgeResponse = (
   request: Request,
@@ -175,6 +173,10 @@ export const v2EdgeResponse = (
   if (!signUp && !isV2Path(url.pathname)) return null;
   const edge = parseV2Edge(service, signUpUrl);
   if (edge === null) return null;
+  if (typeof edge === "string") {
+    console.error(`executor.sh v2 edge misconfigured: ${edge}`);
+    return Promise.resolve(new Response("Service misconfigured", { status: 500 }));
+  }
   if (signUp) return Promise.resolve(Response.redirect(edge.signUpUrl.href, 302));
   return edge.service.fetch(v2ForwardRequest(request));
 };
