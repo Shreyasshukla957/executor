@@ -13,7 +13,7 @@ import { Evidence } from "../support/evidence.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { McpClient } from "../support/mcp-client.ts";
 import { createProfile, selectProfileAccounts } from "../support/profiles.ts";
-import { appsManifest, withApps } from "../support/apps-release.ts";
+import { appsManifest, withApps, mcpSdkVersion } from "../support/apps-release.ts";
 
 /**
  * 28 apps of 175 tools and one imported API of 2,100 tools: 7,000 tools with about 46 MB of JSON
@@ -456,7 +456,7 @@ return { items: [...small.items, ...large.items] };`;
                 {
                   path: "package.json",
                   content: JSON.stringify({
-                    dependencies: withApps({ "@modelcontextprotocol/sdk": "1.30.0" }),
+                    dependencies: withApps({ "@modelcontextprotocol/sdk": mcpSdkVersion }),
                   }),
                 },
                 { path: "index.ts", content: stalledAppSource(origin) },

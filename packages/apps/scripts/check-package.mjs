@@ -19,6 +19,14 @@ const manifest = JSON.parse(await readFile(join(root, "dist/package.json"), "utf
 assert.equal(manifest.publishConfig.tag, "beta");
 assert.match(manifest.version, /^0\.0\.\d+-beta\.\d+$/);
 assert(!JSON.stringify(manifest).includes("workspace:"));
+// The MCP SDK this release is built with is the one quick add pins; the README example names it.
+const source = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
+assert(
+  (await readFile(join(root, "README.md"), "utf8")).includes(
+    `"@modelcontextprotocol/sdk": "${source.devDependencies["@modelcontextprotocol/sdk"]}"`,
+  ),
+  "README.md names a different @modelcontextprotocol/sdk version than package.json",
+);
 assert(
   packed.files.every(({ path }) => !path.startsWith("src/") && !path.includes("node_modules/")),
 );
@@ -80,7 +88,7 @@ assert.deepEqual(await response.json(), { ok: true, value: { message: "Hello Ada
       "@types/react@19.2.0",
       "react@19.2.0",
       "graphql@16.11.0",
-      "@modelcontextprotocol/sdk@1.30.0",
+      `@modelcontextprotocol/sdk@${source.devDependencies["@modelcontextprotocol/sdk"]}`,
     ],
     consumer,
   );

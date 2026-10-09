@@ -8,6 +8,9 @@ import appsPackage from "../../packages/apps/package.json" with { type: "json" }
 /** The version in `packages/apps/package.json`, imported as data from the checkout the suite runs in. */
 export const appsVersion: string = appsPackage.version;
 
+/** The `@modelcontextprotocol/sdk` version that `apps` is built with, which quick add pins. */
+export const mcpSdkVersion: string = appsPackage.devDependencies["@modelcontextprotocol/sdk"];
+
 /** A `package.json` that declares only the host's `apps` release. */
 export const appsManifest = {
   path: "package.json",

@@ -14,7 +14,7 @@ import { Evidence } from "../support/evidence.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { McpClient } from "../support/mcp-client.ts";
 import { requestGate } from "../support/request-gate.ts";
-import { appsManifest, withApps } from "../support/apps-release.ts";
+import { appsManifest, withApps, mcpSdkVersion } from "../support/apps-release.ts";
 
 // A refresh that runs until its 30 s background limit unless cancelled.
 const slowRefresh = `const slowRefresh = (signal) => new Promise((resolve) => {
@@ -186,7 +186,9 @@ const refusingMcpServer = Effect.gen(function* () {
 const mcpAppFiles = (url: string) => [
   {
     path: "package.json",
-    content: JSON.stringify({ dependencies: withApps({ "@modelcontextprotocol/sdk": "1.30.0" }) }),
+    content: JSON.stringify({
+      dependencies: withApps({ "@modelcontextprotocol/sdk": mcpSdkVersion }),
+    }),
   },
   {
     path: "index.ts",
@@ -827,7 +829,7 @@ return messages;`,
             {
               path: "package.json",
               content: JSON.stringify({
-                dependencies: withApps({ "@modelcontextprotocol/sdk": "1.30.0" }),
+                dependencies: withApps({ "@modelcontextprotocol/sdk": mcpSdkVersion }),
               }),
             },
             {

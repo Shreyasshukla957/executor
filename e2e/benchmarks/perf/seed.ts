@@ -12,7 +12,7 @@ import { formatSpec, type EmulatorSpec } from "./emulator.ts";
 import { fixtureActors, stableUuid } from "./sessions.ts";
 import { productionShape, random, toolsPerApp, type Random } from "./shape.ts";
 import type { StageControl } from "./stage.ts";
-import { appsManifest, withApps } from "../../support/apps-release.ts";
+import { appsManifest, withApps, mcpSdkVersion } from "../../support/apps-release.ts";
 
 export const AppReceipt = Schema.Struct({
   id: Schema.String,
@@ -305,7 +305,9 @@ export const provider = defineProvider({
     {
       path: "package.json",
       content: JSON.stringify({
-        dependencies: withApps(kind === "mcp" ? { "@modelcontextprotocol/sdk": "1.30.0" } : {}),
+        dependencies: withApps(
+          kind === "mcp" ? { "@modelcontextprotocol/sdk": mcpSdkVersion } : {},
+        ),
       }),
     },
   ];
@@ -334,7 +336,7 @@ const seedApp = (client: ProductClient, root: string, app: AppPlan, emulator: st
             {
               path: "package.json",
               content: JSON.stringify({
-                dependencies: withApps({ "@modelcontextprotocol/sdk": "1.30.0" }),
+                dependencies: withApps({ "@modelcontextprotocol/sdk": mcpSdkVersion }),
               }),
             },
             {
