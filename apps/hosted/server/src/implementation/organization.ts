@@ -122,6 +122,9 @@ export const withOrganizationRequest = <E, R>(
       if (request.headers.origin !== undefined && request.headers.origin !== auth.origin)
         return yield* new Forbidden();
       const grant = yield* api.authenticate(headers, reference);
+      // The request's span records the organization's opaque ID, never the route's reference,
+      // which can be its slug.
+      yield* Effect.annotateCurrentSpan("executor.organization.id", grant.access.organization);
       yield* refuseRemoved(grant.access.organization);
       if (!permitsAction(grant.policy, action)) return yield* new OrganizationForbidden();
       if (params.app !== undefined) {
@@ -153,6 +156,7 @@ export const withOrganizationRequest = <E, R>(
     const principal = yield* auth.current(headers);
     if (principal === null) return yield* new Unauthorized();
     const organization = yield* auth.organization(reference);
+    yield* Effect.annotateCurrentSpan("executor.organization.id", organization);
     // Removal is reported before membership. The reads run one after the other: on Cloud they
     // share the event's one SQL connection, and overlapping them would open a second one, a TLS
     // login that costs far more than the few milliseconds the second read waits.

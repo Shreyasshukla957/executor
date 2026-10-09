@@ -5244,6 +5244,27 @@ export const scenarios = plan({
       cloud: na("skillReadTelemetry covers hosted skill reads."),
     },
   },
+  wildcardRouteTelemetry: {
+    fixtures: "actors",
+    managementProfiles: ["owner"],
+    file: "wildcard-route-telemetry.spec.ts",
+    title: "hosted wildcard routes trace their template, not the path under it",
+    targets: {
+      "self-host": scheduled,
+      // Reads the local collector; probes Cloud's SSO, analytics and site routes too.
+      cloud: managedCloud,
+      local: na("localWildcardRouteTelemetry covers Local's wildcard routes."),
+    },
+  },
+  localWildcardRouteTelemetry: {
+    file: "wildcard-route-telemetry.spec.ts",
+    title: "Local wildcard routes trace their template, not the path under it",
+    targets: {
+      local: scheduled,
+      "self-host": na("wildcardRouteTelemetry covers hosted wildcard routes."),
+      cloud: na("wildcardRouteTelemetry covers hosted wildcard routes."),
+    },
+  },
   localAppsCli: {
     file: "local-apps-cli.spec.ts",
     title:

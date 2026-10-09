@@ -3,7 +3,7 @@ import { betterAuth } from "better-auth";
 import { APIError, isAPIError } from "better-auth/api";
 import { makeSignature } from "better-auth/crypto";
 import { getMigrations } from "better-auth/db/migration";
-import { grantExpiry, grantOAuthPlugins } from "@executor-js/mcp-auth/oauth";
+import { authEndpointTemplates, grantExpiry, grantOAuthPlugins } from "@executor-js/mcp-auth/oauth";
 import {
   GrantId,
   mcpOAuthResources,
@@ -27,6 +27,7 @@ import {
   Option,
 } from "effect";
 import { HttpServerRequest, HttpServerResponse } from "effect/http";
+import { routeTemplates } from "@executor-js/telemetry";
 import { UserFacingError } from "@executor-js/utils/user-facing-error";
 import type { ServerConfig } from "../contracts/config.ts";
 import { localRequest, sessionCookie, type LocalAuth } from "./auth.ts";
@@ -183,10 +184,12 @@ export const makeLocalMcpOAuth = (config: ServerConfig, pairing: LocalAuth, cryp
           }),
         ),
       );
+    const routes = routeTemplates(authEndpointTemplates(auth.api));
     const handler = Effect.gen(function* () {
       const request = yield* localRequest(config.port, config.browserOrigin);
       const web = yield* HttpServerRequest.toWeb(request);
       const pathname = new URL(web.url).pathname;
+      yield* routes.record(pathname);
       if (!pathname.startsWith("/api/auth/oauth2/") && !pathname.startsWith("/api/auth/mcp/grants"))
         return HttpServerResponse.empty({ status: 404 });
       const headers = new Headers(web.headers);

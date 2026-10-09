@@ -25,7 +25,9 @@ import {
   ApiAuthentication,
   apiBearerAccess,
   grantExpiry,
+  authEndpointTemplates,
 } from "@executor-js/hosted-server";
+import { routeTemplates } from "@executor-js/telemetry";
 import { betterAuth } from "better-auth";
 import { BetterAuthApiError, isAPIErrorLike } from "@alchemy.run/better-auth";
 import { cloudSessionCookiePrefix } from "../contracts/browser.ts";
@@ -148,6 +150,7 @@ export const cloudAuth = (send: SendAuthEmail, onboarding: typeof Onboarding.Ser
     // `callbacks`, and every call binds its own invocation's pool through `database`.
     // The signing secret is deployment configuration, read in the first invocation.
     let instance: ReturnType<typeof makeInstance> | undefined;
+    let routes: ReturnType<typeof routeTemplates> | undefined;
     const native = secrets.authSecret.pipe(
       Effect.map((secret) => (instance ??= makeInstance(Redacted.value(secret)))),
     );
@@ -265,6 +268,8 @@ export const cloudAuth = (send: SendAuthEmail, onboarding: typeof Onboarding.Ser
       const request = yield* HttpServerRequest.HttpServerRequest;
       const web = yield* HttpServerRequest.toWeb(request).pipe(Effect.orDie);
       const [instance, bind] = yield* bound;
+      routes ??= routeTemplates(authEndpointTemplates(instance.api));
+      yield* routes.record(new URL(web.url).pathname);
       const context = yield* Effect.context<
         RuntimeContext | HttpServerRequest.HttpServerRequest | Scope.Scope
       >();

@@ -93,6 +93,29 @@ const AuthorizeRequest = Schema.StructWithRest(
   [Schema.Record(Schema.String, Schema.Unknown)],
 );
 const selected = defineRequestState<{ userId: string; id: GrantId } | null>(() => null);
+/** What `authEndpointTemplates` reads of a Better Auth endpoint. */
+interface AuthEndpoint {
+  readonly path?: string;
+  readonly options?: {
+    readonly method?: unknown;
+    readonly metadata?: Readonly<Record<string, unknown>>;
+  };
+}
+
+/**
+ * The endpoints Better Auth's router serves under `/api/auth`, by template, such as
+ * `/api/auth/sign-in/social` or `/api/auth/sso/callback/:providerId`. Request spans record the
+ * template of the endpoint a path reaches, or the `/api/auth/*` wildcard for a path none serves:
+ * an SSO provider's ID is chosen by an organization's administrator, and an unknown path by its
+ * caller (`routeTemplates` in `@executor-js/telemetry`).
+ */
+export const authEndpointTemplates = (api: Readonly<Record<string, AuthEndpoint>>) =>
+  Object.values(api).flatMap((endpoint) =>
+    endpoint.path === undefined || endpoint.options?.metadata?.["SERVER_ONLY"] === true
+      ? []
+      : [`/api/auth${endpoint.path}` as const],
+  );
+
 /** Preserve provider failures and translate storage outages without exposing tokens or SQL. */
 export const authCall = <A>(run: () => Promise<A>) =>
   Effect.tryPromise({

@@ -19,7 +19,9 @@ import {
   resolveOrganizationReference,
   deleteOrganizationRecords,
   grantExpiry,
+  authEndpointTemplates,
 } from "@executor-js/hosted-server";
+import { routeTemplates } from "@executor-js/telemetry";
 import { Context, Effect, Layer, Option, Redacted } from "effect";
 import { SqlClient } from "effect/sql";
 import { AuthDatabase } from "./contracts/database.ts";
@@ -113,9 +115,11 @@ export const selfHostAuth = Effect.gen(function* () {
         Effect.withSpan("auth.authenticate"),
       ),
   });
+  const routes = routeTemplates(authEndpointTemplates(auth.api));
   const handler = Effect.gen(function* () {
     const request = yield* HttpServerRequest.HttpServerRequest;
     const incoming = yield* HttpServerRequest.toWeb(request);
+    yield* routes.record(new URL(incoming.url).pathname);
     const web = new Request(incoming, { headers: new Headers(incoming.headers) });
     // The socket address is trusted. Never accept a client-supplied forwarding header.
     web.headers.delete("x-executor-client-ip");
