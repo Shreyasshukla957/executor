@@ -762,6 +762,44 @@ describe("v2EdgeResponse marketing", () => {
     expect(received).toHaveLength(0);
   });
 
+  it("redirects v2 dashboard links to v2's app host, path and query kept", async () => {
+    const { received, service } = recordingService();
+
+    for (const target of ["/org/acme/apps/app_1/open", "/org/acme?tab=kpis", "/org/acme/"]) {
+      for (const method of ["GET", "HEAD"]) {
+        const response = await v2EdgeResponse(
+          new Request(`https://executor.sh${target}`, {
+            method,
+            headers: { cookie: "wos-session=sealed" },
+          }),
+          settings(service),
+        );
+        expect(response?.status, `${method} ${target}`).toBe(308);
+        expect(response?.headers.get("location"), `${method} ${target}`).toBe(
+          `https://app.executor.sh${target}`,
+        );
+      }
+    }
+    expect(received).toHaveLength(0);
+  });
+
+  it("keeps v1's own /org page and non-navigation methods with v1", () => {
+    const { received, service } = recordingService();
+
+    for (const [method, target] of [
+      ["GET", "/org"],
+      ["GET", "/acme/org"],
+      ["GET", "/organization/x"],
+      ["POST", "/org/acme"],
+    ] as const) {
+      expect(
+        v2EdgeResponse(new Request(`https://executor.sh${target}`, { method }), settings(service)),
+        `${method} ${target}`,
+      ).toBeNull();
+    }
+    expect(received).toHaveLength(0);
+  });
+
   it("sends the signed-out homepage to v2 with the URL unchanged", async () => {
     const { received, service } = recordingService();
 
