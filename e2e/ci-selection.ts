@@ -545,6 +545,7 @@ const PackageScripts = Schema.Struct({ scripts: Schema.Record(Schema.String, Sch
 const suiteConfigs: Record<string, () => Promise<unknown>> = {
   "alchemy-dev-output.config.ts": () => import("./alchemy-dev-output.config.ts"),
   "alchemy-first-builds.config.ts": () => import("./alchemy-first-builds.config.ts"),
+  "chatgpt-sign-in.config.ts": () => import("./chatgpt-sign-in.config.ts"),
   "apps-published.config.ts": () => import("./apps-published.config.ts"),
   "billing.config.ts": () => import("./billing.config.ts"),
   "ci-selection.config.ts": () => import("./ci-selection.config.ts"),

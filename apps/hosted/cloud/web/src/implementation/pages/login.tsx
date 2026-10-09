@@ -128,6 +128,7 @@ function CloudSignInForm(props: LoginProps & { readonly mode?: "signin" | "signu
   };
   return (
     <LoginPage
+      chatGpt={import.meta.env.VITE_CHATGPT_SIGN_IN === "true"}
       {...props}
       title={signingUp ? "Sign up" : "Sign in"}
       cardFooter={

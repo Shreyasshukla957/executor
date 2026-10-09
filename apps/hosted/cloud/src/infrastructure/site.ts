@@ -3,6 +3,7 @@ import * as Command from "alchemy/Command";
 import { AlchemyContext } from "alchemy/AlchemyContext";
 import { Stage } from "alchemy/Stage";
 import { Effect, Option } from "effect";
+import { chatGptSettings } from "../implementation/chatgpt-sign-in.ts";
 import { postHogBindings } from "./posthog.ts";
 import { sentryBindings } from "./sentry.ts";
 import { cloudHosts } from "./stage.ts";
@@ -35,6 +36,7 @@ export const cloudSite = Effect.gen(function* () {
         onNone: () => hosts.deployment,
         onSome: (roles) => roles.origins.api,
       }),
+      VITE_CHATGPT_SIGN_IN: String(Option.isSome(yield* chatGptSettings.pipe(Effect.orDie))),
     },
   });
 });
