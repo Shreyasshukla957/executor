@@ -18,6 +18,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Button } from "../components/button.tsx";
 import { Code } from "./code.tsx";
 import { ErrorNotice } from "./error-notice.tsx";
+import { ApprovalCard } from "./loading.tsx";
 import { Input } from "../components/input.tsx";
 import { Spinner } from "../components/spinner.tsx";
 
@@ -89,7 +90,7 @@ export function BrowserApprovalCard({
     return () => clearTimeout(timer);
   }, [expires, refresh]);
   return (
-    <section className="rounded-xl border bg-card p-6 shadow-sm sm:p-8">
+    <ApprovalCard>
       {refused !== undefined ? (
         // Reading again cannot change a refusal, so it shows its cause and recovery, not a retry.
         <ErrorNotice error={refused} context="Reviewing a tool request from the Tools tab" />
@@ -118,7 +119,7 @@ export function BrowserApprovalCard({
       ) : (
         <ApprovalResult status={view.value.status} completion={completion} />
       )}
-    </section>
+    </ApprovalCard>
   );
 }
 function ApprovalResult({

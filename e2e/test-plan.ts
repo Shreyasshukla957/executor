@@ -3540,6 +3540,37 @@ export const scenarios = plan({
       local: na("This journey checks hosted session entry and organization references."),
     },
   },
+  routeLoading: {
+    fixtures: "actors",
+    file: "route-loading.spec.ts",
+    title:
+      "Before a route's data or code arrives, it shows that route's own heading and loading shape, never another page's",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("Local renders complete documents and has no hosted sign-in, accounts or groups."),
+    },
+  },
+  signInSettingsStalled: {
+    file: "sign-in-settings.spec.ts",
+    title:
+      "Self-host sign-in renders without waiting for a stalled settings read, the browser reads them itself, and no other page waits for them",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Cloud's sign-in has no instance settings to read."),
+      local: na("Local has no hosted sign-in."),
+    },
+  },
+  signInSettingsSso: {
+    file: "sign-in-settings.spec.ts",
+    title:
+      "On a self-host instance with SSO, sign-in opened after a session ends draws nothing until its form arrives, and the form fits",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Cloud's sign-in has no instance settings to read."),
+      local: na("Local has no hosted sign-in."),
+    },
+  },
   frameworkDiscovery: {
     fixtures: "actors",
     file: "framework-discovery.spec.ts",
