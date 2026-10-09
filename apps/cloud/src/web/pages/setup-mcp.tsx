@@ -17,6 +17,47 @@ import {
 import { NativeSelect, NativeSelectOption } from "@executor-js/react/components/native-select";
 
 import { useAuth } from "../auth";
+import {
+  readOnboardingPracticeProgress,
+  writeOnboardingPracticeProgress,
+  type OnboardingPracticeStep,
+} from "../onboarding-progress";
+
+const ONBOARDING_PRACTICE = [
+  {
+    key: "build_app",
+    title: "Build a small app",
+    description: "Ask your agent to make a useful interface around your first integration.",
+    prompt:
+      "Using my connected app, build a small interface that helps me complete one everyday task.",
+  },
+  {
+    key: "create_workflow",
+    title: "Create a workflow",
+    description: "Turn a repeated task into something your agent can run on a schedule or trigger.",
+    prompt:
+      "Create a workflow that checks my connected app every five minutes and notifies me when it finds something that needs my attention.",
+  },
+  {
+    key: "create_skill",
+    title: "Teach your agent a skill",
+    description: "Save reusable instructions so future tasks start with the right context.",
+    prompt:
+      "Create a reusable skill for working with my connected app. Include the conventions and checks you should follow every time.",
+  },
+  {
+    key: "store_notes",
+    title: "Save useful context",
+    description: "Give your agent durable notes it can use in future work.",
+    prompt:
+      "Add notes to emails from my connected app and store the important context so you can use it in future tasks.",
+  },
+] as const satisfies readonly {
+  readonly key: OnboardingPracticeStep;
+  readonly title: string;
+  readonly description: string;
+  readonly prompt: string;
+}[];
 
 export const SetupMcpPage = () => {
   const navigate = useNavigate();
@@ -29,19 +70,32 @@ export const SetupMcpPage = () => {
   // window where the shell paints over this still-mounted onboarding page.
   const goToApp = () =>
     navigate({ to: "/{-$orgSlug}", params: { orgSlug: organizationSlug ?? undefined } });
-  const goToIntegrationBrowse = () =>
-    navigate({
-      to: "/{-$orgSlug}/integrations/browse",
-      params: { orgSlug: organizationSlug ?? undefined },
-    });
   const [origin, setOrigin] = useState<string | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [agentConnected, setAgentConnected] = useState(false);
   const [elicitationMode, setElicitationMode] = useState<McpElicitationMode>("model");
+  const [practiceProgress, setPracticeProgress] = useState<ReadonlySet<OnboardingPracticeStep>>(
+    () => readOnboardingPracticeProgress(globalThis.localStorage, organizationSlug),
+  );
 
   useEffect(() => {
     setOrigin(window.location.origin);
   }, []);
+
+  useEffect(() => {
+    setPracticeProgress(readOnboardingPracticeProgress(globalThis.localStorage, organizationSlug));
+  }, [organizationSlug]);
+
+  const completePracticeStep = (step: OnboardingPracticeStep) => {
+    setPracticeProgress((previous) => {
+      if (previous.has(step)) return previous;
+      const next = new Set(previous);
+      next.add(step);
+      writeOnboardingPracticeProgress(globalThis.localStorage, organizationSlug, next);
+      trackEvent("onboarding_practice_prompt_copied", { step });
+      return next;
+    });
+  };
 
   const endpoint = origin
     ? buildMcpHttpEndpoint({
@@ -66,7 +120,7 @@ export const SetupMcpPage = () => {
       <div className="mx-auto flex w-full max-w-lg flex-col gap-6">
         <header className="flex flex-col gap-2">
           <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-            Step 2 of 3
+            Step 3 of 3
           </p>
           <h1 className="font-sans font-semibold text-3xl">Connect your MCP client</h1>
           <p className="text-sm text-muted-foreground">
@@ -181,41 +235,47 @@ export const SetupMcpPage = () => {
           </div>
         ) : (
           <section
-            className="flex flex-col gap-3 border-t border-border pt-6"
-            aria-label="First integration"
+            className="flex flex-col gap-4 border-t border-border pt-6"
+            aria-label="Try it out"
           >
             <div>
-              <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                Step 3 of 3
-              </p>
-              <h2 className="mt-2 text-sm font-medium text-foreground">
-                Add your first integration
-              </h2>
+              <h2 className="text-sm font-medium text-foreground">Try it with your agent</h2>
               <p className="mt-1 text-sm leading-6 text-muted-foreground">
-                Choose an app you already use, such as Gmail, and connect it so your agent can start
-                helping with real work.
+                Copy one of these prompts into your agent to see what Executor can do with the app
+                you just added.
               </p>
             </div>
-            <div className="flex items-center justify-between gap-3">
-              {/* oxlint-disable-next-line react/forbid-elements */}
-              <button
-                type="button"
-                onClick={() => {
-                  trackEvent("setup_mcp_skipped");
-                  void goToApp();
-                }}
-                className="text-xs text-muted-foreground transition-colors hover:text-foreground"
-              >
-                Skip to workspace
-              </button>
-              <Button
-                size="sm"
-                onClick={() => {
-                  trackEvent("integration_browse_opened", { via: "onboarding" });
-                  void goToIntegrationBrowse();
-                }}
-              >
-                Choose an app
+            <div className="grid gap-2 sm:grid-cols-2">
+              {ONBOARDING_PRACTICE.map((step) => {
+                const complete = practiceProgress.has(step.key);
+                return (
+                  <article
+                    key={step.key}
+                    className="flex flex-col gap-2 rounded-md border border-border p-3"
+                  >
+                    <div>
+                      <p className="text-sm font-medium text-foreground">{step.title}</p>
+                      <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                        {step.description}
+                      </p>
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs text-muted-foreground">
+                        {complete ? "Prompt copied" : "Ready to try"}
+                      </span>
+                      <CopyButton
+                        value={step.prompt}
+                        label="Copy prompt"
+                        onCopy={() => completePracticeStep(step.key)}
+                      />
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+            <div className="flex justify-end">
+              <Button size="sm" onClick={() => void goToApp()}>
+                Open workspace
               </Button>
             </div>
           </section>
