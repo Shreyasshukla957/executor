@@ -5,6 +5,7 @@
  * They share one file so they run in turn: the database scenarios lock the limit's table.
  */
 import { randomBytes } from "node:crypto";
+import { request as httpRequest } from "node:http";
 import { expect, layer } from "@effect/vitest";
 import { Effect, Fiber, Schedule, Schema } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/http";
@@ -138,7 +139,7 @@ layer(TestLive, { excludeTestServices: true })("Cloud auth rate limit", (it) => 
       http = yield* HttpClient.HttpClient;
     const origin = targetHosts(target).browser;
     const traceId = randomBytes(16).toString("hex");
-    const status = yield* Effect.scoped(
+    const { status, retryAfter } = yield* Effect.scoped(
       Effect.gen(function* () {
         const request = HttpClientRequest.post(`${origin}/api/auth/oauth2/token`).pipe(
           HttpClientRequest.setHeaders({
@@ -153,11 +154,53 @@ layer(TestLive, { excludeTestServices: true })("Cloud auth rate limit", (it) => 
         );
         const response = yield* http.execute(request);
         yield* response.text;
-        return response.status;
+        return { status: response.status, retryAfter: response.headers["x-retry-after"] };
       }),
     ).pipe(Effect.provideService(HttpClient.TracerPropagationEnabled, false));
-    return { traceId, status };
+    return { traceId, status, retryAfter };
   });
+
+  /**
+   * A token request whose body stops halfway until `rest` has passed, under a new trace. Its
+   * status, and whether the second half had been sent when the status arrived.
+   */
+  const splitTokenRequest = (rest: number) =>
+    Effect.gen(function* () {
+      const target = yield* Target;
+      const traceId = randomBytes(16).toString("hex");
+      const body = new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: "not-a-refresh-token",
+        client_id: "not-a-client",
+      }).toString();
+      const half = Math.floor(body.length / 2);
+      return yield* Effect.callback<{ status: number; bodySent: boolean }, Error>((resume) => {
+        let bodySent = false;
+        const request = httpRequest(`${target.metadata.origin}/api/auth/oauth2/token`, {
+          method: "POST",
+          headers: {
+            origin: target.metadata.origin,
+            traceparent: `00-${traceId}-${randomBytes(8).toString("hex")}-01`,
+            "content-type": "application/x-www-form-urlencoded",
+            "content-length": String(body.length),
+          },
+        });
+        request.on("response", (response) => {
+          response.resume();
+          resume(Effect.succeed({ status: response.statusCode ?? 0, bodySent }));
+        });
+        request.on("error", (error) => resume(Effect.fail(error)));
+        request.write(body.slice(0, half));
+        const timer = setTimeout(() => {
+          bodySent = true;
+          request.end(body.slice(half));
+        }, rest);
+        return Effect.sync(() => {
+          clearTimeout(timer);
+          request.destroy();
+        });
+      }).pipe(Effect.map((answer) => ({ traceId, ...answer })));
+    });
 
   /** Forget the address's count for the token path, so the next request inserts its row. */
   const forgetTokenCount = (locks: Effect.Success<typeof cloudLocks>) =>
@@ -236,6 +279,64 @@ layer(TestLive, { excludeTestServices: true })("Cloud auth rate limit", (it) => 
         yield* forgetTokenCount(locks);
         yield* Effect.flatMap(Evidence, (evidence) =>
           evidence.json("database-failure-code.json", { status: response.status, reported }),
+        );
+      }),
+    ),
+  );
+
+  it.effect(scenarios.cloudTokenRateLimitTelemetry.title, (context) =>
+    withCase(
+      context,
+      Effect.gen(function* () {
+        const locks = yield* cloudLocks;
+        yield* forgetTokenCount(locks);
+        // The token endpoint allows twenty requests a minute from one address.
+        const responses = yield* Effect.forEach(Array.from({ length: 21 }), () => tokenRequest, {
+          concurrency: 1,
+        });
+        expect(responses.map(({ status }) => status)).toEqual([
+          ...Array.from({ length: 20 }, () => 400),
+          429,
+        ]);
+        const limited = responses[20]!;
+        yield* retryAfter(60)(limited.retryAfter);
+        const server = (traceId: string) =>
+          traceSpans(traceId, (spans) =>
+            spans.some((span) => span.tags["auth.token.grant_type"] !== undefined),
+          ).pipe(Effect.map((spans) => spans.find((span) => span.tags["auth.token.grant_type"])!));
+        // Better Auth refuses the request before the token endpoint reads it; the span still
+        // names the grant the client asked for.
+        expect((yield* server(limited.traceId)).tags).toMatchObject({
+          "http.response.status_code": "429",
+          "auth.token.grant_type": "refresh_token",
+          "auth.token.error": "other",
+          "auth.token.rate_limited": "true",
+          "auth.token.refresh_family_revoked": "false",
+        });
+        expect((yield* server(responses[19]!.traceId)).tags).toMatchObject({
+          "http.response.status_code": "400",
+          "auth.token.grant_type": "refresh_token",
+          "auth.token.rate_limited": "false",
+        });
+        // The limit answers before the body arrives, and reading the grant does not hold the
+        // answer back: a grant not read by then is unknown.
+        const split = yield* splitTokenRequest(5_000);
+        expect({ status: split.status, bodySent: split.bodySent }).toEqual({
+          status: 429,
+          bodySent: false,
+        });
+        expect((yield* server(split.traceId)).tags).toMatchObject({
+          "http.response.status_code": "429",
+          "auth.token.grant_type": "unknown",
+          "auth.token.error": "other",
+          "auth.token.rate_limited": "true",
+        });
+        yield* forgetTokenCount(locks);
+        yield* Effect.flatMap(Evidence, (evidence) =>
+          evidence.json("token-rate-limit.json", {
+            statuses: responses.map(({ status }) => status),
+            retryAfter: limited.retryAfter,
+          }),
         );
       }),
     ),

@@ -80,6 +80,7 @@ export const authOptions = (
     readonly issuer: string;
   },
   ipAddressHeaders: string[],
+  onRefreshFamilyRevoked?: () => void,
 ) =>
   ({
     appName: "Executor",
@@ -97,6 +98,7 @@ export const authOptions = (
         origin: settings.url,
         resourceOrigins: settings.resourceOrigins,
         issuer: settings.issuer,
+        onRefreshFamilyRevoked,
       }),
     ],
     hooks: { before: apiKeyManagement },

@@ -197,8 +197,9 @@ export const cloudAuthOptions = (
   onLogin?: (userId: string) => Promise<void>,
   onOperation?: (usage: NativeAuthUsage) => Promise<void>,
   allowsOrganization?: (userId: string) => Promise<boolean>,
+  onRefreshFamilyRevoked?: () => void,
 ) => {
-  const base = authOptions(settings, ipAddressHeaders);
+  const base = authOptions(settings, ipAddressHeaders, onRefreshFamilyRevoked);
   // A test stage that signs in through production's proxy uses production's callback, which the
   // proxy sets. Every other deployment names its own social callback origin explicitly.
   const proxiedElsewhere = Option.exists(

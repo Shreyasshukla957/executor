@@ -158,6 +158,8 @@ export interface GrantOAuthOptions {
   ) => Effect.Effect<void, APIError>;
   readonly resources: NonNullable<OAuthOptions<Scope[]>["resources"]>;
   readonly scopes: Scope[];
+  /** Observe reuse detection revoking every refresh token of a client and user. */
+  readonly onRefreshFamilyRevoked?: (() => void) | undefined;
 }
 const accessTokenSeconds = 3600;
 /** Better Auth's default refresh token lifetime, stated because idle grant expiry follows it. */
@@ -209,6 +211,9 @@ export const grantOAuthPlugins = (settings: GrantOAuthOptions) => {
     // live receives the same response instead of revoking every token for the client and user.
     // Later reuse still revokes the family.
     refreshTokenReuseInterval: accessTokenSeconds,
+    ...(settings.onRefreshFamilyRevoked === undefined
+      ? {}
+      : { onRefreshFamilyRevoked: settings.onRefreshFamilyRevoked }),
     loginPage: "/mcp/authorize",
     consentPage: "/mcp/authorize",
     clientPrivileges: () => false,

@@ -62,11 +62,21 @@ const membership = (
  */
 export type HostedOAuthOrigins = Pick<GrantOAuthOptions, "origin" | "resourceOrigins" | "issuer">;
 
-const hostedGrantOAuth = ({ origin, resourceOrigins, issuer }: HostedOAuthOrigins) =>
+/** The hosted grant's origins plus the observer told when a refresh token's family is revoked. */
+export type HostedOAuthOptions = HostedOAuthOrigins &
+  Pick<GrantOAuthOptions, "onRefreshFamilyRevoked">;
+
+const hostedGrantOAuth = ({
+  origin,
+  resourceOrigins,
+  issuer,
+  onRefreshFamilyRevoked,
+}: HostedOAuthOptions) =>
   grantOAuthPlugins({
     origin,
     resourceOrigins,
     issuer,
+    onRefreshFamilyRevoked,
     scopes: ["mcp", "executor", "offline_access"],
     resources: [
       ...mcpOAuthResources(resourceOrigins.mcp),
@@ -168,8 +178,8 @@ export const provisionHostedConnectionResources = (
 ) => hostedGrantOAuth(origins).provisionConnectionResources(context, connection);
 
 /** A consent binds a new grant to the selected organization; refresh retains its identity. */
-export const mcpOAuthPlugins = (origins: HostedOAuthOrigins) => {
-  const oauth = hostedGrantOAuth(origins);
+export const mcpOAuthPlugins = (options: HostedOAuthOptions) => {
+  const oauth = hostedGrantOAuth(options);
   const projectAccess = (ctx: GenericEndpointContext, grant: GrantAccess) =>
     Effect.gen(function* () {
       const organization = yield* Schema.decodeUnknownEffect(OrganizationId)(grant.resource).pipe(
@@ -202,7 +212,7 @@ export const mcpOAuthPlugins = (origins: HostedOAuthOrigins) => {
                   .lookupBrowser(ctx)
                   .pipe(Effect.flatMap((grant) => projectAccess(ctx, grant)));
               const target = yield* parsePatGrant(ctx.body.id);
-              const identity = yield* browserPersonalTokenAccess(ctx, origins.origin, target.token);
+              const identity = yield* browserPersonalTokenAccess(ctx, options.origin, target.token);
               return yield* projectPatAccess(ctx, identity, target.organization, target.mode);
             }),
           ),

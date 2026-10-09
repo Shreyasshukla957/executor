@@ -3365,6 +3365,15 @@ export const scenarios = plan({
       local: na("Local has no hosted sign-in."),
     },
   },
+  cloudTokenRateLimitTelemetry: {
+    file: "cloud-auth-rate-limit.spec.ts",
+    title: "Cloud records a rate-limited OAuth token request with its grant type",
+    targets: {
+      cloud: rateLimitedCloud,
+      "self-host": na("Cloud OAuth token endpoint instrumentation."),
+      local: na("Local has no auth rate limit."),
+    },
+  },
   serverRenderedDashboard: {
     fixtures: "actors",
     file: "server-rendered-dashboard.spec.ts",
@@ -3884,6 +3893,17 @@ export const scenarios = plan({
       "self-host": scheduled,
       cloud: scheduled,
       local: na("This scenario uses hosted deployment and app authentication."),
+    },
+  },
+  oauthTokenTelemetry: {
+    fixtures: "actors",
+    file: "oauth-token-telemetry.spec.ts",
+    title:
+      "Cloud OAuth token requests record their grant type, OAuth error, refresh-family revocation and client family without reporting them",
+    targets: {
+      cloud: managedCloud,
+      "self-host": na("Cloud OAuth token endpoint instrumentation."),
+      local: na("Local has no hosted OAuth token endpoint."),
     },
   },
   authObservability: {

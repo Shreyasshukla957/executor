@@ -787,7 +787,7 @@ layer(NodeServices.layer)("CI E2E selection", (it) => {
   it.effect("a job, step or deployed run that saved no result fails the full run", () =>
     Effect.gen(function* () {
       const rateLimit =
-        /^Cloud (?:limits sign-in|counts two first requests|reports a Better Auth query the database failed)/;
+        /^Cloud (?:limits sign-in|counts two first requests|reports a Better Auth query the database failed|records a rate-limited OAuth token request)/;
       const [noCloud, skippedStep, noDeployed, deployedOnLocal] = yield* Effect.all(
         [
           // The e2e-cloud job was skipped or disabled: it saved nothing.
@@ -824,7 +824,7 @@ layer(NodeServices.layer)("CI E2E selection", (it) => {
       expect(noCloud.log).not.toContain("- the local job");
       expect(noCloud.log).not.toContain("- the self-host job");
       expect(skippedStep.log).toContain(
-        "- the cloud-rate-limit job on cloud: 3 of 3 scenarios did not run",
+        "- the cloud-rate-limit job on cloud: 4 of 4 scenarios did not run",
       );
       expect(skippedStep.log).not.toContain("- the cloud job");
       for (const run of [noDeployed, deployedOnLocal])
