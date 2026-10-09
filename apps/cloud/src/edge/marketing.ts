@@ -152,6 +152,11 @@ export const v2PageForSlashedPath = (pathname: string): string | null => {
   return V2_EXACT_PAGES.has(page) ? page : null;
 };
 
+/** v2's dashboard pages are `/org/<slug>/...` on v2's app host. `org` is a
+ *  reserved v1 slug and v1's own `/org` page has nothing below it, so
+ *  `executor.sh/org/*` is always a v2 dashboard link with the wrong host. */
+const V2_DASHBOARD_PREFIX = "/org/";
+
 /** The landing page without a v1 session is v2's marketing homepage. */
 const isV2Homepage = (url: URL, request: Request): boolean =>
   url.pathname === "/" && parseCookie(request.headers.get("cookie"), SESSION_COOKIE) === null;
@@ -314,6 +319,9 @@ const isV2TelemetryPath = (pathname: string, edge: V2Edge): boolean =>
  *  - sign-up (`GET`, any query) redirects to v2's sign-up page;
  *  - a `GET` or `HEAD` for a slashed v2 page (`/pricing/`) redirects (308)
  *    to the page, query kept, as v2's site does on its own hosts;
+ *  - a `GET` or `HEAD` for a v2 dashboard page (`/org/<slug>/...`) redirects
+ *    (308) to the same path and query on v2's app host, the sign-up URL's
+ *    origin;
  *  - a {@link isV2Path} request, a connected-account callback whose `state`
  *    starts with v2's prefix, or a request for v2's analytics proxy or error
  *    tunnel is forwarded to v2's Worker without cookies;
@@ -334,8 +342,11 @@ export const v2EdgeResponse = (request: Request, env: V2EdgeEnv): Promise<Respon
     request.method === "GET" || request.method === "HEAD"
       ? v2PageForSlashedPath(url.pathname)
       : null;
+  const dashboard =
+    (request.method === "GET" || request.method === "HEAD") &&
+    url.pathname.startsWith(V2_DASHBOARD_PREFIX);
   const marketing = isV2MarketingPath(url.pathname) || isV2Homepage(url, request);
-  const owned = signUp || slashedPage !== null || marketing || isV2Path(url.pathname);
+  const owned = signUp || slashedPage !== null || dashboard || marketing || isV2Path(url.pathname);
   const callback = url.pathname === OAUTH_CALLBACK_PATH;
   const telemetry = TELEMETRY_PATH_SHAPE.test(url.pathname);
   if (!owned && !callback && !telemetry) return null;
@@ -350,6 +361,10 @@ export const v2EdgeResponse = (request: Request, env: V2EdgeEnv): Promise<Respon
   if (slashedPage !== null) {
     const page = new URL(url);
     page.pathname = slashedPage;
+    return Promise.resolve(Response.redirect(page.href, 308));
+  }
+  if (dashboard) {
+    const page = new URL(url.pathname + url.search, edge.signUpUrl.origin);
     return Promise.resolve(Response.redirect(page.href, 308));
   }
   if (marketing) return edge.service.fetch(v2ForwardRequest(request, V2_MARKETING_COOKIES));
