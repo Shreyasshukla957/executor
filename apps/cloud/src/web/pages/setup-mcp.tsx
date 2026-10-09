@@ -29,8 +29,14 @@ export const SetupMcpPage = () => {
   // window where the shell paints over this still-mounted onboarding page.
   const goToApp = () =>
     navigate({ to: "/{-$orgSlug}", params: { orgSlug: organizationSlug ?? undefined } });
+  const goToIntegrationBrowse = () =>
+    navigate({
+      to: "/{-$orgSlug}/integrations/browse",
+      params: { orgSlug: organizationSlug ?? undefined },
+    });
   const [origin, setOrigin] = useState<string | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [agentConnected, setAgentConnected] = useState(false);
   const [elicitationMode, setElicitationMode] = useState<McpElicitationMode>("model");
 
   useEffect(() => {
@@ -60,7 +66,7 @@ export const SetupMcpPage = () => {
       <div className="mx-auto flex w-full max-w-lg flex-col gap-6">
         <header className="flex flex-col gap-2">
           <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-            Step 2 of 2
+            Step 2 of 3
           </p>
           <h1 className="font-sans font-semibold text-3xl">Connect your MCP client</h1>
           <p className="text-sm text-muted-foreground">
@@ -150,28 +156,70 @@ export const SetupMcpPage = () => {
           <p className="text-xs text-muted-foreground">Adds the server to a supported agent.</p>
         </section>
 
-        <div className="flex items-center justify-between gap-3">
-          {/* oxlint-disable-next-line react/forbid-elements */}
-          <button
-            type="button"
-            onClick={() => {
-              trackEvent("setup_mcp_skipped");
-              void goToApp();
-            }}
-            className="text-xs text-muted-foreground transition-colors hover:text-foreground"
+        {!agentConnected ? (
+          <div className="flex items-center justify-between gap-3">
+            {/* oxlint-disable-next-line react/forbid-elements */}
+            <button
+              type="button"
+              onClick={() => {
+                trackEvent("setup_mcp_skipped");
+                void goToApp();
+              }}
+              className="text-xs text-muted-foreground transition-colors hover:text-foreground"
+            >
+              Skip for now
+            </button>
+            <Button
+              size="sm"
+              onClick={() => {
+                trackEvent("setup_mcp_completed");
+                setAgentConnected(true);
+              }}
+            >
+              I&apos;ve connected my agent
+            </Button>
+          </div>
+        ) : (
+          <section
+            className="flex flex-col gap-3 border-t border-border pt-6"
+            aria-label="First integration"
           >
-            Skip for now
-          </button>
-          <Button
-            size="sm"
-            onClick={() => {
-              trackEvent("setup_mcp_completed");
-              void goToApp();
-            }}
-          >
-            Continue to app
-          </Button>
-        </div>
+            <div>
+              <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                Step 3 of 3
+              </p>
+              <h2 className="mt-2 text-sm font-medium text-foreground">
+                Add your first integration
+              </h2>
+              <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                Choose an app you already use, such as Gmail, and connect it so your agent can start
+                helping with real work.
+              </p>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              {/* oxlint-disable-next-line react/forbid-elements */}
+              <button
+                type="button"
+                onClick={() => {
+                  trackEvent("setup_mcp_skipped");
+                  void goToApp();
+                }}
+                className="text-xs text-muted-foreground transition-colors hover:text-foreground"
+              >
+                Skip to workspace
+              </button>
+              <Button
+                size="sm"
+                onClick={() => {
+                  trackEvent("integration_browse_opened", { via: "onboarding" });
+                  void goToIntegrationBrowse();
+                }}
+              >
+                Choose an app
+              </Button>
+            </div>
+          </section>
+        )}
       </div>
     </div>
   );
