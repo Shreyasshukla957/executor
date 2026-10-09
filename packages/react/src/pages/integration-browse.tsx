@@ -365,8 +365,8 @@ function quickAddCapablePlugins(plugins: readonly IntegrationPlugin[]) {
 // ---------------------------------------------------------------------------
 
 /** Let members browse integrations while reserving creation for workspace admins. */
-export function IntegrationBrowsePage() {
-  useExecutorDocumentTitle("Add an integration");
+export function IntegrationBrowsePage({ onboarding = false }: { readonly onboarding?: boolean }) {
+  useExecutorDocumentTitle(onboarding ? "Choose your first app" : "Add an integration");
   const canCreate = useCanCreateWorkspaceConnections();
   const navigate = useNavigate();
   const integrationPlugins = useIntegrationPlugins();
@@ -389,6 +389,7 @@ export function IntegrationBrowsePage() {
   // Slugs of integrations added from this page, keyed the same way, so the
   // card can flip to View without waiting for the catalog refetch.
   const [quickAddedSlugs, setQuickAddedSlugs] = useState<ReadonlyMap<string, string>>(new Map());
+  const reportedOnboardingView = useRef(false);
   const quickAdders = useRef(new Map<string, QuickAddFn>());
   const registerQuickAdd = useCallback((key: string, fn: QuickAddFn | null) => {
     if (fn) quickAdders.current.set(key, fn);
@@ -453,6 +454,25 @@ export function IntegrationBrowsePage() {
       rows.map((row) => `${String(row.slug)}:${KIND_TO_PLUGIN_KEY[row.kind] ?? row.kind}`),
     );
   }, [installed]);
+
+  const hasFirstIntegration =
+    quickAddedSlugs.size > 0 ||
+    (AsyncResult.isSuccess(installed) &&
+      installed.value.some((integration) => integration.canRemove));
+
+  useEffect(() => {
+    if (!onboarding || reportedOnboardingView.current) return;
+    reportedOnboardingView.current = true;
+    trackEvent("integration_browse_opened", { via: "onboarding" });
+  }, [onboarding]);
+
+  const continueOnboarding = () => {
+    window.location.assign("/setup-mcp");
+  };
+
+  const skipOnboarding = () => {
+    void navigate({ to: "/{-$orgSlug}" });
+  };
 
   const isAdded = useCallback(
     (kind: string, ...candidates: readonly (string | undefined)[]): boolean =>
@@ -527,9 +547,9 @@ export function IntegrationBrowsePage() {
     void navigate({
       to: "/{-$orgSlug}/integrations/add/$pluginKey",
       params: { pluginKey },
-      search: { url: trimmed, namespace: detected.slug },
+      search: { url: trimmed, namespace: detected.slug, ...(onboarding ? { onboarding: 1 } : {}) },
     });
-  }, [query, doDetect, navigate, integrationPlugins]);
+  }, [query, doDetect, navigate, integrationPlugins, onboarding]);
 
   const goToAdd = useCallback(
     (input: {
@@ -554,11 +574,12 @@ export function IntegrationBrowsePage() {
           ...(input.auth?.header ? { authHeader: input.auth.header } : {}),
           ...(input.auth?.note ? { authNote: input.auth.note } : {}),
           ...(input.auth?.kind ? { authKind: input.auth.kind } : {}),
+          ...(onboarding ? { onboarding: 1 } : {}),
           ...(input.specOverrides ? { specOverrides: JSON.stringify(input.specOverrides) } : {}),
         },
       });
     },
-    [navigate],
+    [navigate, onboarding],
   );
 
   /** One-click add, in place. The registry knew the URL and the auth
@@ -693,10 +714,10 @@ export function IntegrationBrowsePage() {
       void navigate({
         to: "/{-$orgSlug}/integrations/add/$pluginKey",
         params: { pluginKey: entry.pluginKey },
-        search: { preset: entry.preset.id },
+        search: { preset: entry.preset.id, ...(onboarding ? { onboarding: 1 } : {}) },
       });
     },
-    [navigate],
+    [navigate, onboarding],
   );
 
   // --- Preset rows ---------------------------------------------------------
@@ -923,9 +944,34 @@ export function IntegrationBrowsePage() {
       ))}
       <div className="mx-auto w-full max-w-4xl shrink-0 px-6 pt-10 lg:px-8 lg:pt-14">
         <PageHeader
-          title="Add an integration"
-          description="Search for a service, or point executor at any MCP server, OpenAPI spec, or GraphQL endpoint."
+          title={onboarding ? "Choose your first app" : "Add an integration"}
+          description={
+            onboarding
+              ? "Start with an app you already use. Gmail is a good first choice, but any integration works."
+              : "Search for a service, or point executor at any MCP server, OpenAPI spec, or GraphQL endpoint."
+          }
         />
+
+        {onboarding ? (
+          <div className="mb-6 flex items-center justify-between gap-3 rounded-md border border-border bg-card/60 px-4 py-3">
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-foreground">Step 2 of 3</p>
+              <p className="text-xs text-muted-foreground">
+                {hasFirstIntegration
+                  ? "Your first app is ready. Continue to connect your agent."
+                  : "Add an app to continue with the guided setup."}
+              </p>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <Button variant="ghost" size="sm" onClick={skipOnboarding}>
+                Skip to workspace
+              </Button>
+              <Button size="sm" onClick={continueOnboarding} disabled={!hasFirstIntegration}>
+                Continue to agent setup
+              </Button>
+            </div>
+          </div>
+        ) : null}
 
         {!canCreate && (
           <p className="mb-4 text-sm text-muted-foreground">
