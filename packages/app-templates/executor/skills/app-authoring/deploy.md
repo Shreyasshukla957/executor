@@ -93,11 +93,42 @@ never `apps@latest` or an unpinned `apps`:
 ```sh
 cd hello
 npm install --no-package-lock
-npx -p typescript tsc --noEmit --strict --skipLibCheck \
+npx -y -p typescript@7 tsc --ignoreConfig --noEmit --strict --skipLibCheck \
   --module nodenext --moduleResolution nodenext --target es2022 index.ts
 ```
 
-Add a `tsconfig.json` with JSX settings when the app has React UI files.
+For a React UI, declare `@types/react@19` and `@types/react-dom@19` in
+`devDependencies`, and declare the asset types the UI imports in
+`ui/assets.d.ts`. Images and fonts import as URL strings; declare other
+extensions, such as `*.png`, the same way:
+
+```ts
+declare module "*.css";
+declare module "*.svg" {
+  const url: string;
+  export default url;
+}
+declare module "*.woff2" {
+  const url: string;
+  export default url;
+}
+```
+
+The `live-inbox` example already has the type packages and `ui/assets.d.ts`.
+An example from an older `apps` release may lack them and import `./schema.ts`;
+add them and change those imports to `.js`. Then add `--jsx react-jsx`, the UI
+entry and the declaration file:
+
+```sh
+npx -y -p typescript@7 tsc --ignoreConfig --noEmit --strict --skipLibCheck \
+  --module nodenext --moduleResolution nodenext --target es2022 \
+  --jsx react-jsx index.ts ui/main.tsx ui/assets.d.ts
+```
+
+Neither this check nor the build reads `tsconfig.json`; `--ignoreConfig` skips
+it. A `tsconfig.json` is still useful for editors, but its `include` does not
+add files here, so name the declaration file in the command.
+
 Write relative imports as NodeNext requires: `import { provider } from "./provider.js"`
 loads `provider.ts`, in server and UI files alike. The build fails at an import
 that matches no deployed file. Failed builds report the source file and line
