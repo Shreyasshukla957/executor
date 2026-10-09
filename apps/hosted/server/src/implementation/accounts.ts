@@ -16,6 +16,7 @@ import { requireAppAccess, visibleApps, visibleAccounts } from "./resource-polic
 import type { ConnectionDestination } from "../contracts/resource-access.ts";
 /** Account use cases, connection grants and OAuth routes share the same ownership checks. */
 import {
+  type AccountConnectionId,
   type AccountHealth,
   type AccountId,
   type App,
@@ -242,6 +243,17 @@ export const hostedAccountHandlers = HttpApiBuilder.group(HostedApi, "accounts",
     const auth = yield* Authentication;
     const api = yield* ApiAuthentication;
     const redirectUri = accountOAuthRedirectUri(auth);
+    /** The dashboard page where the connection's creator finishes it, under the caller's slug. */
+    const connectionUrl = (connection: AccountConnectionId) =>
+      Effect.gen(function* () {
+        const request = yield* HttpServerRequest.HttpServerRequest;
+        const headers = new Headers(request.headers);
+        const organization = yield* CurrentOrganization;
+        const slug = headers.has("authorization")
+          ? (yield* api.authenticate(headers, organization.organization)).organizationSlug
+          : yield* auth.organizationSlug(headers, organization.organization);
+        return `${auth.origin}/org/${encodeURIComponent(slug)}/connections/${encodeURIComponent(connection)}`;
+      });
     return handlers
       .handle("get", () => getAccount)
       .handle("checkCredentials", ({ params, payload }) =>
@@ -260,17 +272,8 @@ export const hostedAccountHandlers = HttpApiBuilder.group(HostedApi, "accounts",
       .handle("connect", ({ params, payload }) =>
         Effect.gen(function* () {
           const owner = yield* currentOwner;
-          const request = yield* HttpServerRequest.HttpServerRequest;
-          const headers = new Headers(request.headers);
-          const organization = yield* CurrentOrganization;
-          const slug = headers.has("authorization")
-            ? (yield* api.authenticate(headers, organization.organization)).organizationSlug
-            : yield* auth.organizationSlug(headers, organization.organization);
           const connection = yield* connectAccount(owner, { app: params.app, ...payload });
-          return {
-            ...connection,
-            url: `${auth.origin}/org/${encodeURIComponent(slug)}/connections/${encodeURIComponent(connection.id)}`,
-          };
+          return { ...connection, url: yield* connectionUrl(connection.id) };
         }),
       )
       .handle("connection", ({ params }) =>
@@ -288,7 +291,12 @@ export const hostedAccountHandlers = HttpApiBuilder.group(HostedApi, "accounts",
             app === undefined || target === null || target === undefined
               ? undefined
               : app.requirements.accounts[target.requirement];
-          return { ...connection, redirectUri, checkable: requirement?.health === true };
+          return {
+            ...connection,
+            url: yield* connectionUrl(connection.id),
+            redirectUri,
+            checkable: requirement?.health === true,
+          };
         }),
       )
       .handle("submit", ({ params, payload }) =>

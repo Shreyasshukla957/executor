@@ -4502,6 +4502,18 @@ export const scenarios = plan({
       cloud: na("Hosted grant restrictions are covered by liveGrantRestrictions."),
     },
   },
+  connectionLinkReadAgain: {
+    fixtures: "actors",
+    file: "connection-link.spec.ts",
+    title:
+      "agents read a pending connection's sign-in link back, are told to connect a new account after a provider change, and another organization's admin cannot read the link",
+    managementProfiles: ["owner"],
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("Local issues bearer links through accountConnect.issue, not hosted connections."),
+    },
+  },
   appManagementContractsHosted: {
     fixtures: "actors",
     file: "app-management-contracts.spec.ts",

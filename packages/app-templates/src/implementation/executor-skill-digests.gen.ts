@@ -3,7 +3,7 @@
 /** SHA-256 of each file the Executor app publishes as a skill, keyed by `<skill>/<file>`. */
 export const executorSkillDigests: Readonly<Record<string, string>> = {
   "app-authoring/SKILL.md": "350200a92d4499060fa0b4facee96de4ffdd86d64487c27c9ad3c5466821354a",
-  "app-authoring/accounts.md": "c574bd74a1b3e8baae763b33c9a590a082aecb6b0e09ff6ec75ac328ca1c8443",
+  "app-authoring/accounts.md": "a5cc657679880d7140ea868205b5ff4df436b0d16fe3d167c4c5d132c36cf082",
   "app-authoring/deploy.md": "2cf1b64b9716e8666c59b478d0e0a5970ea4fffe91467550e3cd446a8d539d52",
   "app-authoring/events.md": "202bde87c2320af9706828063c6aaeeac0c9b8661971f610220f2a49293e3561",
   "app-authoring/integrations.md": "3866649001e611a660d906d990223d08ef51d11775009f080b1a9c89660241e1",
@@ -13,7 +13,7 @@ export const executorSkillDigests: Readonly<Record<string, string>> = {
   "app-authoring/ui.md": "ac9751f5f45b0196e46e1deffa09cb302c7e43099bcc247ec455f8808b539542",
   "app-authoring/webhooks.md": "b7f43ad7af7fe1093cdc957cdec5f43bc98115d3c3237af1788cdd68d7fd9fce",
   "app-authoring/workflows.md": "9e517eaf6f461ac07fd2d29a03f0d545e79cfcbcfedbed5b8432e7b41392257b",
-  "code-mode/SKILL.md": "024737442d4e573700f1f1f3b7ede2a440a3bc93e967c19a68e516f734751f46",
+  "code-mode/SKILL.md": "d0250279b32b89a3680789978fb27e80d0c880aad80d1ff78f5cd930699d1e47",
   "executor/SKILL.md": "580e2e296e8665c950d41197e4bf2df639be12f6ee3ec8ce51d27129dd0774ff",
   "executor/feedback.md": "11397bd260917e5a21e92897a19368d0426bf5944a7c081adc2c061d1ea797cd"
 };

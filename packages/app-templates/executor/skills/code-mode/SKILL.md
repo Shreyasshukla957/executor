@@ -99,8 +99,11 @@ arguments or source, and never search their files for tokens. The Executor app
   `accounts.oauthSetup` lists the scopes it will request; tell the user.
 
 Search for these tools and read their input types first. Give the user the
-returned URL. After they finish, check the connection in a new execution, then
-start another to call the app's tools. Never wait or poll inside one program.
+returned `url`; hosted `accounts.connection` returns it again, with progress in
+`state.status`. To replace an account's credentials, pass its ID as `account`
+in the same request. After they finish, check the connection in a new
+execution, then start another to call the app's tools. Never wait or poll
+inside one program.
 
 ## Approvals and input
 

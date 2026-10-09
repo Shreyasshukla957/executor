@@ -73,9 +73,13 @@ export const BrowserAccountConnection = Schema.Struct({
   ...AccountConnection.fields,
   url: HttpUrl,
 });
-/** Display the exact registered callback when a host uses a separate OAuth relay. */
+/**
+ * Reading a connection returns the same form link as creating it, so an agent can hand it over
+ * again, and the exact registered callback when a host uses a separate OAuth relay.
+ */
 export const HostedAccountConnection = Schema.Struct({
   ...AccountConnection.fields,
+  url: HttpUrl,
   redirectUri: HttpUrl,
   /** The target app's check can validate credentials entered for this connection. */
   checkable: Schema.Boolean,
