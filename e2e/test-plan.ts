@@ -829,6 +829,20 @@ export const scenarios = plan({
       "self-host": na("Desktop process supervision"),
     },
   },
+  desktopLateLoadFailure: {
+    file: "desktop-recovery.spec.ts",
+    title:
+      "desktop keeps running when the dashboard it replaced reports a failed load after the startup page commits",
+    targets: {
+      local: {
+        status: "not-run",
+        reason:
+          "Runs against the packaged desktop in the release workflow with desktop-recovery.config.ts.",
+      },
+      cloud: na("Desktop window loading"),
+      "self-host": na("Desktop window loading"),
+    },
+  },
   desktopClipboard: {
     file: "desktop-recovery.spec.ts",
     title: "desktop copy buttons write to the system clipboard",

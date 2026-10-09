@@ -61,6 +61,9 @@ const rendererReloadWindowMillis = 60_000;
 /** The dashboard's `--background` token for the system appearance, painted before content loads. */
 const windowBackground = () => (nativeTheme.shouldUseDarkColors ? "#0a0a0a" : "#ffffff");
 
+/** Electron's `loadURL` rejection names the URL whose main-frame load failed. */
+const FailedLoad = Schema.Struct({ url: Schema.String });
+
 /** What the window shows. A pairing link is one-use, so it is cleared once loaded. */
 type View =
   | { readonly kind: "starting" }
@@ -202,11 +205,20 @@ const desktop = Effect.gen(function* () {
         let loads = 0;
         const load = (current: BrowserWindow, url: string) => {
           const generation = ++loads;
-          void current.loadURL(url).catch(() => {
+          void current.loadURL(url).catch((error: unknown) => {
             if (current.isDestroyed() || generation !== loads) return;
-            // The app's own documents must load. The dashboard may be mid-restart.
-            if (url.startsWith("data:")) failed("window");
-            else run(Effect.logWarning("Desktop window could not load the dashboard"));
+            // The dashboard may be mid-restart. Its own failure can name its normalized or
+            // redirected URL, so any failure is reported.
+            if (!url.startsWith("data:")) {
+              run(Effect.logWarning("Desktop window could not load the dashboard"));
+              return;
+            }
+            // The app's own documents must load. Electron rejects a load when any main-frame load
+            // fails before it finishes, also the replaced document's: on Windows a dashboard still
+            // loading when its server exits reports its abort after this page has committed. A
+            // data: document never redirects, so a failure naming another URL is not its own.
+            if (Schema.is(FailedLoad)(error) && !error.url.startsWith("data:")) return;
+            failed("window");
           });
         };
         const showView = () => {

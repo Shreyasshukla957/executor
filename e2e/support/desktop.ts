@@ -197,6 +197,40 @@ export const answeredDialogs = (electron: ElectronApplication) =>
     ),
   );
 
+/**
+ * Report a replaced document's failed load after the desktop's own page has committed, as
+ * Windows does when the dashboard is still loading as its server exits: `did-fail-load` with the
+ * dashboard's URL arrives between the startup page's `did-navigate` and `did-stop-loading`.
+ * `lateLoadFailures` counts the reports.
+ */
+export const reportReplacedLoadFailuresLate = (electron: ElectronApplication) =>
+  driver("report replaced loads' failures late", () =>
+    electron.evaluate(({ BrowserWindow }) => {
+      const [window] = BrowserWindow.getAllWindows();
+      if (window === undefined) throw new Error("The desktop has no window");
+      const contents = window.webContents;
+      const record = { reported: 0 };
+      Object.assign(globalThis, { executorE2ELateLoadFailures: record });
+      let previous = contents.getURL();
+      contents.on("did-navigate", (_event, url) => {
+        const replaced = previous;
+        previous = url;
+        if (!url.startsWith("data:") || replaced.startsWith("data:")) return;
+        record.reported += 1;
+        contents.emit("did-fail-load", {}, -3, "", replaced, true);
+      });
+    }),
+  );
+
+export const lateLoadFailures = (electron: ElectronApplication) =>
+  driver("read late load failure reports", () =>
+    electron.evaluate(
+      () =>
+        (Reflect.get(globalThis, "executorE2ELateLoadFailures") as { reported: number } | undefined)
+          ?.reported ?? 0,
+    ),
+  );
+
 /** Click an application menu item as the user would. */
 export const clickMenuItem = (electron: ElectronApplication, menu: string, item: string) =>
   driver(`click ${menu} → ${item}`, () =>

@@ -1,6 +1,6 @@
 import { expect, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Config, Effect, FileSystem, Layer, Path, Schedule, Schema } from "effect";
+import { Config, Effect, Fiber, FileSystem, Layer, Path, Schedule, Schema } from "effect";
 import { FetchHttpClient } from "effect/http";
 import type { ElectronApplication, Page } from "playwright";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -15,9 +15,11 @@ import {
   eventsNamed,
   clickMenuItem,
   killBackend,
+  lateLoadFailures,
   launchDesktop,
   menuLabels,
   nextBackendPid,
+  reportReplacedLoadFailuresLate,
 } from "../support/desktop.ts";
 import { scenarios } from "../test-plan.ts";
 
@@ -202,6 +204,39 @@ it.live(scenarios.desktopCrashRecovery.title, () =>
       ).toEqual([500, 1_000, 500, 500]);
       yield* dashboard(page);
       expect(yield* backendPids(data)).toHaveLength(6);
+    }),
+  ).pipe(Effect.provide(services)),
+);
+
+it.live(scenarios.desktopLateLoadFailure.title, () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { home, data, env } = yield* desktopHome();
+      const electron = yield* launchDesktop({ cwd: home, env });
+      const page = yield* driver("desktop window", () => electron.firstWindow());
+      yield* dashboard(page);
+      yield* reportReplacedLoadFailuresLate(electron);
+
+      // The server exits, so the window shows the startup page, and then hears that the dashboard
+      // it replaced failed to load. The startup page shows only until the restarted server is
+      // ready, so the wait for it starts on the dashboard. It reads from the window: a desktop
+      // stopped behind its error box answers no main-process call.
+      const startupPage = yield* driver("the window shows the startup page", () =>
+        page.waitForURL((url) => url.protocol === "data:", { timeout: 30_000 }),
+      ).pipe(Effect.forkScoped({ startImmediately: true }));
+      const [first] = yield* backendPids(data);
+      yield* killBackend(first!);
+      yield* nextBackendPid(data, [first!]);
+      yield* Fiber.join(startupPage);
+
+      // That failure was the dashboard's, not the startup page's: the desktop keeps its window
+      // and opens the restarted server's dashboard.
+      yield* dashboard(page);
+      expect(yield* lateLoadFailures(electron)).toBe(1);
+      expect(yield* eventsNamed(data, "Desktop backend ready", 2)).toHaveLength(2);
+      expect((yield* desktopEvents(data)).map((event) => event.message)).not.toContain(
+        "Desktop stopped",
+      );
     }),
   ).pipe(Effect.provide(services)),
 );
