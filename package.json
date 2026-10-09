@@ -102,6 +102,8 @@
     "e2e:emulator-failures": "vitest run --config e2e/emulator-failures.config.ts",
     "e2e:typecheck-runner": "vitest run --config e2e/typecheck-runner.config.ts",
     "e2e:prepare-cache": "vitest run --config e2e/prepare-cache.config.ts",
+    "e2e:alchemy-first-builds": "vitest run --config e2e/alchemy-first-builds.config.ts",
+    "e2e:alchemy-dev-output": "vitest run --config e2e/alchemy-dev-output.config.ts",
     "changeset": "changeset",
     "changeset:version": "changeset version && bun install --lockfile-only && oxfmt .",
     "release:version": "bun run changeset:version",

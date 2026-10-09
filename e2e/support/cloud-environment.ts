@@ -1,4 +1,14 @@
-import { Clock, Effect, FileSystem, Path, Redacted, Schedule, Schema, Stream } from "effect";
+import {
+  Clock,
+  Deferred,
+  Effect,
+  FileSystem,
+  Path,
+  Redacted,
+  Schedule,
+  Schema,
+  Stream,
+} from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { HttpClient } from "effect/http";
 import { startAnalyticsCollector } from "./analytics-collector.ts";
@@ -6,6 +16,7 @@ import { serveOtlpCollector } from "./otlp-collector.ts";
 import { randomBytes } from "node:crypto";
 import { createEmulatorFixture, EmulatorFixture, emulatorRequest } from "./emulators.ts";
 import { startCloudPostgres } from "./cloud-postgres.ts";
+import { isAlchemyDevFailure, outputLines } from "./alchemy-dev-output.ts";
 import { startFixtureControl, fixtureRequest } from "../sdk/fixtures.ts";
 import { roleHost } from "./role-hosts.ts";
 
@@ -16,6 +27,12 @@ class CloudStartFailed extends Schema.TaggedError<CloudStartFailed>()("CloudStar
     return `Cloud test environment failed: ${this.operation}`;
   }
 }
+
+/**
+ * Starts on this host took up to 324 s from `alchemy dev` to a ready API Worker, under load 60
+ * with other local Clouds starting beside them.
+ */
+const readinessDeadline = "10 minutes";
 
 /** A complete local Cloud Worker, real Postgres and hosted emulators; no inherited credentials. */
 export const startCloudEnvironment = (input: {
@@ -191,11 +208,16 @@ export const startCloudEnvironment = (input: {
         2,
       ),
     );
-    const capture = (child: ChildProcessSpawner.ChildProcessHandle, file: string) =>
-      Stream.merge(child.stdout, child.stderr).pipe(
-        Stream.decodeText(),
-        Stream.runForEach((text) =>
-          fs.writeFileString(`${directory}/${file}`, text, { flag: "a", mode: 0o600 }),
+    const capture = (
+      child: ChildProcessSpawner.ChildProcessHandle,
+      file: string,
+      onLine: (line: string) => Effect.Effect<void> = () => Effect.void,
+    ) =>
+      outputLines(child).pipe(
+        Stream.runForEach((line) =>
+          fs
+            .writeFileString(`${directory}/${file}`, `${line}\n`, { flag: "a", mode: 0o600 })
+            .pipe(Effect.andThen(onLine(line))),
         ),
         Effect.forkScoped,
       );
@@ -264,7 +286,14 @@ export const startCloudEnvironment = (input: {
         forceKillAfter: "15 seconds",
       }),
     );
-    yield* capture(server, "cloud.log");
+    // A failed apply or run leaves `alchemy dev` running so healthy resources keep serving, but in a
+    // run nothing will edit the sources it waits on, so the Worker that failed never starts.
+    const applyFailed = yield* Deferred.make<void>();
+    yield* capture(server, "cloud.log", (line) =>
+      isAlchemyDevFailure(line) ? Deferred.succeed(applyFailed, undefined) : Effect.void,
+    );
+    // A Worker that is still starting holds the request until it can answer, so each probe has its
+    // own deadline and the whole wait has one too.
     const ready = Effect.scoped(
       http.get(`${input.origin}/health`).pipe(
         Effect.flatMap((response) =>
@@ -275,13 +304,36 @@ export const startCloudEnvironment = (input: {
           }),
         ),
       ),
-    ).pipe(Effect.retry({ schedule: Schedule.spaced("500 millis"), times: 360 }));
+    ).pipe(
+      Effect.timeout("10 seconds"),
+      Effect.retry({ schedule: Schedule.spaced("500 millis") }),
+      Effect.timeoutOrElse({
+        duration: readinessDeadline,
+        orElse: () =>
+          Effect.fail(
+            new CloudStartFailed({
+              operation: `Cloud did not answer /health within ${readinessDeadline}; see cloud.log`,
+            }),
+          ),
+      }),
+    );
     yield* Effect.raceFirst(
       ready,
-      server.exitCode.pipe(
-        Effect.flatMap(() =>
-          Effect.fail(
-            new CloudStartFailed({ operation: "Cloud stopped before readiness; see cloud.log" }),
+      Effect.raceFirst(
+        server.exitCode.pipe(
+          Effect.flatMap(() =>
+            Effect.fail(
+              new CloudStartFailed({ operation: "Cloud stopped before readiness; see cloud.log" }),
+            ),
+          ),
+        ),
+        Deferred.await(applyFailed).pipe(
+          Effect.flatMap(() =>
+            Effect.fail(
+              new CloudStartFailed({
+                operation: "Alchemy could not start every Cloud resource; see cloud.log",
+              }),
+            ),
           ),
         ),
       ),

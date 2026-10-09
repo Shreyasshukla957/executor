@@ -994,7 +994,7 @@ diff --git a/lib/Bundle/Bundle.js b/lib/Bundle/Bundle.js
  import { sha256, sha256Object } from "../Util/sha256.js";
  import { bundleAnalyzerPlugin, } from "./BundleAnalyzerPlugin.js";
  import { purePlugin } from "./PurePlugin.js";
-@@ -134,6 +136,265 @@
+@@ -134,60 +136,400 @@
      catch: bundleErrorFromUnknown,
  }).pipe(Effect.flatMap(Effect.forEach(bundleFileFromOutputChunk)), Effect.flatMap(bundleOutputFromFiles));
  /**
@@ -1024,7 +1024,7 @@ diff --git a/lib/Bundle/Bundle.js b/lib/Bundle/Bundle.js
 + * time; the poll then compares each source with what the build read.
 + * Plugins' `watchChange` hooks are not called.
 + */
-+const watchModuleTree = (rolldown, inputOptions, outputOptions, start, fail) => {
++const watchModuleTree = (rolldown, inputOptions, outputOptions, start, fail, built) => {
 +    let files = new Set();
 +    // Directories between the watched directory and a file; renaming one
 +    // moves the file.
@@ -1230,6 +1230,7 @@ diff --git a/lib/Bundle/Bundle.js b/lib/Bundle/Bundle.js
 +        })
 +            .then((stale) => {
 +            building = undefined;
++            built();
 +            if ((stale || again) && !closed) {
 +                again = false;
 +                schedule();
@@ -1257,50 +1258,189 @@ diff --git a/lib/Bundle/Bundle.js b/lib/Bundle/Bundle.js
 +    };
 +};
 +/**
++ * Local Workers start their watchers together, and each first build loads
++ * that Worker's whole module graph. Rolldown already spreads one build over
++ * every core, so first builds running side by side only multiply memory:
++ * seventeen Executor Workers took the dev sidecar to 9.6 GB and the kernel
++ * killed it. First builds in this process take turns. Rebuilds after an edit
++ * and deploy builds do not wait.
++ *
++ * A turn ends when the first build ends or fails, when the watcher closes or
++ * cannot start, and at the latest after {@link firstBuildTurn}: a build that
++ * hangs keeps running, and the next one starts beside it. A watcher that
++ * closes while it waits leaves the queue.
++ */
++const firstBuildTurn = 60_000;
++const firstBuilds = (() => {
++    let running = false;
++    const waiting = [];
++    const next = () => {
++        const start = waiting.shift();
++        if (start)
++            start();
++        else
++            running = false;
++    };
++    return {
++        /** Joins the queue. `release` ends the turn or leaves the queue; it is idempotent. */
++        join: () => {
++            let state = "waiting";
++            let timer;
++            let started;
++            const turn = new Promise((resolve) => (started = resolve));
++            const release = () => {
++                if (state === "waiting")
++                    waiting.splice(waiting.indexOf(start), 1);
++                else if (state === "running") {
++                    clearTimeout(timer);
++                    next();
++                }
++                state = "done";
++            };
++            const start = () => {
++                state = "running";
++                timer = setTimeout(() => {
++                    console.warn(`alchemy: a first build has run for ${firstBuildTurn / 1000} s; the next one starts beside it.`);
++                    release();
++                }, firstBuildTurn).unref();
++                started();
++            };
++            if (running)
++                waiting.push(start);
++            else {
++                running = true;
++                start();
++            }
++            return { turn, release };
++        },
++    };
++})();
++/**
   * Watch for changes in the bundle and return a stream of bundle output.
   * @param inputOptions - The input options for the bundle.
   * @param outputOptions - The output options for the bundle.
-@@ -141,7 +402,10 @@
+  * @returns A stream of Result instances containing either the bundle output or an error.
   */
- export const watch = (inputOptions, outputOptions, extra) => Stream.callback((queue) => Effect.acquireRelease(Effect.promise(async () => {
-     const rolldown = await loadRolldown();
+-export const watch = (inputOptions, outputOptions, extra) => Stream.callback((queue) => Effect.acquireRelease(Effect.promise(async () => {
+-    const rolldown = await loadRolldown();
 -    const watcher = rolldown.watch({
-+    const start = () => {
-+        Queue.offerUnsafe(queue, { _tag: "Start" });
-+    };
-+    const options = {
-         ...withAlchemyDefine(inputOptions),
-         plugins: [
-             inputOptions.plugins,
-@@ -149,11 +413,7 @@
-             // The watcher event listener does not receive the bundle output, so we grab it using a plugin.
-             {
-                 name: "alchemy:watch-bundle",
+-        ...withAlchemyDefine(inputOptions),
+-        plugins: [
+-            inputOptions.plugins,
+-            await builtInPlugins(extra),
+-            // The watcher event listener does not receive the bundle output, so we grab it using a plugin.
+-            {
+-                name: "alchemy:watch-bundle",
 -                watchChange() {
 -                    Queue.offerUnsafe(queue, {
 -                        _tag: "Start",
 -                    });
 -                },
-+                watchChange: start,
-                 generateBundle(_outputOptions, bundle) {
-                     Queue.offerUnsafe(queue, {
-                         _tag: "Success",
-@@ -162,6 +422,15 @@
+-                generateBundle(_outputOptions, bundle) {
+-                    Queue.offerUnsafe(queue, {
+-                        _tag: "Success",
+-                        output: bundle,
+-                    });
++export const watch = (inputOptions, outputOptions, extra) => Stream.callback((queue) => Effect.gen(function* () {
++    // Waiting for the turn can be interrupted; closing the stream ends the
++    // turn or leaves the queue.
++    const { turn, release: built } = yield* Effect.acquireRelease(Effect.sync(firstBuilds.join), ({ release }) => Effect.sync(release));
++    yield* Effect.promise(() => turn);
++    const open = async () => {
++        const rolldown = await loadRolldown();
++        const start = () => {
++            Queue.offerUnsafe(queue, { _tag: "Start" });
++        };
++        const options = {
++            ...withAlchemyDefine(inputOptions),
++            plugins: [
++                inputOptions.plugins,
++                await builtInPlugins(extra),
++                // The watcher event listener does not receive the bundle output, so we grab it using a plugin.
++                {
++                    name: "alchemy:watch-bundle",
++                    watchChange: start,
++                    generateBundle(_outputOptions, bundle) {
++                        Queue.offerUnsafe(queue, {
++                            _tag: "Success",
++                            output: bundle,
++                        });
++                    },
                  },
-             },
-         ],
+-            },
+-        ],
+-        watch: {
+-            // Watching the full module graph of an Effect worker (all of
+-            // `effect`, `alchemy`, `@distilled.cloud/*`) registers thousands
+-            // of OS watch handles *per worker*; with several Effect workers
+-            // this exhausts the process fd table and the next `posix_spawn`
+-            // (workerd / docker) fails with `spawn EBADF`. Workspace packages
+-            // resolve to their real source paths (outside `node_modules`), so
+-            // they stay watched and local HMR is unaffected.
+-            exclude: ["**/node_modules/**"],
+-        },
+-        output: withDceDefault(outputOptions),
+-    });
+-    watcher.on("event", (event) => {
+-        if (event.code === "ERROR") {
+-            Queue.offerUnsafe(queue, {
++            ],
++        };
++        if (process.platform === "darwin") {
++            return watchModuleTree(rolldown, options, withDceDefault(outputOptions), start, (error) => Queue.offerUnsafe(queue, {
+                 _tag: "Error",
+-                error: bundleErrorFromUnknown(event.error),
+-            });
++                error: bundleErrorFromUnknown(error),
++            }), built);
+         }
+-        else if (event.code === "BUNDLE_END") {
+-            // This must be called to avoid resource leaks.
+-            event.result.close().catch(() => { });
+-        }
+-    });
+-    return watcher;
+-}), (watcher) => Effect.promise(() => watcher.close()))).pipe(Stream.mapEffect((event) => Effect.gen(function* () {
++        const watcher = rolldown.watch({
++            ...options,
++            watch: {
++                // Watching the full module graph of an Effect worker (all of
++                // `effect`, `alchemy`, `@distilled.cloud/*`) registers thousands
++                // of OS watch handles *per worker*; with several Effect workers
++                // this exhausts the process fd table and the next `posix_spawn`
++                // (workerd / docker) fails with `spawn EBADF`. Workspace packages
++                // resolve to their real source paths (outside `node_modules`), so
++                // they stay watched and local HMR is unaffected.
++                exclude: ["**/node_modules/**"],
++            },
++            output: withDceDefault(outputOptions),
++        });
++        watcher.on("event", (event) => {
++            if (event.code === "ERROR") {
++                built();
++                Queue.offerUnsafe(queue, {
++                    _tag: "Error",
++                    error: bundleErrorFromUnknown(event.error),
++                });
++            }
++            else if (event.code === "BUNDLE_END") {
++                built();
++                // This must be called to avoid resource leaks.
++                event.result.close().catch(() => { });
++            }
++        });
++        return watcher;
 +    };
-+    if (process.platform === "darwin") {
-+        return watchModuleTree(rolldown, options, withDceDefault(outputOptions), start, (error) => Queue.offerUnsafe(queue, {
-+            _tag: "Error",
-+            error: bundleErrorFromUnknown(error),
-+        }));
-+    }
-+    const watcher = rolldown.watch({
-+        ...options,
-         watch: {
-             // Watching the full module graph of an Effect worker (all of
-             // `effect`, `alchemy`, `@distilled.cloud/*`) registers thousands
++    yield* Effect.acquireRelease(Effect.tryPromise({ try: open, catch: bundleErrorFromUnknown }), (watcher) => Effect.promise(() => watcher.close())).pipe(
++    // A watcher that cannot start reports why and gives its turn back.
++    Effect.catch((error) => Effect.sync(() => {
++        built();
++        Queue.offerUnsafe(queue, { _tag: "Error", error });
++    })));
++})).pipe(Stream.mapEffect((event) => Effect.gen(function* () {
+     if (event._tag !== "Success") {
+         return event;
+     }
 diff --git a/src/Bundle/Bundle.ts b/src/Bundle/Bundle.ts
 --- a/src/Bundle/Bundle.ts
 +++ b/src/Bundle/Bundle.ts
@@ -1313,12 +1453,10 @@ diff --git a/src/Bundle/Bundle.ts b/src/Bundle/Bundle.ts
  import type * as rolldown from "rolldown";
  import { sha256, sha256Object } from "../Util/sha256.ts";
  import {
-@@ -251,6 +253,263 @@
-     Effect.flatMap(Effect.forEach(bundleFileFromOutputChunk)),
-     Effect.flatMap(bundleOutputFromFiles),
+@@ -253,6 +255,322 @@
    );
-+
-+/**
+ 
+ /**
 + * Rebuild on macOS when a file of the module graph changes, from one
 + * recursive `fs.watch` over the graph's common directory.
 + *
@@ -1351,6 +1489,7 @@ diff --git a/src/Bundle/Bundle.ts b/src/Bundle/Bundle.ts
 +  outputOptions: rolldown.OutputOptions,
 +  start: () => void,
 +  fail: (error: unknown) => void,
++  built: () => void,
 +) => {
 +  let files = new Set<string>();
 +  // Directories between the watched directory and a file; renaming one
@@ -1549,6 +1688,7 @@ diff --git a/src/Bundle/Bundle.ts b/src/Bundle/Bundle.ts
 +      })
 +      .then((stale) => {
 +        building = undefined;
++        built();
 +        if ((stale || again) && !closed) {
 +          again = false;
 +          schedule();
@@ -1574,15 +1714,83 @@ diff --git a/src/Bundle/Bundle.ts b/src/Bundle/Bundle.ts
 +    },
 +  };
 +};
- 
- /**
++
++/**
++ * Local Workers start their watchers together, and each first build loads
++ * that Worker's whole module graph. Rolldown already spreads one build over
++ * every core, so first builds running side by side only multiply memory:
++ * seventeen Executor Workers took the dev sidecar to 9.6 GB and the kernel
++ * killed it. First builds in this process take turns. Rebuilds after an edit
++ * and deploy builds do not wait.
++ *
++ * A turn ends when the first build ends or fails, when the watcher closes or
++ * cannot start, and at the latest after {@link firstBuildTurn}: a build that
++ * hangs keeps running, and the next one starts beside it. A watcher that
++ * closes while it waits leaves the queue.
++ */
++const firstBuildTurn = 60_000;
++const firstBuilds = (() => {
++  let running = false;
++  const waiting: Array<() => void> = [];
++  const next = () => {
++    const start = waiting.shift();
++    if (start) start();
++    else running = false;
++  };
++  return {
++    /** Joins the queue. `release` ends the turn or leaves the queue; it is idempotent. */
++    join: () => {
++      let state: "waiting" | "running" | "done" = "waiting";
++      let timer: ReturnType<typeof setTimeout> | undefined;
++      let started!: () => void;
++      const turn = new Promise<void>((resolve) => (started = resolve));
++      const release = () => {
++        if (state === "waiting") waiting.splice(waiting.indexOf(start), 1);
++        else if (state === "running") {
++          clearTimeout(timer);
++          next();
++        }
++        state = "done";
++      };
++      const start = () => {
++        state = "running";
++        timer = setTimeout(() => {
++          console.warn(
++            `alchemy: a first build has run for ${firstBuildTurn / 1000} s; the next one starts beside it.`,
++          );
++          release();
++        }, firstBuildTurn).unref();
++        started();
++      };
++      if (running) waiting.push(start);
++      else {
++        running = true;
++        start();
++      }
++      return { turn, release };
++    },
++  };
++})();
++
++/**
   * Watch for changes in the bundle and return a stream of bundle output.
-@@ -272,9 +531,12 @@
+  * @param inputOptions - The input options for the bundle.
+  * @param outputOptions - The output options for the bundle.
+@@ -271,10 +589,20 @@
+         readonly output: rolldown.OutputBundle;
        }
    >((queue) =>
-     Effect.acquireRelease(
+-    Effect.acquireRelease(
 -      Effect.promise(async () => {
-+      Effect.promise(async (): Promise<{ close(): Promise<void> }> => {
++    Effect.gen(function* () {
++      // Waiting for the turn can be interrupted; closing the stream ends the
++      // turn or leaves the queue.
++      const { turn, release: built } = yield* Effect.acquireRelease(
++        Effect.sync(firstBuilds.join),
++        ({ release }) => Effect.sync(release),
++      );
++      yield* Effect.promise(() => turn);
++      const open = async (): Promise<{ close(): Promise<void> }> => {
          const rolldown = await loadRolldown();
 -        const watcher = rolldown.watch({
 +        const start = () => {
@@ -1592,7 +1800,7 @@ diff --git a/src/Bundle/Bundle.ts b/src/Bundle/Bundle.ts
            ...withAlchemyDefine(inputOptions),
            plugins: [
              inputOptions.plugins,
-@@ -282,11 +544,7 @@
+@@ -282,11 +610,7 @@
              // The watcher event listener does not receive the bundle output, so we grab it using a plugin.
              {
                name: "alchemy:watch-bundle",
@@ -1605,7 +1813,7 @@ diff --git a/src/Bundle/Bundle.ts b/src/Bundle/Bundle.ts
                generateBundle(_outputOptions, bundle) {
                  Queue.offerUnsafe(queue, {
                    _tag: "Success",
-@@ -295,6 +553,22 @@
+@@ -295,6 +619,23 @@
                },
              },
            ],
@@ -1621,6 +1829,7 @@ diff --git a/src/Bundle/Bundle.ts b/src/Bundle/Bundle.ts
 +                _tag: "Error",
 +                error: bundleErrorFromUnknown(error),
 +              }),
++            built,
 +          );
 +        }
 +        const watcher = rolldown.watch({
@@ -1628,3 +1837,39 @@ diff --git a/src/Bundle/Bundle.ts b/src/Bundle/Bundle.ts
            watch: {
              // Watching the full module graph of an Effect worker (all of
              // `effect`, `alchemy`, `@distilled.cloud/*`) registers thousands
+@@ -309,19 +650,32 @@
+         });
+         watcher.on("event", (event) => {
+           if (event.code === "ERROR") {
++            built();
+             Queue.offerUnsafe(queue, {
+               _tag: "Error",
+               error: bundleErrorFromUnknown(event.error),
+             });
+           } else if (event.code === "BUNDLE_END") {
++            built();
+             // This must be called to avoid resource leaks.
+             event.result.close().catch(() => {});
+           }
+         });
+         return watcher;
+-      }),
+-      (watcher) => Effect.promise(() => watcher.close()),
+-    ),
++      };
++      yield* Effect.acquireRelease(
++        Effect.tryPromise({ try: open, catch: bundleErrorFromUnknown }),
++        (watcher) => Effect.promise(() => watcher.close()),
++      ).pipe(
++        // A watcher that cannot start reports why and gives its turn back.
++        Effect.catch((error) =>
++          Effect.sync(() => {
++            built();
++            Queue.offerUnsafe(queue, { _tag: "Error", error });
++          }),
++        ),
++      );
++    }),
+   ).pipe(
+     Stream.mapEffect((event) =>
+       Effect.gen(function* () {
