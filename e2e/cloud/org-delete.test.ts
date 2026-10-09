@@ -28,7 +28,7 @@ scenario(
         await page.getByPlaceholder("Northwind Labs").fill(ORG);
         await page.getByRole("button", { name: "Create organization" }).click();
         await page.getByText("Connect your MCP client").waitFor();
-        await page.getByRole("button", { name: "Continue to app" }).click();
+        await page.getByRole("button", { name: "Skip for now" }).click();
         await page.getByText("Integrations").first().waitFor();
         // The console canonicalizes onto the org's URL slug (/doomed-org).
         await page.waitForURL((url) => /^\/[a-z0-9-]+\/?$/.test(url.pathname), {

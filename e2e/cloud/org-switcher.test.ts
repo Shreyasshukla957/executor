@@ -35,8 +35,8 @@ scenario(
         await page.getByText("Connect your MCP client").waitFor();
       });
 
-      await step("Continue into the app", async () => {
-        await page.getByRole("button", { name: "Continue to app" }).click();
+      await step("Skip onboarding and open the app", async () => {
+        await page.getByRole("button", { name: "Skip for now" }).click();
         await page.getByText("Integrations").first().waitFor();
         // Let the router navigation fully settle before opening menus — a late
         // remount closes them mid-interaction. The console canonicalizes onto

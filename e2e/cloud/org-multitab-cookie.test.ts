@@ -58,7 +58,7 @@ scenario(
         await tab1.getByPlaceholder("Northwind Labs").fill("Multitab A");
         await tab1.getByRole("button", { name: "Create organization" }).click();
         await tab1.getByText("Connect your MCP client").waitFor({ timeout: 30_000 });
-        await tab1.getByRole("button", { name: "Continue to app" }).click();
+        await tab1.getByRole("button", { name: "Skip for now" }).click();
         await tab1.waitForURL((url) => /^\/[a-z0-9-]+\/?$/.test(url.pathname), { timeout: 30_000 });
         await tab1.getByText("Integrations").first().waitFor({ timeout: 30_000 });
         slugA = slugOf(tab1);

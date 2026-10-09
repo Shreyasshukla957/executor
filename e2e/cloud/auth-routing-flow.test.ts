@@ -70,7 +70,7 @@ scenario(
         );
         await page.getByRole("button", { name: "Create organization" }).click();
         await page.getByText("Connect your MCP client").waitFor({ timeout: 30_000 });
-        await page.getByRole("button", { name: "Continue to app" }).click();
+        await page.getByRole("button", { name: "Skip for now" }).click();
         // The bare landing canonicalizes onto the new org's slug.
         await page.waitForURL((url) => /^\/[a-z0-9-]+\/?$/.test(url.pathname), { timeout: 30_000 });
         await page.getByText("Integrations").first().waitFor({ timeout: 30_000 });
