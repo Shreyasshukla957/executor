@@ -373,7 +373,9 @@ export function IntegrationBrowsePage({ onboarding = false }: { readonly onboard
   const doDetect = useAtomSet(detectIntegration, { mode: "promiseExit" });
   const installed = useAtomValue(integrationsOptimisticAtom);
 
-  const [query, setQuery] = useState("");
+  // Give the guided experience one concrete, useful first choice while
+  // retaining the normal catalog search for someone who needs another app.
+  const [query, setQuery] = useState(onboarding ? "gmail" : "");
   const [detecting, setDetecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Resolve-on-click failures belong on the card that was clicked — a page-top
@@ -512,6 +514,12 @@ export function IntegrationBrowsePage({ onboarding = false }: { readonly onboard
   }, [integrationPlugins]);
 
   const handleDetect = useCallback(async () => {
+    if (onboarding) {
+      setError(
+        "Choose an app from the catalog during guided setup so Executor can add it in one step.",
+      );
+      return;
+    }
     const trimmed = query.trim();
     if (trimmed.length === 0) return;
     setDetecting(true);
@@ -658,6 +666,14 @@ export function IntegrationBrowsePage({ onboarding = false }: { readonly onboard
           ...(surface?.specOverrides ? { specOverrides: surface.specOverrides } : {}),
         });
         if (added) return;
+        if (onboarding) {
+          setRowError({
+            key: rowKey,
+            message:
+              "This app needs extra setup. Choose Gmail or another app that Executor can add in one step.",
+          });
+          return;
+        }
         goToAdd({
           kind,
           url: knownUrl,
@@ -694,6 +710,14 @@ export function IntegrationBrowsePage({ onboarding = false }: { readonly onboard
         ...(target.slug ? { slug: target.slug } : {}),
       });
       if (added) return;
+      if (onboarding) {
+        setRowError({
+          key: rowKey,
+          message:
+            "This app needs extra setup. Choose Gmail or another app that Executor can add in one step.",
+        });
+        return;
+      }
       goToAdd({
         kind: target.kind,
         url: target.url,
@@ -701,7 +725,7 @@ export function IntegrationBrowsePage({ onboarding = false }: { readonly onboard
         ...(target.slug ? { slug: target.slug } : {}),
       });
     },
-    [goToAdd, resolvingDomain, tryQuickAdd],
+    [goToAdd, onboarding, resolvingDomain, tryQuickAdd],
   );
 
   const pickPreset = useCallback(
@@ -726,6 +750,7 @@ export function IntegrationBrowsePage({ onboarding = false }: { readonly onboard
   // registry row's job now, while a local-process server (Chrome DevTools over
   // stdio) has no registry representation yet.
   const presetRows = useMemo<readonly Row[]>(() => {
+    if (onboarding) return [];
     const rows: Row[] = [];
     for (const entry of allPresets) {
       // A URL preset the registry lists is the registry row's job. A custom
@@ -760,7 +785,7 @@ export function IntegrationBrowsePage({ onboarding = false }: { readonly onboard
       });
     }
     return rows;
-  }, [allPresets, text, pickPreset, isAdded]);
+  }, [allPresets, text, pickPreset, isAdded, onboarding]);
 
   // --- Catalog rows: one per (service, surface) -----------------------------
   const catalogRows = useMemo<readonly Row[]>(() => {
@@ -947,7 +972,7 @@ export function IntegrationBrowsePage({ onboarding = false }: { readonly onboard
           title={onboarding ? "Choose your first app" : "Add an integration"}
           description={
             onboarding
-              ? "Start with an app you already use. Gmail is a good first choice, but any integration works."
+              ? "Start with Gmail, then try the guided agent examples. Search if you prefer another app."
               : "Search for a service, or point executor at any MCP server, OpenAPI spec, or GraphQL endpoint."
           }
         />
@@ -994,15 +1019,19 @@ export function IntegrationBrowsePage({ onboarding = false }: { readonly onboard
               onKeyDown={(event) => {
                 if (event.key === "Enter" && isUrl && canCreate) void handleDetect();
               }}
-              placeholder="Search integrations, or paste a URL…"
-              aria-label="Search integrations, or paste a URL"
+              placeholder={
+                onboarding ? "Search quick-add apps…" : "Search integrations, or paste a URL…"
+              }
+              aria-label={
+                onboarding ? "Search quick-add apps" : "Search integrations, or paste a URL"
+              }
               disabled={detecting}
               // oxlint-disable-next-line jsx_a11y/no-autofocus -- deliberate: searching is the page's only purpose, and it is reached by an explicit "Add integration" action
               autoFocus
               className="h-11 pl-9 text-sm"
             />
           </div>
-          {isUrl ? (
+          {isUrl && !onboarding ? (
             <Button
               className="h-11 shrink-0"
               onClick={() => void handleDetect()}
@@ -1018,39 +1047,41 @@ export function IntegrationBrowsePage({ onboarding = false }: { readonly onboard
           bottom, and this is the escape hatch for exactly the person the
           list is failing. One quiet line; the label carries the action, so
           the chips stay bare format names. */}
-        <div className="mb-8 flex flex-wrap items-center gap-x-3 gap-y-2">
-          <span className="shrink-0 text-xs text-muted-foreground">Start from scratch:</span>
-          <div className="flex shrink-0 items-center gap-1.5">
-            {integrationPlugins.map(
-              (plugin: IntegrationPlugin): ReactNode => (
-                // oxlint-disable-next-line react/forbid-elements -- a chip, not a Button variant
-                <button
-                  key={plugin.key}
-                  type="button"
-                  aria-label={`New ${plugin.label} integration from scratch`}
-                  disabled={!canCreate}
-                  onClick={() => {
-                    trackEvent("integration_add_started", {
-                      plugin_key: plugin.key,
-                      via: "manual",
-                    });
-                    void navigate({
-                      to: "/{-$orgSlug}/integrations/add/$pluginKey",
-                      params: { pluginKey: plugin.key },
-                    });
-                  }}
-                  className="disabled:opacity-50 disabled:pointer-events-none inline-flex items-center gap-1 rounded-full border border-border px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                >
-                  <PlusIcon className="size-3" aria-hidden />
-                  {plugin.label}
-                </button>
-              ),
-            )}
+        {!onboarding ? (
+          <div className="mb-8 flex flex-wrap items-center gap-x-3 gap-y-2">
+            <span className="shrink-0 text-xs text-muted-foreground">Start from scratch:</span>
+            <div className="flex shrink-0 items-center gap-1.5">
+              {integrationPlugins.map(
+                (plugin: IntegrationPlugin): ReactNode => (
+                  // oxlint-disable-next-line react/forbid-elements -- a chip, not a Button variant
+                  <button
+                    key={plugin.key}
+                    type="button"
+                    aria-label={`New ${plugin.label} integration from scratch`}
+                    disabled={!canCreate}
+                    onClick={() => {
+                      trackEvent("integration_add_started", {
+                        plugin_key: plugin.key,
+                        via: "manual",
+                      });
+                      void navigate({
+                        to: "/{-$orgSlug}/integrations/add/$pluginKey",
+                        params: { pluginKey: plugin.key },
+                      });
+                    }}
+                    className="disabled:opacity-50 disabled:pointer-events-none inline-flex items-center gap-1 rounded-full border border-border px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  >
+                    <PlusIcon className="size-3" aria-hidden />
+                    {plugin.label}
+                  </button>
+                ),
+              )}
+            </div>
+            <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+              Can&apos;t find it? Paste its URL above.
+            </span>
           </div>
-          <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-            Can&apos;t find it? Paste its URL above.
-          </span>
-        </div>
+        ) : null}
 
         {error ? (
           <p role="alert" className="mb-4 text-xs text-destructive">

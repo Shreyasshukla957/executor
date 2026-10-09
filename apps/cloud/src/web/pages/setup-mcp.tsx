@@ -26,31 +26,31 @@ import {
 const ONBOARDING_PRACTICE = [
   {
     key: "build_app",
-    title: "Build a small app",
-    description: "Ask your agent to make a useful interface around your first integration.",
+    title: "Build a Gmail UI",
+    description: "Give your agent a concrete interface to build around the inbox.",
     prompt:
-      "Using my connected app, build a small interface that helps me complete one everyday task.",
+      "Using my Gmail integration, build a small inbox triage UI that lets me review, label, and archive emails.",
   },
   {
     key: "create_workflow",
-    title: "Create a workflow",
-    description: "Turn a repeated task into something your agent can run on a schedule or trigger.",
+    title: "Add a five-minute cancellation window",
+    description: "Use a workflow to leave time to cancel an email before it is sent.",
     prompt:
-      "Create a workflow that checks my connected app every five minutes and notifies me when it finds something that needs my attention.",
+      "Create a workflow for my Gmail integration that waits five minutes before sending an email and lets me cancel it during that window.",
   },
   {
     key: "create_skill",
-    title: "Teach your agent a skill",
-    description: "Save reusable instructions so future tasks start with the right context.",
+    title: "Teach your agent a Gmail skill",
+    description: "Save reusable email-handling conventions for future tasks.",
     prompt:
-      "Create a reusable skill for working with my connected app. Include the conventions and checks you should follow every time.",
+      "Create a reusable Gmail skill. Before sending an email, summarize the recipients, subject, and body, then ask for my approval.",
   },
   {
     key: "store_notes",
-    title: "Save useful context",
-    description: "Give your agent durable notes it can use in future work.",
+    title: "Add notes to emails",
+    description: "Store the context your agent should remember about an email thread.",
     prompt:
-      "Add notes to emails from my connected app and store the important context so you can use it in future tasks.",
+      "Add notes to my Gmail emails and store the important context from each thread so you can use it in future tasks.",
   },
 ] as const satisfies readonly {
   readonly key: OnboardingPracticeStep;
@@ -77,6 +77,7 @@ export const SetupMcpPage = () => {
   const [practiceProgress, setPracticeProgress] = useState<ReadonlySet<OnboardingPracticeStep>>(
     () => readOnboardingPracticeProgress(globalThis.localStorage, organizationSlug),
   );
+  const [copiedPracticeStep, setCopiedPracticeStep] = useState<OnboardingPracticeStep | null>(null);
 
   useEffect(() => {
     setOrigin(window.location.origin);
@@ -86,16 +87,17 @@ export const SetupMcpPage = () => {
     setPracticeProgress(readOnboardingPracticeProgress(globalThis.localStorage, organizationSlug));
   }, [organizationSlug]);
 
-  const completePracticeStep = (step: OnboardingPracticeStep) => {
+  const markPracticeStepComplete = (step: OnboardingPracticeStep) => {
     setPracticeProgress((previous) => {
       if (previous.has(step)) return previous;
       const next = new Set(previous);
       next.add(step);
       writeOnboardingPracticeProgress(globalThis.localStorage, organizationSlug, next);
-      trackEvent("onboarding_practice_prompt_copied", { step });
+      trackEvent("onboarding_practice_step_completed", { step });
       return next;
     });
   };
+  const activePracticeStep = ONBOARDING_PRACTICE.find((step) => !practiceProgress.has(step.key));
 
   const endpoint = origin
     ? buildMcpHttpEndpoint({
@@ -239,40 +241,56 @@ export const SetupMcpPage = () => {
             aria-label="Try it out"
           >
             <div>
-              <h2 className="text-sm font-medium text-foreground">Try it with your agent</h2>
+              <h2 className="text-sm font-medium text-foreground">Follow the Gmail example</h2>
               <p className="mt-1 text-sm leading-6 text-muted-foreground">
-                Copy one of these prompts into your agent to see what Executor can do with the app
-                you just added.
+                Work through one prompt at a time. After you see the result in your agent, confirm
+                it here to continue.
               </p>
             </div>
-            <div className="grid gap-2 sm:grid-cols-2">
-              {ONBOARDING_PRACTICE.map((step) => {
-                const complete = practiceProgress.has(step.key);
-                return (
-                  <article
-                    key={step.key}
-                    className="flex flex-col gap-2 rounded-md border border-border p-3"
+            {activePracticeStep ? (
+              <article className="flex flex-col gap-4 rounded-md border border-border p-4">
+                <div>
+                  <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                    Practice step {practiceProgress.size + 1} of {ONBOARDING_PRACTICE.length}
+                  </p>
+                  <p className="mt-1 text-sm font-medium text-foreground">
+                    {activePracticeStep.title}
+                  </p>
+                  <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                    {activePracticeStep.description}
+                  </p>
+                </div>
+                <CodeBlock code={activePracticeStep.prompt} lang="text" />
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <CopyButton
+                    value={activePracticeStep.prompt}
+                    label="Copy prompt"
+                    onCopy={() => {
+                      setCopiedPracticeStep(activePracticeStep.key);
+                      trackEvent("onboarding_practice_prompt_copied", {
+                        step: activePracticeStep.key,
+                      });
+                    }}
+                  />
+                  <Button
+                    size="sm"
+                    disabled={copiedPracticeStep !== activePracticeStep.key}
+                    onClick={() => markPracticeStepComplete(activePracticeStep.key)}
                   >
-                    <div>
-                      <p className="text-sm font-medium text-foreground">{step.title}</p>
-                      <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                        {step.description}
-                      </p>
-                    </div>
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs text-muted-foreground">
-                        {complete ? "Prompt copied" : "Ready to try"}
-                      </span>
-                      <CopyButton
-                        value={step.prompt}
-                        label="Copy prompt"
-                        onCopy={() => completePracticeStep(step.key)}
-                      />
-                    </div>
-                  </article>
-                );
-              })}
-            </div>
+                    I completed this in my agent
+                  </Button>
+                </div>
+              </article>
+            ) : (
+              <div className="rounded-md border border-border p-4">
+                <p className="text-sm font-medium text-foreground">
+                  Your Gmail example is complete
+                </p>
+                <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                  You can return to the workspace and keep building with your agent.
+                </p>
+              </div>
+            )}
             <div className="flex justify-end">
               <Button size="sm" onClick={() => void goToApp()}>
                 Open workspace

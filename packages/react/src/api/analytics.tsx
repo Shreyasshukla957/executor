@@ -192,6 +192,9 @@ export interface AnalyticsEvents {
   onboarding_practice_prompt_copied: {
     step: "build_app" | "create_workflow" | "create_skill" | "store_notes";
   };
+  onboarding_practice_step_completed: {
+    step: "build_app" | "create_workflow" | "create_skill" | "store_notes";
+  };
 
   // ── Cloud: billing & support ─────────────────────────────────────────────
   billing_plan_selected: {
