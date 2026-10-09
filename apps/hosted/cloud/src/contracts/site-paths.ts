@@ -58,7 +58,12 @@ export const v1SiteFiles: ReadonlyArray<SitePattern> = [
   "/apple-touch-icon.png",
 ];
 
-/** The agent skills index and its files, published beside the docs. */
+/**
+ * The agent skills index and its files, published beside the docs. Unlike site pages, every host
+ * that serves the product keeps answering them: installed apps store the URL they read skills
+ * from (the Executor app names its installation's API origin), and app reads do not follow
+ * redirects.
+ */
 export const agentSkills: SitePattern = "/.well-known/agent-skills/*";
 
 /**
@@ -73,5 +78,4 @@ export const matchesSitePattern = (pattern: SitePattern, pathname: string) =>
 
 /** Whether `pathname` is a site page, which only the edge serves. */
 export const isSitePage = (pathname: string) =>
-  sitePages.some((pattern) => matchesSitePattern(pattern, pathname)) ||
-  matchesSitePattern(agentSkills, pathname);
+  sitePages.some((pattern) => matchesSitePattern(pattern, pathname));

@@ -119,6 +119,17 @@ export const scenarios = plan({
       local: na("Local does not serve the marketing site."),
     },
   },
+  cloudSkillsIndexHosts: {
+    fixtures: "actors",
+    file: "cloud-site-edge.spec.ts",
+    title:
+      "Cloud's deployment and browser origins keep serving the published skills index to apps that stored its URL",
+    targets: {
+      cloud: managedCloud,
+      "self-host": na("Self-host serves one origin; it never moved its skills index."),
+      local: na("Local serves one origin; it never moved its skills index."),
+    },
+  },
   marketingIsolation: {
     file: "marketing-isolation.spec.ts",
     title: "Cloud serves marketing documents and assets without regional API placement",
