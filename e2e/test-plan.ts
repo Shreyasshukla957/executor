@@ -2310,6 +2310,17 @@ export const scenarios = plan({
       local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
     },
   },
+  accountCacheScope: {
+    fixtures: "actors",
+    file: "account-cache-scope.spec.ts",
+    title:
+      "Account cache scopes stay the same across sealed calls, ignore credential size and never share",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("Local runs apps through the same workerd runner and cache as self-host."),
+    },
+  },
   oauthCacheScope: {
     fixtures: "actors",
     file: "oauth-cache-scope.spec.ts",
