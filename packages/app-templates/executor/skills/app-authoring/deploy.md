@@ -346,6 +346,13 @@ deployment }`, preserves the app ID and data, and never updates the Git branch.
 It has no expected-active-deployment argument. Check profiles after changing
 account requirements; saved selections can become incompatible with new code.
 
+Every profile follows the active deployment, so do not update or reconcile a
+profile to pick up new code. The next `execute` lists and calls the new tools.
+A deploy marks each profile's setup `pending` and starts background setup,
+which re-registers its webhooks and schedules, usually within seconds. `pending`
+does not block tool calls. Setup that cannot finish shows `needs-setup` or
+`failed` with its cause.
+
 `apps.deployments` lists retained versions. `apps.source` accepts an optional
 `query.deployment` to read a specific version. `apps.activate` requires
 `body: { deployment, expectedDeployment }`, where `expectedDeployment` is the

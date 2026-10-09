@@ -1445,6 +1445,29 @@ export const scenarios = plan({
       local: na("Local checks for due work every second; it has no coordinator alarm."),
     },
   },
+  deploySetup: {
+    fixtures: "actors",
+    file: "deploy-setup.spec.ts",
+    title:
+      "Deploys wake profile setup, which reaches each new deployment, a schedule's change from interval to cron and an unchanged redeploy without a reconcile",
+    targets: {
+      cloud: managedCloud,
+      "self-host": scheduled,
+      local: na("Hosted profiles and deployment API scenario"),
+    },
+  },
+  memberSetupWake: {
+    fixtures: "actors",
+    file: "deploy-setup.spec.ts",
+    title: "Member setup wakes profile setup from its background provisioning job",
+    targets: {
+      "self-host": scheduled,
+      cloud: na(
+        "Cloud installs a new team in its request with an immediate wake, or in its provisioning workflow, whose next step requests the schedule-wake job.",
+      ),
+      local: na("Local has no hosted provisioning jobs."),
+    },
+  },
   cloudMcpObjectConnections: {
     fixtures: "actors",
     file: "cloud-database-placement.spec.ts",
@@ -2679,6 +2702,16 @@ export const scenarios = plan({
     file: "api-document-patterns.spec.ts",
     title: "the published API document keeps the string patterns requests must match",
     targets: { local: scheduled, "self-host": scheduled, cloud: scheduled },
+  },
+  toolIndexRedeploy: {
+    fixtures: "actors",
+    file: "tool-index-redeploy.spec.ts",
+    title: "a deploy changes a profile's MCP tools and its setup settles without a profile update",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("Hosted profiles and deployment API scenario"),
+    },
   },
   appDeclarations: {
     fixtures: "actors",
