@@ -145,6 +145,19 @@ layer(HostedLive, { excludeTestServices: true })("Billing polling", (it) => {
         expect(visible, "billing reconciles while visible").toBeGreaterThan(0);
         expect(visible, "billing reads while visible").toBeLessThanOrEqual(idleReadLimit);
 
+        // A poll due at the end of a clock step reads while visible, but the read waits out the
+        // page's batch window, a timer on this clock, and so starts on the next step. Hiding then
+        // would count it as a hidden read. Hide right after a visible poll's read instead: the next
+        // poll is due 30 simulated seconds after that one, several steps into the hidden window.
+        const beforePoll = reads;
+        yield* Effect.gen(function* () {
+          for (let elapsed = 0; reads === beforePoll; elapsed += step) {
+            if (elapsed >= idleMinutes * 60_000)
+              return yield* Effect.die(`No billing read in ${idleMinutes} visible minutes`);
+            yield* advance("Visible until the next poll", step);
+          }
+        });
+        yield* settled;
         yield* setHidden(true);
         const hidden = yield* measure("hidden-idle", advance("Hidden idle", idleMinutes * 60_000));
         expect(hidden, "billing reads while hidden").toBe(0);

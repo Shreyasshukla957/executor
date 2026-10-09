@@ -267,7 +267,9 @@ export const scenarios = plan({
     targets: {
       "self-host": scheduled,
       cloud: na("Cloudflare unloads Cloud's app Workers itself."),
-      local: na("Local is covered by the local in-flight budget scenario."),
+      local: na(
+        "Self-host covers the shared runner's Worker residency; the local budget scenario covers local's limit.",
+      ),
     },
   },
   appDataFacetUnloaded: {
@@ -277,7 +279,9 @@ export const scenarios = plan({
     targets: {
       "self-host": scheduled,
       cloud: na("Cloudflare unloads Cloud's facet Workers itself."),
-      local: na("Local is covered by the local replaced facet scenario."),
+      local: na(
+        "Self-host covers the shared runner's facet unloading; the local budget scenario covers local's limit.",
+      ),
     },
   },
   localAppWorkerBudget: {
@@ -285,16 +289,6 @@ export const scenarios = plan({
     title:
       "local keeps at most the configured number of app Workers loaded as apps and account selections grow",
     serverEnvironment: { EXECUTOR_APP_WORKERS: String(appWorkerBudgetLimit) },
-    targets: {
-      local: scheduled,
-      "self-host": na("Hosted budgets are covered through organization routes."),
-      cloud: na("Cloudflare unloads Cloud's app Workers itself."),
-    },
-  },
-  localAppWorkerBudgetInFlight: {
-    file: "app-worker-budget.spec.ts",
-    title: "local never unloads an app Worker with a call in flight above the configured limit",
-    serverEnvironment: { EXECUTOR_APP_WORKERS: "1" },
     targets: {
       local: scheduled,
       "self-host": na("Hosted budgets are covered through organization routes."),
@@ -2218,19 +2212,11 @@ export const scenarios = plan({
     targets: {
       "self-host": scheduled,
       cloud: na(
-        "Cloud builds are read from R2 through the Cache API, which a scenario cannot make unreadable; the shared runner's recovery is covered on self-host and local.",
+        "Cloud builds are read from R2 through the Cache API, which a scenario cannot make unreadable; the shared runner's recovery is covered on self-host.",
       ),
-      local: na("Local cold start failures are covered by the local cold start failure scenario."),
-    },
-  },
-  localAppColdStartFailure: {
-    file: "local-app-worker-reuse.spec.ts",
-    title:
-      "a local app Worker whose cold start failed loads on the next call once its build is readable",
-    targets: {
-      local: scheduled,
-      "self-host": na("Hosted cold start failures are covered through organization routes."),
-      cloud: na("Hosted cold start failures are covered through organization routes."),
+      local: na(
+        "Self-host covers the shared runner's cold start recovery; the local reuse scenario covers local's app Workers.",
+      ),
     },
   },
   appBuildLoads: {
@@ -2241,7 +2227,9 @@ export const scenarios = plan({
     targets: {
       "self-host": scheduled,
       cloud: managedCloud,
-      local: na("Local build loads are covered by the local build load scenario."),
+      local: na(
+        "Self-host covers the shared build loader; the local reuse scenario covers local's app Workers.",
+      ),
     },
   },
   appWorkerAttribution: {
@@ -2252,16 +2240,6 @@ export const scenarios = plan({
       "self-host": na("Only Cloud's Worker Loader bills each loaded Worker."),
       cloud: managedCloud,
       local: na("Only Cloud's Worker Loader bills each loaded Worker."),
-    },
-  },
-  localAppBuildLoads: {
-    file: "local-app-worker-reuse.spec.ts",
-    title:
-      "local warm app calls load no build, and accounts sharing or neighbouring a Worker keep their own credentials",
-    targets: {
-      local: scheduled,
-      "self-host": na("Hosted build loads are covered through organization routes."),
-      cloud: na("Hosted build loads are covered through organization routes."),
     },
   },
   appWorkerOAuthRefresh: {
@@ -2282,17 +2260,9 @@ export const scenarios = plan({
     targets: {
       "self-host": scheduled,
       cloud: na("Cloudflare unloads Cloud's app Workers itself."),
-      local: na("Local is covered by the local release scenario."),
-    },
-  },
-  localAppWorkerReleaseHeld: {
-    file: "app-worker-budget.spec.ts",
-    title: "local keeps an app Worker whose release outlives its limit loaded until it settles",
-    serverEnvironment: { EXECUTOR_APP_WORKERS: "1" },
-    targets: {
-      local: scheduled,
-      "self-host": na("Hosted budgets are covered through organization routes."),
-      cloud: na("Cloudflare unloads Cloud's app Workers itself."),
+      local: na(
+        "Self-host covers the shared runner's Worker residency; the local budget scenario covers local's limit.",
+      ),
     },
   },
   appDataFacetUnloadedAfterEviction: {
@@ -2302,25 +2272,9 @@ export const scenarios = plan({
     targets: {
       "self-host": scheduled,
       cloud: na("Cloudflare unloads Cloud's facet Workers itself."),
-      local: na("Local is covered by the local evicted supervisor scenario."),
-    },
-  },
-  localAppDataFacetUnloadedAfterEviction: {
-    file: "app-worker-budget.spec.ts",
-    title: "local unloads a data facet replaced after its supervisor was evicted",
-    targets: {
-      local: scheduled,
-      "self-host": na("Hosted facets are covered through organization routes."),
-      cloud: na("Cloudflare unloads Cloud's facet Workers itself."),
-    },
-  },
-  localAppDataFacetUnloaded: {
-    file: "app-worker-budget.spec.ts",
-    title: "local unloads a data facet replaced for other accounts",
-    targets: {
-      local: scheduled,
-      "self-host": na("Hosted facets are covered through organization routes."),
-      cloud: na("Cloudflare unloads Cloud's facet Workers itself."),
+      local: na(
+        "Self-host covers the shared runner's facet unloading; the local budget scenario covers local's limit.",
+      ),
     },
   },
   oauthRefreshResilience: {
@@ -4542,7 +4496,7 @@ export const scenarios = plan({
     targets: {
       "self-host": scheduled,
       cloud: scheduled,
-      local: na("Local runs the same execution driver in its own scenario."),
+      local: na("Hosted self-host covers the shared execution driver."),
     },
   },
   mcpExecuteRefreshNotAwaited: {
@@ -4552,7 +4506,7 @@ export const scenarios = plan({
     targets: {
       "self-host": scheduled,
       cloud: scheduled,
-      local: na("Local runs the same execution driver in its own scenario."),
+      local: na("Hosted self-host covers the shared execution driver."),
     },
   },
   mcpExecuteUnavailableApp: {
@@ -4615,24 +4569,6 @@ export const scenarios = plan({
       "self-host": scheduled,
       cloud: na("The refusing MCP server is a loopback listener."),
       local: na("Hosted self-host covers the shared app runtime error mapping."),
-    },
-  },
-  localMcpExecuteApprovalAfterRefresh: {
-    file: "mcp-execute-failures.spec.ts",
-    title: "Local MCP approvals are requested without waiting for background cache refreshes",
-    targets: {
-      local: scheduled,
-      "self-host": na("Hosted products use the organization scenario."),
-      cloud: na("Hosted products use the organization scenario."),
-    },
-  },
-  localMcpExecuteRefreshNotAwaited: {
-    file: "mcp-execute-failures.spec.ts",
-    title: "Local MCP executions return without waiting for background cache refreshes",
-    targets: {
-      local: scheduled,
-      "self-host": na("Hosted products use the organization scenario."),
-      cloud: na("Hosted products use the organization scenario."),
     },
   },
   patMcpInFlight: {

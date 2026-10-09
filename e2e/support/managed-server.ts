@@ -120,10 +120,38 @@ export const startManagedServer = (
       EXECUTOR_ANALYTICS_TEST_PORT: String(analyticsPort),
       ...environment,
     };
+    // On Windows every signal terminates at once, so the scope's tree kill stays the only stop.
+    const stopRequests = process.platform !== "win32";
+    // Ask the product alone to stop, as the self-host image's supervisor does, so its own shutdown
+    // flushes its telemetry before it stops the collector it started. A signal to its whole
+    // process group stopped the collector first, and the product then spent its 3-second export
+    // budget retrying. Releasing the process scope afterwards ends anything it left behind.
+    const shutdown = Effect.suspend(() => {
+      const child = running;
+      if (child === undefined || !stopRequests) return Effect.void;
+      // The request goes through a pipe only the product holds (see stop-request.mjs), not to its
+      // PID: once the product is reaped, its PID can name another process before its handle
+      // reports the exit. A write to a product that already exited never completes, so the
+      // product's exit ends the wait whether or not its request was delivered.
+      const request = Stream.run(Stream.make(new Uint8Array([1])), child.getInputFd(3)).pipe(
+        Effect.ignore,
+        Effect.andThen(Effect.never),
+      );
+      return child.exitCode.pipe(
+        Effect.ignore,
+        Effect.raceFirst(request),
+        Effect.timeoutOption("15 seconds"),
+        Effect.flatMap((exited) =>
+          Option.isSome(exited) ? Effect.void : child.kill({ killSignal: "SIGKILL" }),
+        ),
+        Effect.ignore,
+      );
+    });
     const stop = Effect.suspend(() =>
       current === undefined
         ? Effect.void
-        : Scope.close(current, Exit.succeed(undefined)).pipe(
+        : shutdown.pipe(
+            Effect.andThen(Scope.close(current, Exit.succeed(undefined))),
             Effect.tap(() =>
               Effect.sync(() => {
                 current = undefined;
@@ -144,6 +172,9 @@ export const startManagedServer = (
               // Bun accepts Node's --import preload, so self-host can advance wall time too.
               "--import",
               new URL("./wall-clock.mjs", import.meta.url).href,
+              ...(stopRequests
+                ? ["--import", new URL("./stop-request.mjs", import.meta.url).href]
+                : []),
               ...entry.command,
             ],
             {
@@ -152,6 +183,7 @@ export const startManagedServer = (
               env,
               stdout: "pipe",
               stderr: "pipe",
+              ...(stopRequests ? { additionalFds: { fd3: { type: "input" } } } : {}),
               killSignal: "SIGTERM",
               forceKillAfter: "15 seconds",
             },

@@ -510,25 +510,4 @@ layer(TestLive, { excludeTestServices: true })("Local app Worker budget", (it) =
   it.effect(scenarios.localAppWorkerBudget.title, (context) =>
     withCase(context, localSelections(beyondLimit).pipe(Effect.flatMap(boundedByConfiguration))),
   );
-  it.effect(scenarios.localAppWorkerBudgetInFlight.title, (context) =>
-    withCase(context, localSelections(inFlight).pipe(Effect.flatMap(inFlightKept))),
-  );
-  it.effect(
-    scenarios.localAppWorkerReleaseHeld.title,
-    (context) =>
-      withCase(context, localSelections(releaseHeld).pipe(Effect.flatMap(releaseKeptPastItsLimit))),
-    { timeout: 120_000 },
-  );
-  it.effect(scenarios.localAppDataFacetUnloaded.title, (context) =>
-    withCase(context, localSelections(replacedFacets).pipe(Effect.flatMap(replacedFacetUnloaded))),
-  );
-  it.effect(
-    scenarios.localAppDataFacetUnloadedAfterEviction.title,
-    (context) =>
-      withCase(
-        context,
-        localSelections(replacedFacets).pipe(Effect.flatMap(replacedFacetUnloadedAfterEviction)),
-      ),
-    { timeout: 180_000 },
-  );
 });
