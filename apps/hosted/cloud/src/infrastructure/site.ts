@@ -3,6 +3,7 @@ import * as Command from "alchemy/Command";
 import { AlchemyContext } from "alchemy/AlchemyContext";
 import { Stage } from "alchemy/Stage";
 import { Effect, Option } from "effect";
+import { chatGptSettings } from "../implementation/chatgpt-sign-in.ts";
 import { postHogBindings } from "./posthog.ts";
 import { sentryBindings } from "./sentry.ts";
 import { cloudHosts } from "./stage.ts";
@@ -15,7 +16,8 @@ export const cloudSite = Effect.gen(function* () {
   // stage when deployed, and the development process's own setting otherwise.
   const environment = (yield* AlchemyContext).dev ? {} : { EXECUTOR_ENVIRONMENT: yield* Stage };
   // The site is served from the edge (`executor.sh`), its canonical origin; sign-in links open
-  // the browser origin (`app.executor.sh`).
+  // the browser origin (`app.executor.sh`). `/api/*` on the edge belongs to v1, so the site reads
+  // the public app registry from the API host (`api.executor.sh`).
   const hosts = yield* cloudHosts.pipe(Effect.orDie);
   return yield* Command.Build("Site", {
     cwd: "../../..",
@@ -30,6 +32,11 @@ export const cloudSite = Effect.gen(function* () {
         onSome: (roles) => roles.edge,
       }),
       EXECUTOR_APP_ORIGIN: hosts.browser,
+      EXECUTOR_API_ORIGIN: Option.match(hosts.roles, {
+        onNone: () => hosts.deployment,
+        onSome: (roles) => roles.origins.api,
+      }),
+      VITE_CHATGPT_SIGN_IN: String(Option.isSome(yield* chatGptSettings.pipe(Effect.orDie))),
     },
   });
 });

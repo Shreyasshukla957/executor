@@ -301,6 +301,11 @@ Cloudflare, PlanetScale, Google, GitHub, Context.dev, or 1Password credentials
 are needed. Docker must be running; Bun, Playwright Chromium and ffmpeg are
 normal tool prerequisites.
 
+The run waits for the Worker's `/health` to answer 200. It fails at once when
+Alchemy reports that a resource could not start, and otherwise after ten
+minutes. Each probe has its own ten-second limit. The Worker's output is in
+the run directory's `cloud/cloud.log`.
+
 The run removes its Postgres container when it ends, including after a failed or
 interrupted start; under load Docker can finish creating a container long after
 the run has stopped waiting for it. Each container is labelled with

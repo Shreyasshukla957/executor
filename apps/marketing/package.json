@@ -4,7 +4,6 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./experiments": "./src/content/hero-experiment.ts",
     "./site-origin": "./src/content/site-origin.ts",
     "./error-reporting": "./src/error-reporting.ts",
     "./script-assets": "./src/script-assets.ts"

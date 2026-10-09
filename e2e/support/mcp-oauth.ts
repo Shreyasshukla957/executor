@@ -26,6 +26,8 @@ interface Authorized {
   readonly grantId: string;
   readonly resource: string;
   readonly consentId: string;
+  /** The trace of the authorization code exchange, so its server span can be found exactly. */
+  readonly codeExchangeTraceId: string;
 }
 /** A real OAuth grant; credentials cannot appear in assertion diagnostics. */
 export interface Grant extends Authorized {
@@ -214,11 +216,16 @@ const make = Effect.gen(function* () {
   const hosts = targetHosts(target);
   // Cloud names its issuer on the edge (`executor.sh`), with every endpoint on the browser origin.
   const issuer = `${target.metadata.target === "cloud" ? hosts.edge : origin}/api/auth`;
+  /** Each exchange runs under a new trace of its own. */
   const exchange = (fields: Record<string, string>, tokenOrigin: string = hosts.browser) =>
     Effect.scoped(
       Effect.gen(function* () {
+        const traceId = randomBytes(16).toString("hex");
         const response = yield* http.execute(
           HttpClientRequest.post(`${tokenOrigin}/api/auth/oauth2/token`).pipe(
+            HttpClientRequest.setHeaders({
+              traceparent: `00-${traceId}-${randomBytes(8).toString("hex")}-01`,
+            }),
             HttpClientRequest.bodyUrlParams(fields),
           ),
         );
@@ -227,9 +234,10 @@ const make = Effect.gen(function* () {
         yield* evidence.json(`oauth-${fields.grant_type}-${response.status}.json`, {
           status: response.status,
         });
-        return { status: response.status, body: value };
+        return { status: response.status, body: value, traceId };
       }),
     ).pipe(
+      Effect.provideService(HttpClient.TracerPropagationEnabled, false),
       Effect.timeout("30 seconds"),
       Effect.mapError(() => new OAuthFailed({ operation: "token exchange", status: 0 })),
     );
@@ -466,6 +474,7 @@ const make = Effect.gen(function* () {
           grantId: grant.grant.id,
           resource: resourceUrl,
           consentId: consent.id,
+          codeExchangeTraceId: exchanged.traceId,
         } satisfies Authorized,
         exchanged,
       };

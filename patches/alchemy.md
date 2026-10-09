@@ -44,6 +44,21 @@ and the Bun TypeScript entry points (`src/`). It carries:
   Plugins' `watchChange` hooks are not called; alchemy's own, which reports
   the rebuild, is the only one in use. Linux keeps rolldown's watcher. Drop
   this part when rolldown watches without per-directory descriptors on macOS.
+- **One first build at a time.** `Bundle.watch` waits for its turn before a
+  watcher's first build and gives it up when that build ends or fails, when
+  the watcher closes or cannot start (it then reports the error), and after
+  60 s at the latest: a first build that hangs keeps running, but the next one
+  starts beside it and the sidecar logs a warning. A watcher closed while it
+  waits leaves the queue at once. `e2e/tests/alchemy-first-builds.spec.ts`
+  (`bun run e2e:alchemy-first-builds`, in the `check` job) checks these under
+  Node (`lib/`) and Bun (`src/`). The dev sidecar starts every local Worker's watcher at once,
+  and rolldown already spreads each build over every core, so seventeen Cloud
+  Workers building side by side only multiplied memory: the sidecar reached
+  8-10.6 GB, the kernel killed it when several local Clouds started on one
+  host, and every Worker failed with `WebSocket connection failed`. One at a
+  time it peaks at 4-4.7 GB and starts as fast. Rebuilds after an edit and
+  deploy builds (`Bundle.build`) do not wait. Drop this part when alchemy
+  bounds concurrent first builds itself.
 
 Upstream beta.80 now provides what the beta.79 patch also carried: storing a
 no-op resource before signalling dependents

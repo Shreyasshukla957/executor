@@ -142,7 +142,7 @@ export const lastOrganizationAtom = Atom.make<LastOrganization | null>(null).pip
 
 /** Better Auth creates the OAuth state and redirects to the chosen provider. */
 export const signInAtom = BrowserAtoms.fn(
-  (input: { provider: "google" | "github"; redirect: string }) =>
+  (input: { provider: "google" | "github" | "openai"; redirect: string }) =>
     authRequest((options) =>
       authClient.signIn.social(
         {
@@ -150,7 +150,9 @@ export const signInAtom = BrowserAtoms.fn(
           callbackURL: signInCallback(input.redirect),
           errorCallbackURL: `/login?redirect=${encodeURIComponent(input.redirect)}`,
         },
-        options,
+        input.provider === "openai"
+          ? { ...options, headers: { ...options.headers, "x-skip-oauth-proxy": "true" } }
+          : options,
       ),
     ).pipe(Effect.withSpan("ui.auth.signIn"), Effect.asVoid),
 );

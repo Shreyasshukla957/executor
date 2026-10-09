@@ -354,7 +354,8 @@ layer(HostedLive, { excludeTestServices: true })("Cloud role hosts", (it) => {
           ).toEqual({
             address: url.hostname,
             role: request.role,
-            path: url.pathname,
+            // A matched route's path is its template; the request's own values are not recorded.
+            path: request.route ?? url.pathname,
             route: request.route,
           });
           // The path is recorded without its query string, and nothing else carries it.

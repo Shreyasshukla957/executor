@@ -42,7 +42,7 @@ import {
 } from "apps/ui/contracts";
 import { appAsset, appDocument, appWatchScript } from "apps/ui/serving";
 import { receiveBrowserTelemetry } from "@executor-js/telemetry/http";
-import { currentTraceContext } from "@executor-js/telemetry";
+import { currentTraceContext, recordRoute } from "@executor-js/telemetry";
 import { Clock, Context, Effect, Option, Redacted, Schema, Stream } from "effect";
 import { HttpApiBuilder } from "effect/http-api";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
@@ -501,6 +501,8 @@ export const hostedAppUi = <R = never>(
     });
   }).pipe(htmlFailure);
   const page = Effect.gen(function* () {
+    // The app chose its pages' paths.
+    yield* recordRoute("/:page");
     const request = yield* HttpServerRequest.HttpServerRequest;
     const host = addresses.fromHost(request.headers.host);
     if (Option.isSome(host) && anonymousNonNavigation(request, sessionCookie(host.value.origin)))
@@ -692,6 +694,8 @@ export const hostedAppUi = <R = never>(
     htmlFailure,
   );
   const asset = Effect.gen(function* () {
+    // The app's build chose its assets' file names.
+    yield* recordRoute("/_executor/assets/:deployment/:asset");
     const current = yield* authorize;
     const params = yield* HttpRouter.schemaPathParams(
       Schema.Struct({ deployment: DeploymentId, "*": Schema.NonEmptyString }),

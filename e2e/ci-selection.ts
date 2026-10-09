@@ -69,38 +69,58 @@ const catalogScale =
  */
 const flakyProfilePicker = "profile picker keeps scalar and array choices isolated across tabs";
 
-/** Each output feeds one `--test-name` in checks.yml. Full runs use these patterns unchanged. */
+/**
+ * Each output feeds one `--test-name` in checks.yml. Full runs use these patterns unchanged.
+ *
+ * A full run splits a job with `shards` into that many parts by spec file (see `split`), each on
+ * its own runner with the usual number of workers. The functional self-host suite keeps a 16-vCPU
+ * runner busy for about ten minutes, and the local suite for about six; split, each part finishes
+ * in about four. A selection runs on one runner: the extra runners' setup would cost more than
+ * its files take.
+ *
+ * Each Cloud job starts its own local Cloud. Those with the same `runner` run one after another on
+ * one e2e-cloud runner, about four minutes of steps on each of the three on a full run; the
+ * runners run at once. Keep them about even when adding a job.
+ */
 const jobs = {
-  local: { target: "local", pattern: `^(?!.*${claude})` },
+  local: { target: "local", pattern: `^(?!.*${claude})`, shards: 2 },
   "self-host": {
     target: "self-host",
     pattern: `^(?!.*(?:${claude}|${inventoryLoad}|${catalogScale}|${flakyProfilePicker}))`,
+    shards: 3,
   },
   "self-host-inventory": { target: "self-host", pattern: inventoryLoad },
   "self-host-catalog": { target: "self-host", pattern: catalogScale },
   // Other Cloud scenarios run against deployed stages after merge.
   cloud: {
     target: "cloud",
+    runner: 1,
+
     pattern:
-      "Cloud onboarding|Cloud sign-in (?:keeps a new v1|skips the v1 check)|Cloud OAuth callbacks|Cloud product events|Cloud feedback|Cloud tracks an unusable OAuth|app query traces|observability retains|browser decode and startup|Browser connection failures explain|optimistic replay failures|private app crash reports|Platform admin impersonation|Cloud reports the framework pin|Cloud deploys fail promptly when the compiler does not answer|refuses every stored state Better Auth refuses|Billing reconciles only while visible|A dashboard read refreshed while in flight|Cloud finishes a slow app's tool listing|Cloud remembers a stalled tool listing|Cloud keeps each JSON Schema definition a tool listing repeats once|definitions share a name and length but not their JSON|definition names are long and of one length|Cloud MCP session objects (?:hold|make)|Cloud MCP request spans say whether|database failure while verifying an API key|Cloud cron wakes the schedule coordinator|Cloud runs a due schedule and requested profile setup while|app evaluation failures explain the likely cause|client request rejections are recorded on their request span|failure text reaches its caller|an app request Executor's network failed to send|MCP tool calls deliver their tool name and outcome|Executor time|Cloud serves a tool listing its isolate cannot keep|Cloud writes the background refresh of a stale tool listing|Owners delete an organization with every app|Hosted MCP negotiates older protocol versions|Hosted MCP ends a cancelled call|Cloud copies each build's browser files",
+      "Cloud onboarding|Cloud sign-in (?:keeps a new v1|skips the v1 check)|Cloud OAuth callbacks|Cloud OAuth token requests record|Cloud product events|Cloud feedback|Cloud tracks an unusable OAuth|app query traces|observability retains|browser decode and startup|Browser connection failures explain|optimistic replay failures|private app crash reports|Platform admin impersonation|Cloud reports the framework pin|Cloud deploys fail promptly when the compiler does not answer|refuses every stored state Better Auth refuses|Billing reconciles only while visible|A dashboard read refreshed while in flight|Cloud finishes a slow app's tool listing|Cloud remembers a stalled tool listing|Cloud keeps each JSON Schema definition a tool listing repeats once|definitions share a name and length but not their JSON|definition names are long and of one length|Cloud MCP session objects (?:hold|make)|Cloud MCP request spans say whether|database failure while verifying an API key|Cloud cron wakes the schedule coordinator|Cloud runs a due schedule and requested profile setup while|app evaluation failures explain the likely cause|client request rejections are recorded on their request span|failure text reaches its caller|an app request Executor's network failed to send|MCP tool calls deliver their tool name and outcome|Executor time|Cloud serves a tool listing its isolate cannot keep|Cloud writes the background refresh of a stale tool listing|Owners delete an organization with every app|Hosted MCP negotiates older protocol versions|Hosted MCP ends a cancelled call|Cloud copies each build's browser files|Hosted dashboard runs of approval-gated tools|Hosted dashboard approval",
   },
   // The scenarios above share one local Cloud and collector, and their span and latency checks
   // stall when more scenarios load it. These assert no such bound, so they start their own.
   "cloud-product": {
     target: "cloud",
+    runner: 3,
+
     pattern:
-      "Cloud SSO SAML accepts|Safari reports only the page's own failures|Cloud cron triggers run their jobs|Cloud support dialog lists every channel|Hosted feedback enforces its API contract|Executor's catalog calls an app's own cache methods|Executor app is installed by its request|Request and workflow attempts at one team|remote skill catalog|a skill read without a revision|abandons a GitHub skills load",
+      "Cloud SSO SAML accepts|Safari reports only the page's own failures|Cloud cron triggers run their jobs|Cloud support dialog lists every channel|Hosted feedback enforces its API contract|Executor's catalog calls an app's own cache methods|Executor app is installed by its request|Request and workflow attempts at one team|remote skill catalog|a skill read without a revision|abandons a GitHub skills load|another organization's admin cannot read the link|account connections cannot cross organizations|Deploys wake profile setup",
   },
   // Cloud's hosts: role hosts, the edge and sign-in on `app.`. Run in `cloud-product`, their
   // load kept the team installation's workflow span from arriving within its 30-second wait, so
   // they start their own local Cloud too.
   "cloud-domains": {
     target: "cloud",
+    runner: 3,
     pattern:
-      "cloud role hosts serve only|a grant is for its one resource|role host resource seed|Cloud request spans name the host|Cloud sign-in explains that a passkey|Cloud connected-account sign-ins return through|Cloud serves its site for the edge|Cloud's API host serves the SDK|Cloud's own social sign-ins on app\\.",
+      "cloud role hosts serve only|a grant is for its one resource|role host resource seed|Cloud request spans name the host|Cloud sign-in explains that a passkey|Cloud connected-account sign-ins return through|Cloud serves its site for the edge|keep serving the published skills index|Apps directory on the edge reads|Cloud's API host serves the SDK|Cloud's own social sign-ins on app\\.|hosted wildcard routes trace their template",
   },
   "cloud-workers": {
     target: "cloud",
+    runner: 2,
+
     pattern:
       "app Workers stay loaded across credential rotation|workflow runs reuse the app Worker|warm app calls load no build|Cold app Workers reuse a build|a cold app Worker receives only the modules|Cold app Workers read their build in the runner|A cold app load links its small build record|Apps on the same apps release store its framework|Builds on two apps releases each link",
   },
@@ -108,22 +128,27 @@ const jobs = {
   // Removal recovery also needs the alarm and the removal job to itself while it holds one.
   "cloud-locks": {
     target: "cloud",
+    runner: 2,
+
     pattern: "A Better Auth query|Cloud starts organization removals whose Workflow start stalled",
   },
   // This counts every request in local Cloud's single session object isolate, so another
   // scenario's MCP request in flight would change its count.
-  "cloud-isolate": { target: "cloud", pattern: "Cloud MCP session objects report" },
+  "cloud-isolate": { target: "cloud", runner: 1, pattern: "Cloud MCP session objects report" },
   // Managed Cloud turns the per-address auth limit off; this job starts one with it on. Its
   // database scenarios lock the limit's table, which every request of this Cloud uses.
   "cloud-rate-limit": {
     target: "cloud",
+    runner: 3,
+
     cloudMode: "rate-limited",
     pattern:
-      "Cloud limits sign-in and OAuth client registration per address|Cloud counts two first requests from one address|Cloud reports a Better Auth query the database failed",
+      "Cloud limits sign-in and OAuth client registration per address|Cloud counts two first requests from one address|Cloud reports a Better Auth query the database failed|Cloud records a rate-limited OAuth token request",
   },
   // Managed Cloud serves sign-in on `app.`; this job starts one with the rollback switch on.
   "cloud-rollback": {
     target: "cloud",
+    runner: 2,
     cloudMode: "rolled-back",
     pattern:
       "Cloud's rollback switch serves sign-in|Cloud's own social sign-ins under the rollback switch",
@@ -131,12 +156,14 @@ const jobs = {
   // Managed Cloud is the OAuth proxy's production; this job runs a test stage signing in through it.
   "cloud-oauth-proxy-preview": {
     target: "cloud",
+    runner: 3,
     cloudMode: "oauth-proxy-preview",
     pattern: "A test stage signs in through production's OAuth proxy",
   },
 } as const satisfies Record<
   string,
-  { target: typeof Target.Type; cloudMode?: CloudMode; pattern: string }
+  | { target: "local" | "self-host"; pattern: string; shards?: number }
+  | { target: "cloud"; cloudMode?: CloudMode; runner: number; pattern: string }
 >;
 
 /** The plan a job's run sees: its Cloud mode decides which Cloud scenarios are scheduled. */
@@ -146,6 +173,8 @@ const specFiles: ReadonlySet<string> = new Set(
   scenariosForSuite("all").map((scenario) => scenario.file),
 );
 const escape = (title: string) => title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** A pattern that matches exactly these titles. */
+const exactly = (titles: ReadonlyArray<string>) => `^(?:${titles.map(escape).join("|")})$`;
 /** The titles of the scenarios a plan schedules on a target whose title a pattern matches. */
 const runs = (
   plan: ReturnType<typeof scenariosForSuite>,
@@ -172,6 +201,32 @@ const deployedRuns = runs(scenariosForSuite("all", "attached"), "cloud", deploye
 const fileOf: ReadonlyMap<string, string> = new Map(
   Object.values(scenarios).map((scenario) => [scenario.title, scenario.file]),
 );
+/**
+ * Scenarios split into at most `count` parts, by spec file: a file's scenarios share its setup, so
+ * they stay in one part. Each file goes, most scenarios first, to the part with the least weight
+ * so far, weighing a file as its scenarios plus one for its setup. Over four full self-host runs,
+ * the slowest of three parts took 2-9% longer than an even split of the measured time; Vitest's
+ * --shard, which splits by a hash of the path, left one part up to 33% over.
+ */
+const split = (titles: ReadonlyArray<string>, count: number) => {
+  const byFile = new Map<string, Array<string>>();
+  for (const title of titles) {
+    const file = fileOf.get(title)!;
+    byFile.set(file, [...(byFile.get(file) ?? []), title]);
+  }
+  const parts = Array.from({ length: Math.min(count, byFile.size) }, () => ({
+    weight: 0,
+    titles: new Array<string>(),
+  }));
+  for (const [, scenarios] of [...byFile].sort(
+    ([a, x], [b, y]) => y.length - x.length || a.localeCompare(b),
+  )) {
+    const lightest = parts.reduce((least, part) => (part.weight < least.weight ? part : least));
+    lightest.weight += scenarios.length + 1;
+    lightest.titles.push(...scenarios);
+  }
+  return parts.map((part) => part.titles);
+};
 /** Spec files with a scenario that one of these jobs runs on a full run. */
 const jobFiles: ReadonlySet<string> = new Set(
   jobRuns.flatMap(({ titles }) => [...titles].map((title) => fileOf.get(title)!)),
@@ -488,6 +543,9 @@ const PackageScripts = Schema.Struct({ scripts: Schema.Record(Schema.String, Sch
  * literal so e2e/check-boundary.ts can check it; a config missing here fails the selection.
  */
 const suiteConfigs: Record<string, () => Promise<unknown>> = {
+  "alchemy-dev-output.config.ts": () => import("./alchemy-dev-output.config.ts"),
+  "alchemy-first-builds.config.ts": () => import("./alchemy-first-builds.config.ts"),
+  "chatgpt-sign-in.config.ts": () => import("./chatgpt-sign-in.config.ts"),
   "apps-published.config.ts": () => import("./apps-published.config.ts"),
   "billing.config.ts": () => import("./billing.config.ts"),
   "ci-selection.config.ts": () => import("./ci-selection.config.ts"),
@@ -499,6 +557,7 @@ const suiteConfigs: Record<string, () => Promise<unknown>> = {
   "local-bootstrap.config.ts": () => import("./local-bootstrap.config.ts"),
   "pglite.config.ts": () => import("./pglite.config.ts"),
   "prepare-cache.config.ts": () => import("./prepare-cache.config.ts"),
+  "release-archives.config.ts": () => import("./release-archives.config.ts"),
   "typecheck-runner.config.ts": () => import("./typecheck-runner.config.ts"),
   "welcome-email.config.ts": () => import("./welcome-email.config.ts"),
 };
@@ -939,9 +998,43 @@ NodeRuntime.runMain(
             ? added.length === 0
               ? pattern
               : `${pattern}|^(?:${added.map(escape).join("|")})$`
-            : `^(?:${titles.map(escape).join("|")})$`;
-      return { job, count: titles.length, selected };
+            : exactly(titles);
+      // Each runner pays its own setup, so only a full run splits a job.
+      const parts =
+        !("shards" in definition) || titles.length === 0
+          ? []
+          : files === undefined
+            ? split(titles, definition.shards).map(exactly)
+            : [selected];
+      const shards = parts.map((part, index) => ({
+        shard: `${index + 1}/${parts.length}`,
+        pattern: part,
+      }));
+      return { job, definition, count: titles.length, selected, shards };
     });
+    // One e2e-cloud runner for each `runner` number with a selected job. Each matrix entry carries
+    // every Cloud job's pattern, empty for a job on another runner, so its steps read their own.
+    const cloud = selections.flatMap(({ job, definition, selected }) =>
+      definition.target === "cloud" ? [{ job, runner: definition.runner, selected }] : [],
+    );
+    const cloudRunners = [...new Set(cloud.map(({ runner }) => runner))]
+      .sort((a, b) => a - b)
+      .flatMap((runner) => {
+        const on = cloud.filter((entry) => entry.runner === runner && entry.selected !== "");
+        return on.length === 0
+          ? []
+          : [
+              {
+                name: on.map(({ job }) => job).join(", "),
+                ...Object.fromEntries(
+                  cloud.map((entry) => [entry.job, entry.runner === runner ? entry.selected : ""]),
+                ),
+              },
+            ];
+      });
+    const cloudRunnerOf = new Map(
+      cloudRunners.flatMap(({ name }) => name.split(", ").map((job) => [job, name])),
+    );
     // GitHub shows these on the pull request's checks, where a summary line is easy to miss.
     const deployedOnlyCommand = `bun run e2e:deployed --test-name '^(?:${deployedOnlyUnrun.map(escape).join("|")})$'`;
     for (const title of deployedOnlyUnrun)
@@ -949,7 +1042,15 @@ NodeRuntime.runMain(
         `::warning title=Runs only on deployed Cloud after merge::${fileOf.get(title)}: "${title}" changed, but only a deployed stage can run it. Run it before merging: ${deployedOnlyCommand}`,
       );
 
-    const lines = selections.map(({ job, selected }) => `${job}=${selected}`).join("\n");
+    const lines = [
+      ...selections.map(({ job, selected }) => `${job}=${selected}`),
+      ...selections.flatMap(({ job, definition, shards }) =>
+        "shards" in definition
+          ? [`${job}-shards=${shards.length === 0 ? "" : JSON.stringify(shards)}`]
+          : [],
+      ),
+      `cloud-runners=${cloudRunners.length === 0 ? "" : JSON.stringify(cloudRunners)}`,
+    ].join("\n");
     const report = [
       "## E2E selection",
       "",
@@ -991,9 +1092,19 @@ NodeRuntime.runMain(
         ? []
         : ["", `A guarded file differs from main, so its guards run: ${guardedByFile.join(", ")}`]),
       "",
-      "| Job | Scenarios |",
-      "| --- | --- |",
-      ...selections.map(({ job, count }) => `| ${job} | ${count === 0 ? "skipped" : count} |`),
+      "| Job | Scenarios | Runners |",
+      "| --- | --- | --- |",
+      ...selections.map(({ job, definition, count, shards }) =>
+        count === 0
+          ? `| ${job} | skipped | |`
+          : `| ${job} | ${count} | ${
+              definition.target === "cloud"
+                ? `e2e-cloud (${cloudRunnerOf.get(job)})`
+                : shards.length > 1
+                  ? `${shards.length}, split by spec file`
+                  : "1"
+            } |`,
+      ),
       "",
     ].join("\n");
     yield* Console.log(report);

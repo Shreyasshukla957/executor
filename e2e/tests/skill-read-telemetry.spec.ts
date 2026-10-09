@@ -1,4 +1,7 @@
-/** Skill reads record which Executor skill an agent read, and nothing that names a customer's skill. */
+/**
+ * Skill reads record which Executor skill an agent read, and nothing that names a customer's skill:
+ * the request's span records the route's template, not the skill's name from its path.
+ */
 import { expect, layer } from "@effect/vitest";
 import { Effect, Redacted, Schedule, Schema } from "effect";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -41,6 +44,11 @@ const customerFiles = (marker: string) => [
     content: `---\nname: executor\ndescription: Synthetic ${marker} guide.\n---\n# ${marker}\n`,
   },
   { path: "skills/executor/feedback.md", content: `Synthetic ${marker} notes.\n` },
+  // A skill named after the marker, whose name is in the read's path.
+  {
+    path: `skills/${marker}/SKILL.md`,
+    content: `---\nname: ${marker}\ndescription: Synthetic ${marker} skill.\n---\n# ${marker}\n`,
+  },
   appsManifest,
 ];
 
@@ -59,6 +67,12 @@ const expectCustomerRead = (tags: Tags, privateValues: ReadonlyArray<string>) =>
   });
   expect(tags).not.toHaveProperty("executor.skill.name");
   expect(tags).not.toHaveProperty("executor.skill.file");
+  for (const value of privateValues) expect(JSON.stringify(tags)).not.toContain(value);
+};
+
+/** A read's request span names its route by template only, with none of the path's values. */
+const expectTemplatedPath = (tags: Tags, route: string, privateValues: ReadonlyArray<string>) => {
+  expect({ path: tags["url.path"], route: tags["http.route"] }).toEqual({ path: route, route });
   for (const value of privateValues) expect(JSON.stringify(tags)).not.toContain(value);
 };
 
@@ -191,12 +205,29 @@ layer(HostedLive, { excludeTestServices: true })("Skill read telemetry", (it) =>
         expect(ownViaApi).toMatchObject(executorRead("app-authoring", "SKILL.md"));
         const theirsViaApi = yield* viaApi(customer.id, "executor", "file=feedback.md");
         expectCustomerRead(theirsViaApi, privateValues);
+        // The skill's name is in the path; the request's span records the route instead, and the
+        // organization by its ID.
+        const named = yield* api.request(
+          actors.owner,
+          "GET",
+          `${prefix}/apps/${customer.id}/skills/${marker}`,
+        );
+        expect(named.status, JSON.stringify(named.body)).toBe(200);
+        const route = "/api/organizations/:organization/apps/:app/skills/:name";
+        const namedRequest = yield* deliveredSpan(
+          yield* latestTrace,
+          "http.server GET",
+          (tags) => tags["http.route"] === route,
+        );
+        expectTemplatedPath(namedRequest, route, privateValues);
+        expect(namedRequest["executor.organization.id"]).toBe(actors.organization.id);
         yield* evidence.json("skill-read-spans.json", {
           list: listed.tags,
           own: own.tags,
           theirs: theirs.tags,
           ownViaApi,
           theirsViaApi,
+          namedRequest,
         });
       }).pipe(Effect.provide(McpClient.layer)),
     ),
@@ -267,12 +298,16 @@ layer(HostedLive, { excludeTestServices: true })("Skill read telemetry", (it) =>
         expect(ownViaApi).toMatchObject(executorRead("app-authoring", "SKILL.md"));
         const theirsViaApi = yield* viaApi(customer.id, "executor", "file=feedback.md");
         expectCustomerRead(theirsViaApi, privateValues);
+        // The skill's name is in the path; the request's span records the route instead.
+        const namedRequest = yield* viaApi(customer.id, marker, "");
+        expectTemplatedPath(namedRequest, "/v1/apps/:app/skills/:name", privateValues);
         yield* evidence.json("skill-read-spans.json", {
           list: listed.tags,
           own: own.tags,
           theirs: theirs.tags,
           ownViaApi,
           theirsViaApi,
+          namedRequest,
         });
       }).pipe(Effect.provide(McpClient.layer)),
     ),

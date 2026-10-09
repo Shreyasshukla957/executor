@@ -80,7 +80,7 @@ tools' hints. Quick-add MCP apps are generated with the MCP rule above.
 ## Remote MCP tools
 
 Import `mcpRouter` from `apps/mcp`. Add `@modelcontextprotocol/sdk` (currently
-`1.30.0`) to the app's `package.json` dependencies. The dashboard's quick add
+`1.32.1`) to the app's `package.json` dependencies. The dashboard's quick add
 generates this for public and OAuth servers. A public server needs no account:
 
 ```ts

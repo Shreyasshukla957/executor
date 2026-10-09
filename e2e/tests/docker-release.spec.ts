@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { expect, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  Clock,
   Config,
   Console,
   Effect,
@@ -633,91 +634,92 @@ http.createServer((request, response) => {
             ]);
             expect(observed.blockedConnections).toBe(0);
           }
-          const collector =
-            (restart ? runtime : initialRuntime) === "executor-host"
-              ? "http://127.0.0.1:4318"
-              : (yield* run(["exec", id, "cat", "/app/data/diagnostics/collector.json"]).pipe(
-                  Effect.flatMap(
-                    Schema.decodeUnknownEffect(
-                      Schema.fromJsonString(Schema.Struct({ url: Schema.String })),
+          // The image under test serves its collector only on a private Unix socket, which
+          // operators read through `executor-host telemetry`. An earlier image may still listen
+          // on loopback, or name its collector's port in collector.json.
+          const legacyCollector =
+            restart || initialImage === image
+              ? undefined
+              : initialRuntime === "executor-host"
+                ? "http://127.0.0.1:4318"
+                : (yield* run(["exec", id, "cat", "/app/data/diagnostics/collector.json"]).pipe(
+                    Effect.flatMap(
+                      Schema.decodeUnknownEffect(
+                        Schema.fromJsonString(Schema.Struct({ url: Schema.String })),
+                      ),
                     ),
-                  ),
-                )).url;
-          const delivered = yield* run([
-            "run",
-            "--rm",
-            "--network",
-            `container:${id}`,
-            "node:24-bookworm-slim",
-            "node",
-            "-e",
-            "fetch(process.argv[1]).then(r => r.text()).then(text => process.stdout.write(text))",
-            `${collector}/api/traces/${trace}/spans`,
-          ]).pipe(
-            Effect.flatMap(
-              Schema.decodeUnknownEffect(
-                Schema.fromJsonString(
-                  Schema.Struct({
-                    data: Schema.Array(
-                      Schema.Struct({
-                        span: Schema.Struct({
-                          serviceName: Schema.String,
-                          tags: Schema.Record(Schema.String, Schema.String),
+                  )).url;
+          const readCollector = (path: string) =>
+            legacyCollector === undefined
+              ? run(["exec", id, "executor-host", "telemetry", path])
+              : run([
+                  "run",
+                  "--rm",
+                  "--network",
+                  `container:${id}`,
+                  "node:24-bookworm-slim",
+                  "node",
+                  "-e",
+                  "fetch(process.argv[1]).then(r => r.text()).then(text => process.stdout.write(text))",
+                  `${legacyCollector}${path}`,
+                ]);
+          const spansOf = (traceId: string) =>
+            readCollector(`/api/traces/${traceId}/spans`).pipe(
+              Effect.flatMap(
+                Schema.decodeUnknownEffect(
+                  Schema.fromJsonString(
+                    Schema.Struct({
+                      data: Schema.Array(
+                        Schema.Struct({
+                          span: Schema.Struct({
+                            serviceName: Schema.String,
+                            tags: Schema.Record(Schema.String, Schema.String),
+                          }),
                         }),
-                      }),
-                    ),
-                  }),
+                      ),
+                    }),
+                  ),
                 ),
               ),
-            ),
-            Effect.flatMap((trace) =>
-              trace.data.some(
-                ({ span }) =>
-                  span.serviceName === "executor-selfhost" &&
-                  span.tags["service.version"] === expectedVersion,
-              )
-                ? Effect.succeed(trace)
-                : Effect.fail("Released version has not reached the collector"),
-            ),
-            Effect.retry({ schedule: Schedule.spaced("500 millis"), times: 30 }),
-          );
+              Effect.flatMap((trace) =>
+                trace.data.some(
+                  ({ span }) =>
+                    span.serviceName === "executor-selfhost" &&
+                    span.tags["service.version"] === expectedVersion,
+                )
+                  ? Effect.succeed(trace)
+                  : Effect.fail("Released version has not reached the collector"),
+              ),
+              Effect.retry({ schedule: Schedule.spaced("500 millis"), times: 30 }),
+            );
+          const delivered = yield* spansOf(trace);
           expect(
             delivered.data.some(({ span }) => span.tags["service.version"] === expectedVersion),
           ).toBe(true);
           if (!restart) beforeRestartTrace = trace;
           else if (runtime === "executor-host") {
             expect(beforeRestartTrace).toBeDefined();
+            // The host reports the collector's answer and exits with an error for any other
+            // status than 200.
             const discarded = yield* run([
-              "run",
-              "--rm",
-              "--network",
-              `container:${id}`,
-              "node:24-bookworm-slim",
-              "node",
-              "-e",
-              "fetch(process.argv[1]).then(r => process.stdout.write(String(r.status)))",
-              `${collector}/api/traces/${beforeRestartTrace}`,
+              "exec",
+              id,
+              "sh",
+              "-c",
+              'executor-host telemetry "$1" 2>&1 >/dev/null || true',
+              "sh",
+              `/api/traces/${beforeRestartTrace}`,
             ]);
             expect(
               discarded.trim(),
               "Motel resets independently while product state is retained",
-            ).toBe("404");
+            ).toBe("Executor: the telemetry collector answered 404");
             expect((yield* run(["exec", id, "/app/workerd", "--version"])).trim()).toBe(
               yield* pinnedWorkerd,
             );
-            // The collector shares the product's memory limit. It holds at most four exports of
+            // The collector shares the container's memory limit. It holds at most four exports of
             // 16 MiB in flight and refuses beyond that; the product's own exports fit.
-            const ingest = yield* run([
-              "run",
-              "--rm",
-              "--network",
-              `container:${id}`,
-              "node:24-bookworm-slim",
-              "node",
-              "-e",
-              "fetch(process.argv[1]).then(r => r.text()).then(text => process.stdout.write(text))",
-              `${collector}/api/ingest`,
-            ]).pipe(
+            const ingest = yield* readCollector("/api/ingest").pipe(
               Effect.flatMap(
                 Schema.decodeUnknownEffect(
                   Schema.fromJsonString(
@@ -740,6 +742,40 @@ http.createServer((request, response) => {
               maxBytes: 16 * 1024 * 1024,
               refused: { queueFull: 0, tooLarge: 0, invalid: 0, storeFailed: 0 },
             });
+            // The collector runs in its own workerd process, so indexing spans no longer blocks the
+            // product's JavaScript thread. Stopping it leaves the product serving; the host
+            // restarts it after waiting a second, and the new collector stores the product's spans.
+            const collectorProcess = run([
+              "exec",
+              id,
+              "sh",
+              "-c",
+              // The pattern is built at runtime so this shell's own command line does not match it.
+              'm=motel; for p in /proc/[0-9]*; do case "$(cat "$p/cmdline" 2>/dev/null)" in *"$m.capnp"*) echo "${p#/proc/}";; esac; done',
+            ]).pipe(Effect.map((output) => output.trim()));
+            const firstCollector = yield* collectorProcess;
+            expect(firstCollector).toMatch(/^\d+$/);
+            const killed = yield* Clock.currentTimeMillis;
+            yield* run(["exec", id, "sh", "-c", `kill ${firstCollector}`]);
+            expect((yield* request("/health")).status).toBe(200);
+            const restartedCollector = yield* collectorProcess.pipe(
+              Effect.flatMap((pid) =>
+                /^\d+$/.test(pid) && pid !== firstCollector
+                  ? Effect.succeed(pid)
+                  : Effect.fail("The collector has not restarted"),
+              ),
+              Effect.retry({ schedule: Schedule.spaced("250 millis"), times: 40 }),
+            );
+            expect(restartedCollector).not.toBe(firstCollector);
+            expect(
+              (yield* Clock.currentTimeMillis) - killed,
+              "the host waits before restarting the collector",
+            ).toBeGreaterThanOrEqual(1000);
+            const afterRestart = randomBytes(16).toString("hex");
+            expect((yield* request("/api/viewer", undefined, cookie, afterRestart)).status).toBe(
+              200,
+            );
+            yield* spansOf(afterRestart);
             expect(
               yield* processes.exitCode(
                 ChildProcess.make("docker", [
@@ -918,6 +954,459 @@ const result=await pg.query('SELECT name FROM "user"');await pg.close();process.
       }),
     ).pipe(Effect.provide(NodeServices.layer)),
   );
+
+// Operators can let apps fetch private addresses. The bundled collector stores and serves every
+// app's traces without authentication, so it listens on no TCP port: with private fetch on, an
+// authored app reaches none of its routes on any port in the container. The product still
+// exports to it over a private Unix socket, and operators read it through the host.
+it.live("released image keeps its collector out of apps' reach with private fetch on", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const processes = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const image = yield* Config.String("EXECUTOR_E2E_DOCKER_IMAGE");
+      const run = (args: readonly string[], env: Record<string, string> = {}) =>
+        processes.string(
+          ChildProcess.make("docker", args, {
+            env,
+            extendEnv: true,
+            stderr: args[0] === "logs" ? "pipe" : "inherit",
+          }),
+          { includeStderr: args[0] === "logs" },
+        );
+      const id = `executor-collector-${randomBytes(6).toString("hex")}`;
+      const registry = yield* containerNpmRegistry;
+      const port = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const listener = yield* Effect.acquireRelease(
+            Effect.sync(() => createServer()),
+            (listener) =>
+              driver(
+                "release port",
+                () => new Promise<void>((resolve) => listener.close(() => resolve())),
+              ).pipe(Effect.orDie),
+          );
+          return yield* driver(
+            "allocate port",
+            () =>
+              new Promise<number>((resolve, reject) => {
+                listener.once("error", reject);
+                listener.listen(0, "127.0.0.1", () => {
+                  const address = listener.address();
+                  if (address === null || typeof address === "string")
+                    reject(new Error("No test port"));
+                  else resolve(address.port);
+                });
+              }),
+          );
+        }),
+      );
+      const containerPort = 8080;
+      const origin = `http://localhost:${port}`;
+      const environment: Record<string, string> = {
+        // Release scenarios never send product analytics, even from an image with a baked key.
+        DO_NOT_TRACK: "1",
+        PORT: String(containerPort),
+        BETTER_AUTH_URL: origin,
+        BETTER_AUTH_SECRET: randomBytes(32).toString("hex"),
+        EXECUTOR_ENCRYPTION_KEY: randomBytes(32).toString("hex"),
+        EXECUTOR_APPS_ALLOW_PRIVATE_FETCH: "true",
+      };
+      yield* Effect.acquireRelease(
+        run(
+          [
+            "run",
+            "--detach",
+            "--name",
+            id,
+            "--init",
+            "--publish",
+            `127.0.0.1:${port}:${containerPort}`,
+            ...Object.keys(environment).flatMap((name) => ["--env", name]),
+            ...registry.docker,
+            image,
+          ],
+          environment,
+        ),
+        // An anonymous data volume is removed with the container.
+        () => run(["rm", "--force", "--volumes", id]).pipe(Effect.orDie),
+      );
+      yield* Effect.addFinalizer((exit) =>
+        Exit.isFailure(exit)
+          ? run(["logs", id]).pipe(Effect.flatMap(Console.error), Effect.ignore)
+          : Effect.void,
+      );
+      const request = (route: string, data?: unknown, cookie?: string, trace?: string) =>
+        driver("collector image HTTP request", () =>
+          fetch(`http://127.0.0.1:${port}${route}`, {
+            method: data === undefined ? "GET" : "POST",
+            headers: {
+              origin,
+              "content-type": "application/json",
+              ...(cookie === undefined ? {} : { cookie }),
+              ...(trace === undefined ? {} : { traceparent: `00-${trace}-1234567890abcdef-01` }),
+            },
+            ...(data === undefined ? {} : { body: JSON.stringify(data) }),
+          }),
+        );
+      yield* request("/health").pipe(
+        Effect.flatMap((r) => (r.status === 200 ? Effect.void : Effect.fail("not ready"))),
+        Effect.retry({ schedule: Schedule.spaced("250 millis"), times: 200 }),
+      );
+      const setup = yield* request("/api/auth/self-host/setup", {
+        name: "Collector Owner",
+        email: "collector@example.test",
+        password: "Synthetic-collector-password-123!",
+        organizationName: "Collector lab",
+      });
+      expect(setup.status).toBe(200);
+      const cookie = setup.headers
+        .getSetCookie()
+        .map((part) => part.split(";")[0])
+        .join("; ");
+      const organizations = yield* request("/api/auth/organization/list", undefined, cookie);
+      expect(organizations.status).toBe(200);
+      const [organization] = yield* Schema.decodeUnknownEffect(
+        Schema.NonEmptyArray(Schema.Struct({ id: Schema.String })),
+      )(yield* driver("organization response", () => organizations.json()));
+      const prefix = `/api/organizations/${organization.id}`;
+      const deployed = yield* request(
+        `${prefix}/apps/deploy`,
+        {
+          name: "Collector probe",
+          files: [
+            {
+              path: "index.ts",
+              content: `import { defineApp, query, object, string, router } from "apps";
+export default defineApp({ accounts: {} }, async () => ({
+  tools: router({
+    probe: query({ input: object({ url: string(), body: string() }) }, async (ctx, input) => {
+      try {
+        const response = await ctx.fetch(input.url, input.body === "" ? {} : { method: "POST", headers: { "content-type": "application/json" }, body: input.body });
+        return "reached " + response.status + " " + (await response.text()).slice(0, 4000);
+      } catch (error) { return "refused " + (error instanceof Error ? error.message : String(error)); }
+    }),
+  })
+}));`,
+            },
+            appsManifest,
+          ],
+        },
+        cookie,
+      );
+      expect(deployed.status, yield* driver("deploy probe", () => deployed.clone().text())).toBe(
+        200,
+      );
+      const app = yield* Schema.decodeUnknownEffect(Schema.Struct({ id: Schema.String }))(
+        yield* driver("probe app", () => deployed.json()),
+      );
+      const created = yield* request(
+        `${prefix}/apps/${app.id}/profiles`,
+        { accounts: {}, idempotencyKey: randomUUID() },
+        cookie,
+      );
+      expect(created.status).toBe(200);
+      const profile = yield* Schema.decodeUnknownEffect(Schema.Struct({ id: Schema.String }))(
+        yield* driver("probe profile", () => created.json()),
+      );
+      const probe = (url: string, body = "") =>
+        request(
+          `${prefix}/apps/${app.id}/tools/call`,
+          { profile: profile.id, tool: "probe", kind: "query", input: { url, body } },
+          cookie,
+        ).pipe(
+          Effect.flatMap((response) => driver(`probe ${url}`, () => response.json())),
+          Effect.flatMap(Schema.decodeUnknownEffect(Schema.String)),
+        );
+      const productTrace = randomBytes(16).toString("hex");
+      expect((yield* request("/api/viewer", undefined, cookie, productTrace)).status).toBe(200);
+      // The product exports over the socket, and the operator reads the trace through the host.
+      // Once it is stored, a read route that an app could reach would return it.
+      const telemetry = (path: string) => run(["exec", id, "executor-host", "telemetry", path]);
+      const spans = (trace: string) =>
+        telemetry(`/api/traces/${trace}/spans`).pipe(
+          Effect.flatMap(
+            Schema.decodeUnknownEffect(
+              Schema.fromJsonString(
+                Schema.Struct({
+                  data: Schema.Array(
+                    Schema.Struct({ span: Schema.Struct({ serviceName: Schema.String }) }),
+                  ),
+                }),
+              ),
+            ),
+          ),
+          Effect.flatMap((trace) =>
+            trace.data.some(({ span }) => span.serviceName === "executor-selfhost")
+              ? Effect.succeed(trace)
+              : Effect.fail("The product's spans have not reached the collector"),
+          ),
+          Effect.retry({ schedule: Schedule.spaced("500 millis"), times: 30 }),
+        );
+      yield* spans(productTrace);
+      const tcpTables = run(["exec", id, "cat", "/proc/net/tcp", "/proc/net/tcp6"]).pipe(
+        Effect.map((table) =>
+          table
+            .split("\n")
+            .map((line) => line.trim().split(/\s+/))
+            .filter((fields) => /^[0-9A-F]+:[0-9A-F]{4}$/.test(fields[1] ?? "")),
+        ),
+      );
+      // Every TCP port listening in the container's network namespace, and Motel's old port.
+      const listening = (yield* tcpTables)
+        .filter((fields) => fields[3] === "0A")
+        .map((fields) => Number.parseInt(fields[1]!.split(":")[1]!, 16));
+      const ports = [...new Set([...listening, 4318])].sort((a, b) => a - b);
+      expect(ports).toContain(containerPort);
+      const injectedTrace = randomBytes(16).toString("hex");
+      const injected = JSON.stringify({
+        resourceSpans: [
+          {
+            resource: {
+              attributes: [{ key: "service.name", value: { stringValue: "executor-selfhost" } }],
+            },
+            scopeSpans: [
+              {
+                spans: [
+                  {
+                    traceId: injectedTrace,
+                    spanId: randomBytes(8).toString("hex"),
+                    name: "injected by an app",
+                    kind: 1,
+                    startTimeUnixNano: "1700000000000000000",
+                    endTimeUnixNano: "1700000000001000000",
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      });
+      // A refusal names the URL it refused, so only a response the app received is checked.
+      const received = (result: string) => (result.startsWith("reached ") ? result : "");
+      for (const listener of ports) {
+        const base = `http://127.0.0.1:${listener}`;
+        const read = yield* probe(`${base}/api/traces/${productTrace}/spans`);
+        expect(
+          received(read),
+          `an app reads the product's traces on port ${listener}`,
+        ).not.toContain(productTrace);
+        const counters = yield* probe(`${base}/api/ingest`);
+        expect(
+          received(counters),
+          `an app reads collector counters on port ${listener}`,
+        ).not.toContain("maxPending");
+        const written = yield* probe(`${base}/v1/traces`, injected);
+        if (listener === 4318) {
+          expect(read, "nothing listens on Motel's old port").toMatch(/^refused /);
+          expect(counters).toMatch(/^refused /);
+          expect(written).toMatch(/^refused /);
+        }
+      }
+      // Spans the product exported after the probes have arrived, so an app's write would have too.
+      const laterTrace = randomBytes(16).toString("hex");
+      expect((yield* request("/api/viewer", undefined, cookie, laterTrace)).status).toBe(200);
+      yield* spans(laterTrace);
+      expect(
+        (yield* run([
+          "exec",
+          id,
+          "sh",
+          "-c",
+          'executor-host telemetry "$1" 2>&1 >/dev/null || true',
+          "sh",
+          `/api/traces/${injectedTrace}`,
+        ])).trim(),
+        "no app wrote spans into the collector",
+      ).toBe("Executor: the telemetry collector answered 404");
+      // Motel's own process holds its Unix socket and no TCP socket. The image has no tools to
+      // read another process's descriptors, so a client in its process namespace reads them as
+      // the same user.
+      const collectorSockets = yield* run([
+        "run",
+        "--rm",
+        "--pid",
+        `container:${id}`,
+        "--user",
+        "1000",
+        "node:24-bookworm-slim",
+        "node",
+        "-e",
+        `const fs = require("node:fs");
+const pid = fs.readdirSync("/proc").filter((p) => /^\\d+$/.test(p)).find((p) => {
+  try { return fs.readFileSync("/proc/" + p + "/cmdline", "utf8").includes(["motel", "capnp"].join(".")); } catch { return false; }
+});
+const inodes = fs.readdirSync("/proc/" + pid + "/fd").flatMap((fd) => {
+  try { return [fs.readlinkSync("/proc/" + pid + "/fd/" + fd)]; } catch { return []; }
+}).flatMap((target) => /^socket:\\[(\\d+)\\]$/.exec(target)?.slice(1) ?? []);
+const table = (name) => fs.readFileSync("/proc/" + pid + "/net/" + name, "utf8").split("\\n").slice(1).map((line) => line.trim().split(/\\s+/));
+process.stdout.write(JSON.stringify({
+  tcp: [...table("tcp"), ...table("tcp6")].filter((fields) => inodes.includes(fields[9])).map((fields) => fields[1]),
+  unix: table("unix").filter((fields) => inodes.includes(fields[6])).map((fields) => fields[7] ?? ""),
+}));`,
+      ]).pipe(
+        Effect.flatMap(
+          Schema.decodeUnknownEffect(
+            Schema.fromJsonString(
+              Schema.Struct({
+                tcp: Schema.Array(Schema.String),
+                unix: Schema.Array(Schema.String),
+              }),
+            ),
+          ),
+        ),
+      );
+      expect(collectorSockets.tcp, "the collector has no TCP socket").toEqual([]);
+      expect(collectorSockets.unix).toContainEqual(
+        expect.stringMatching(/^\/tmp\/executor-host-\d+\/motel\.sock$/),
+      );
+    }),
+  ).pipe(Effect.provide(NodeServices.layer)),
+);
+
+// Every container mounts its product volume at the same path. Two containers that share a
+// temporary directory must still each keep their own collector while the other starts and stops.
+it.live("released images that share a temporary directory keep separate collectors", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const processes = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const image = yield* Config.String("EXECUTOR_E2E_DOCKER_IMAGE");
+      const run = (args: readonly string[], env: Record<string, string> = {}) =>
+        processes.string(
+          ChildProcess.make("docker", args, {
+            env,
+            extendEnv: true,
+            stderr: args[0] === "logs" ? "pipe" : "inherit",
+          }),
+          { includeStderr: args[0] === "logs" },
+        );
+      const name = `executor-shared-tmp-${randomBytes(6).toString("hex")}`;
+      const volume = (suffix: string) =>
+        Effect.acquireRelease(run(["volume", "create", `${name}-${suffix}`]), () =>
+          run(["volume", "rm", "--force", `${name}-${suffix}`]).pipe(Effect.orDie),
+        ).pipe(Effect.as(`${name}-${suffix}`));
+      const temporary = yield* volume("tmp");
+      // A sticky, world-writable directory, as /tmp is.
+      yield* run([
+        "run",
+        "--rm",
+        "--user",
+        "0",
+        "--entrypoint",
+        "sh",
+        "--volume",
+        `${temporary}:/shared-tmp`,
+        image,
+        "-c",
+        "chmod 1777 /shared-tmp",
+      ]);
+      const start = Effect.fn("start instance")(function* (suffix: string) {
+        const data = yield* volume(suffix);
+        const id = `${name}-${suffix}`;
+        const environment: Record<string, string> = {
+          DO_NOT_TRACK: "1",
+          PORT: "8080",
+          BETTER_AUTH_URL: "http://localhost:8080",
+          BETTER_AUTH_SECRET: randomBytes(32).toString("hex"),
+          EXECUTOR_ENCRYPTION_KEY: randomBytes(32).toString("hex"),
+          TMPDIR: "/shared-tmp",
+        };
+        yield* Effect.acquireRelease(
+          run(
+            [
+              "run",
+              "--detach",
+              "--name",
+              id,
+              "--init",
+              "--publish",
+              "127.0.0.1::8080",
+              "--volume",
+              `${temporary}:/shared-tmp`,
+              "--volume",
+              `${data}:/app/data`,
+              ...Object.keys(environment).flatMap((key) => ["--env", key]),
+              image,
+            ],
+            environment,
+          ),
+          () => run(["rm", "--force", "--volumes", id]).pipe(Effect.orDie),
+        );
+        yield* Effect.addFinalizer((exit) =>
+          Exit.isFailure(exit)
+            ? run(["logs", id]).pipe(Effect.flatMap(Console.error), Effect.ignore)
+            : Effect.void,
+        );
+        return id;
+      });
+      const ready = (id: string) =>
+        Effect.gen(function* () {
+          yield* run(["exec", id, "executor-host", "health"]);
+          yield* run(["exec", id, "executor-host", "telemetry", "/api/health"]);
+        }).pipe(Effect.retry({ schedule: Schedule.spaced("250 millis"), times: 240 }));
+      // Each request carries a new trace id; the instance's own collector must store its spans.
+      const traced = Effect.fn("traced request")(function* (id: string) {
+        const published = (yield* run(["port", id, "8080/tcp"])).trim().split("\n")[0]!;
+        const trace = randomBytes(16).toString("hex");
+        yield* driver("traced request", () =>
+          fetch(`http://${published}/api/viewer`, {
+            headers: { traceparent: `00-${trace}-1234567890abcdef-01` },
+          }).then((response) => response.arrayBuffer()),
+        );
+        return trace;
+      });
+      const stored = (id: string, trace: string, problem: string) =>
+        run(["exec", id, "executor-host", "telemetry", `/api/traces/${trace}/spans`]).pipe(
+          Effect.flatMap(
+            Schema.decodeUnknownEffect(
+              Schema.fromJsonString(
+                Schema.Struct({
+                  data: Schema.Array(
+                    Schema.Struct({ span: Schema.Struct({ serviceName: Schema.String }) }),
+                  ),
+                }),
+              ),
+            ),
+          ),
+          Effect.flatMap((spans) =>
+            spans.data.some(({ span }) => span.serviceName === "executor-selfhost")
+              ? Effect.void
+              : Effect.fail(`${id}: ${problem}`),
+          ),
+        );
+      const delivered = (id: string, trace: string) =>
+        stored(id, trace, "a new trace did not reach this instance's collector").pipe(
+          Effect.retry({ schedule: Schedule.spaced("500 millis"), times: 60 }),
+        );
+      // An instance keeps the traces it stored and stores new ones in its own collector.
+      const keeps = Effect.fn("instance keeps its collector")(function* (
+        id: string,
+        traces: readonly string[],
+        when: string,
+      ) {
+        yield* ready(id);
+        for (const trace of traces) yield* stored(id, trace, `lost a stored trace ${when}`);
+        const trace = yield* traced(id);
+        yield* delivered(id, trace);
+        return [...traces, trace];
+      });
+      const first = yield* start("a");
+      let firstTraces = yield* keeps(first, [], "on start");
+      const second = yield* start("b");
+      let secondTraces = yield* keeps(second, [], "on start");
+      firstTraces = yield* keeps(first, firstTraces, "after b started");
+      yield* run(["stop", second]);
+      firstTraces = yield* keeps(first, firstTraces, "after b stopped");
+      yield* run(["start", second]);
+      secondTraces = yield* keeps(second, secondTraces, "after b restarted");
+      firstTraces = yield* keeps(first, firstTraces, "after b restarted");
+      yield* run(["stop", first]);
+      secondTraces = yield* keeps(second, secondTraces, "after a stopped");
+      yield* run(["start", first]);
+      yield* keeps(first, firstTraces, "after a restarted");
+      yield* keeps(second, secondTraces, "after a restarted");
+    }),
+  ).pipe(Effect.provide(NodeServices.layer)),
+);
 
 // A tailnet name such as nexus.<tailnet>.ts.net resolves into 100.64.0.0/10. App isolates
 // may reach only public addresses, so the built-in Executor app must reach its own dashboard
@@ -1641,485 +2130,4 @@ export default defineApp({ accounts: {} }, async () => ({
       }),
     ).pipe(Effect.provide(NodeServices.layer)),
   300_000,
-);
-
-// Each workflow run is its own durable engine in the image's workerd process. An engine that
-// stays loaded after its run finishes keeps its database and state resident, so memory grows
-// with every run a server has ever executed. Engines therefore unload once idle, and a run that
-// is sleeping or waiting to retry resumes from its durable alarm in a newly loaded engine.
-
-/** A fresh released image with an owner and one deployed app; removed when the scope closes. */
-const workflowServer = (source: string) =>
-  Effect.gen(function* () {
-    const processes = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const image = yield* Config.String("EXECUTOR_E2E_DOCKER_IMAGE");
-    const id = `executor-release-${randomBytes(8).toString("hex")}`;
-    const registry = yield* containerNpmRegistry;
-    const run = (args: readonly string[], env: Record<string, string> = {}) =>
-      processes.string(ChildProcess.make("docker", args, { env, extendEnv: true }));
-    const port = yield* driver(
-      "allocate port",
-      () =>
-        new Promise<number>((resolve, reject) => {
-          const listener = createServer();
-          listener.once("error", reject);
-          listener.listen(0, "127.0.0.1", () => {
-            const address = listener.address();
-            listener.close(() =>
-              address === null || typeof address === "string"
-                ? reject(new Error("No test port"))
-                : resolve(address.port),
-            );
-          });
-        }),
-    );
-    const origin = `http://localhost:${port}`;
-    const environment: Record<string, string> = {
-      // Release scenarios never send product analytics, even from an image with a baked key.
-      DO_NOT_TRACK: "1",
-      PORT: "8080",
-      BETTER_AUTH_URL: origin,
-      BETTER_AUTH_SECRET: randomBytes(32).toString("hex"),
-      EXECUTOR_ENCRYPTION_KEY: randomBytes(32).toString("hex"),
-    };
-    yield* Effect.acquireRelease(
-      run(
-        [
-          "run",
-          "--detach",
-          "--name",
-          id,
-          "--init",
-          "--publish",
-          `127.0.0.1:${port}:8080`,
-          ...Object.keys(environment).flatMap((name) => ["--env", name]),
-          ...registry.docker,
-          image,
-        ],
-        environment,
-      ),
-      () => run(["rm", "--force", "--volumes", id]).pipe(Effect.orDie),
-    );
-    yield* Effect.addFinalizer((exit) =>
-      Exit.isFailure(exit)
-        ? run(["logs", id]).pipe(Effect.flatMap(Console.error), Effect.ignore)
-        : Effect.void,
-    );
-    let cookie = "";
-    const request = (route: string, data?: unknown) =>
-      driver(`${data === undefined ? "GET" : "POST"} ${route}`, (signal) =>
-        fetch(`http://127.0.0.1:${port}${route}`, {
-          method: data === undefined ? "GET" : "POST",
-          signal,
-          headers: {
-            origin,
-            "content-type": "application/json",
-            ...(cookie === "" ? {} : { cookie }),
-          },
-          ...(data === undefined ? {} : { body: JSON.stringify(data) }),
-        }),
-      );
-    const json = <S extends Schema.Top>(schema: S, route: string, data?: unknown) =>
-      request(route, data).pipe(
-        Effect.flatMap((response) =>
-          driver(`read ${route}`, () => response.text()).pipe(
-            Effect.flatMap((text) =>
-              response.status === 200
-                ? Schema.decodeUnknownEffect(Schema.fromJsonString(schema))(text)
-                : Effect.fail(new Error(`${route}: HTTP ${response.status} ${text}`)),
-            ),
-          ),
-        ),
-      );
-    const ready = request("/health").pipe(
-      Effect.flatMap((response) =>
-        response.status === 200 ? Effect.void : Effect.fail("not ready"),
-      ),
-      Effect.retry({ schedule: Schedule.spaced("250 millis"), times: 240 }),
-    );
-    yield* ready;
-    const setup = yield* request("/api/auth/self-host/setup", {
-      name: "Release Owner",
-      email: "release@example.test",
-      password: "Synthetic-release-password-123!",
-      organizationName: "Release lab",
-    });
-    expect(setup.status).toBe(200);
-    cookie = setup.headers
-      .getSetCookie()
-      .map((part) => part.split(";")[0])
-      .join("; ");
-    const [organization] = yield* json(
-      Schema.NonEmptyArray(Schema.Struct({ id: Schema.String })),
-      "/api/auth/organization/list",
-    );
-    const prefix = `/api/organizations/${organization.id}`;
-    const app = yield* json(Schema.Struct({ id: Schema.String }), `${prefix}/apps/deploy`, {
-      name: "Workflow engines",
-      files: [{ path: "index.ts", content: source }, appsManifest],
-    });
-    const runs = `${prefix}/apps/${app.id}/workflow-runs`;
-    // A loaded engine maps its database's shared-memory index into the workerd process; the
-    // namespace's own metadata database stays mapped. workerd unloads an idle object after it
-    // has been inactive and its callers have gone, within about two and a half minutes.
-    const loadedEngines = run([
-      "exec",
-      "--user",
-      "executor",
-      id,
-      "sh",
-      "-c",
-      'for process in /proc/[0-9]*; do read name < "$process/comm"; [ "$name" = workerd ] && cat "$process/maps"; done',
-    ]).pipe(
-      Effect.map(
-        (maps) =>
-          new Set(
-            maps
-              .split("\n")
-              .map((line) => line.split(/\s+/).at(-1) ?? "")
-              .filter(
-                (file) =>
-                  file.includes("/executor-app-workflows/") &&
-                  file.endsWith(".sqlite-shm") &&
-                  !file.endsWith("/metadata.sqlite-shm"),
-              ),
-          ).size,
-      ),
-    );
-    // Stops every engine in the process; the product's state and the engines' storage remain.
-    const restart = run(["restart", id]).pipe(Effect.andThen(ready));
-    // Stops the process for a while before starting it again, so durable deadlines pass while
-    // no engine is running.
-    const restartAfter = (downtime: `${number} seconds`) =>
-      run(["stop", id]).pipe(
-        Effect.andThen(Effect.sleep(downtime)),
-        Effect.andThen(run(["start", id])),
-        Effect.andThen(ready),
-      );
-    return { json, runs, loadedEngines, restart, restartAfter };
-  });
-
-const WorkflowRun = Schema.Struct({
-  id: Schema.String,
-  status: Schema.String,
-  output: Schema.optionalKey(Schema.Json),
-  error: Schema.optionalKey(Schema.String),
-});
-
-it.live(
-  "released image releases finished workflow runs from memory",
-  () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const server = yield* workflowServer(`import { defineApp, workflow, object } from "apps";
-export default defineApp({ accounts: {} }, {
-  workflows: { once: workflow({ input: object({}) }, async (ctx) => ctx.step.do("once", async () => ctx.runId)) },
-});`);
-        const runs = yield* Effect.forEach(
-          Array.from({ length: 8 }, () => randomUUID()),
-          (key) => server.json(WorkflowRun, server.runs, { workflow: "once", input: {}, key }),
-        );
-        for (const started of runs)
-          expect(
-            (yield* server.json(WorkflowRun, `${server.runs}/${started.id}`).pipe(
-              Effect.flatMap((current) =>
-                current.status === "complete" ? Effect.succeed(current) : Effect.fail(current),
-              ),
-              Effect.retry({ schedule: Schedule.spaced("250 millis"), times: 120 }),
-            )).status,
-          ).toBe("complete");
-        expect(
-          yield* server.loadedEngines,
-          "engines are loaded while their runs are recent",
-        ).toBeGreaterThan(0);
-        const settled = yield* server.loadedEngines.pipe(
-          Effect.flatMap((loaded) => (loaded === 0 ? Effect.succeed(loaded) : Effect.fail(loaded))),
-          Effect.retry({ schedule: Schedule.spaced("5 seconds"), times: 48 }),
-          // Report how many engines remain loaded rather than that polling ran out.
-          Effect.catch((error) =>
-            typeof error === "number" ? Effect.succeed(error) : Effect.fail(error),
-          ),
-        );
-        expect(settled, "finished runs' engines leave memory once idle").toBe(0);
-      }),
-    ).pipe(Effect.provide(NodeServices.layer)),
-  360_000,
-);
-
-// The engine of a run in progress may leave memory. A step longer than the idle window must run
-// once and finish, and a sleeping run whose engine has gone must resume from its durable alarm.
-it.live(
-  "released image finishes workflow runs whose steps outlast the idle window and whose engines stop while they sleep",
-  () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const stepSeconds = 180;
-        const sleepSeconds = 120;
-        const server = yield* workflowServer(`import { defineApp, workflow, object } from "apps";
-export default defineApp({ accounts: {} }, {
-  workflows: {
-    patient: workflow({ input: object({}) }, async (ctx) => {
-      const long = await ctx.step.do("long", { timeout: "10 minutes" }, async () => {
-        const started = Date.now();
-        await new Promise((resolve) => setTimeout(resolve, ${stepSeconds * 1000}));
-        return started;
-      });
-      await ctx.step.sleep("rest", "${sleepSeconds} seconds");
-      const resumed = await ctx.step.do("after", async () => Date.now());
-      return { long, resumed };
-    }),
-  },
-});`);
-        const created = Date.now();
-        const started = yield* server.json(WorkflowRun, server.runs, {
-          workflow: "patient",
-          input: {},
-          key: randomUUID(),
-        });
-        const current = server.json(WorkflowRun, `${server.runs}/${started.id}`);
-        // The step outlasts the idle window in which finished runs' engines unload. The call in
-        // progress holds its engine.
-        yield* Effect.sleep(`${stepSeconds - 20} seconds`);
-        expect((yield* current).status, "the long step is still running").toBe("running");
-        expect(yield* server.loadedEngines, "a running step holds its engine").toBe(1);
-        // A sleep waits in the engine's memory, backed by a durable alarm. Stopping the process
-        // part way through the sleep removes the engine; only the alarm can resume the run.
-        yield* Effect.sleep(`${20 + sleepSeconds / 4} seconds`);
-        expect((yield* current).status, "the run is sleeping").not.toBe("complete");
-        yield* server.restart;
-        const finished = yield* current.pipe(
-          Effect.flatMap((run) =>
-            ["complete", "errored", "terminated"].includes(run.status)
-              ? Effect.succeed(run)
-              : Effect.fail(run),
-          ),
-          Effect.retry({ schedule: Schedule.spaced("2 seconds"), times: 150 }),
-        );
-        expect(finished, "the run completes").toMatchObject({ status: "complete" });
-        const output = yield* Schema.decodeUnknownEffect(
-          Schema.Struct({ long: Schema.Number, resumed: Schema.Number }),
-        )(finished.output);
-        // The step ran once, from the start of the run: a step restarted by a reloaded engine
-        // would record a later start.
-        expect(output.long - created).toBeLessThan(30_000);
-        // The run resumed after the whole sleep, in an engine loaded by its alarm.
-        expect(output.resumed - output.long).toBeGreaterThanOrEqual(
-          (stepSeconds + sleepSeconds) * 1000,
-        );
-      }),
-    ).pipe(Effect.provide(NodeServices.layer)),
-  720_000,
-);
-
-// A run woken by its alarm has no caller holding its engine, unlike a run just created. A long
-// step that starts in an engine loaded by the alarm must still run once and finish in time. The
-// host's reconciliation also reads running runs every few seconds; workflow-engine.spec.ts
-// checks the engine alone, with nothing reading its runs.
-it.live(
-  "released image finishes a long workflow step that starts after a restart",
-  () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const stepSeconds = 180;
-        const sleepSeconds = 45;
-        const server = yield* workflowServer(`import { defineApp, workflow, object } from "apps";
-export default defineApp({ accounts: {} }, {
-  workflows: {
-    woken: workflow({ input: object({}) }, async (ctx) => {
-      await ctx.step.sleep("wait", "${sleepSeconds} seconds");
-      const long = await ctx.step.do("long", { timeout: "10 minutes" }, async () => {
-        const started = Date.now();
-        await new Promise((resolve) => setTimeout(resolve, ${stepSeconds * 1000}));
-        return started;
-      });
-      const after = await ctx.step.do("after", async () => Date.now());
-      return { long, after };
-    }),
-  },
-});`);
-        const started = yield* server.json(WorkflowRun, server.runs, {
-          workflow: "woken",
-          input: {},
-          key: randomUUID(),
-        });
-        const created = Date.now();
-        yield* Effect.sleep("10 seconds");
-        // The process stops during the sleep, so only the durable alarm can start the long step.
-        yield* server.restart;
-        // The test does not read the run while its long step runs.
-        yield* Effect.sleep(`${sleepSeconds + stepSeconds} seconds`);
-        const finished = yield* server.json(WorkflowRun, `${server.runs}/${started.id}`).pipe(
-          Effect.flatMap((run) =>
-            ["complete", "errored", "terminated"].includes(run.status)
-              ? Effect.succeed(run)
-              : Effect.fail(run),
-          ),
-          Effect.retry({ schedule: Schedule.spaced("2 seconds"), times: 45 }),
-          Effect.catch((run) => ("status" in run ? Effect.succeed(run) : Effect.fail(run))),
-        );
-        expect(finished, "the run completes about when its step ends").toMatchObject({
-          status: "complete",
-        });
-        const output = yield* Schema.decodeUnknownEffect(
-          Schema.Struct({ long: Schema.Number, after: Schema.Number }),
-        )(finished.output);
-        // The step started once, when the alarm ended the sleep. A step restarted after its
-        // engine was unloaded would record a start near its ten minute deadline.
-        expect(output.long - created).toBeLessThan((sleepSeconds + 30) * 1000);
-        expect(output.after - output.long).toBeGreaterThanOrEqual(stepSeconds * 1000);
-      }),
-    ).pipe(Effect.provide(NodeServices.layer)),
-  600_000,
-);
-
-type WorkflowServer = Effect.Success<ReturnType<typeof workflowServer>>;
-
-/** Polls a run until it reaches a final status. */
-const finishedRun = (server: WorkflowServer, run: string) =>
-  server.json(WorkflowRun, `${server.runs}/${run}`).pipe(
-    Effect.flatMap((current) =>
-      ["complete", "errored", "terminated"].includes(current.status)
-        ? Effect.succeed(current)
-        : Effect.fail(current),
-    ),
-    Effect.retry({ schedule: Schedule.spaced("2 seconds"), times: 150 }),
-  );
-
-/** Polls until no engine is loaded, and returns how many remain if some never unload. */
-const unloadedEngines = (server: WorkflowServer) =>
-  server.loadedEngines.pipe(
-    Effect.flatMap((loaded) => (loaded === 0 ? Effect.succeed(loaded) : Effect.fail(loaded))),
-    Effect.retry({ schedule: Schedule.spaced("5 seconds"), times: 48 }),
-    Effect.catch((error) =>
-      typeof error === "number" ? Effect.succeed(error) : Effect.fail(error),
-    ),
-  );
-
-const Timed = Schema.Struct({ before: Schema.Number, after: Schema.Number });
-
-// Runs sleep side by side, each in its own engine. A restart part way through their sleeps must
-// resume every one of them from its alarm, without repeating the step each finished before.
-it.live(
-  "released image resumes concurrent sleeping workflow runs after a restart",
-  () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const count = 12;
-        const sleepSeconds = 60;
-        const server = yield* workflowServer(`import { defineApp, workflow, object } from "apps";
-export default defineApp({ accounts: {} }, {
-  workflows: {
-    nap: workflow({ input: object({}) }, async (ctx) => {
-      const before = await ctx.step.do("before", async () => Date.now());
-      await ctx.step.sleep("nap", "${sleepSeconds} seconds");
-      const after = await ctx.step.do("after", async () => Date.now());
-      return { before, after };
-    }),
-  },
-});`);
-        const created = Date.now();
-        const runs = yield* Effect.forEach(
-          Array.from({ length: count }, () => randomUUID()),
-          (key) => server.json(WorkflowRun, server.runs, { workflow: "nap", input: {}, key }),
-          { concurrency: "unbounded" },
-        );
-        yield* Effect.sleep("20 seconds");
-        for (const started of runs)
-          expect(
-            (yield* server.json(WorkflowRun, `${server.runs}/${started.id}`)).status,
-            "every run is sleeping",
-          ).toBe("running");
-        expect(yield* server.loadedEngines, "each sleeping run holds its engine").toBe(count);
-        const restarted = Date.now();
-        yield* server.restart;
-        const finished = yield* Effect.forEach(runs, (started) => finishedRun(server, started.id), {
-          concurrency: "unbounded",
-        });
-        for (const run of finished) {
-          expect(run, "every run completes").toMatchObject({ status: "complete" });
-          const output = yield* Schema.decodeUnknownEffect(Timed)(run.output);
-          // The first step ran once, before the restart; a repeated step would record a later time.
-          expect(output.before).toBeGreaterThanOrEqual(created);
-          expect(output.before).toBeLessThan(restarted);
-          expect(output.after - output.before).toBeGreaterThanOrEqual(sleepSeconds * 1000);
-        }
-        expect(yield* unloadedEngines(server), "finished runs' engines leave memory").toBe(0);
-      }),
-    ).pipe(Effect.provide(NodeServices.layer)),
-  720_000,
-);
-
-// An absolute sleep deadline can pass while the process is down. The resumed run must treat
-// that sleep as finished rather than as a deadline in the past.
-it.live(
-  "released image finishes a workflow run whose sleep deadline passed while it was stopped",
-  () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const server = yield* workflowServer(`import { defineApp, workflow, object } from "apps";
-export default defineApp({ accounts: {} }, {
-  workflows: {
-    deadline: workflow({ input: object({}) }, async (ctx) => {
-      const before = await ctx.step.do("before", async () => Date.now() + 30_000);
-      await ctx.step.sleepUntil("wake", before);
-      const after = await ctx.step.do("after", async () => Date.now());
-      return { before, after };
-    }),
-  },
-});`);
-        const started = yield* server.json(WorkflowRun, server.runs, {
-          workflow: "deadline",
-          input: {},
-          key: randomUUID(),
-        });
-        yield* Effect.sleep("10 seconds");
-        yield* server.restartAfter("40 seconds");
-        const finished = yield* finishedRun(server, started.id);
-        expect(finished, "the run completes").toMatchObject({ status: "complete" });
-        const output = yield* Schema.decodeUnknownEffect(Timed)(finished.output);
-        expect(output.after).toBeGreaterThanOrEqual(output.before);
-        expect(yield* unloadedEngines(server), "the finished run's engine leaves memory").toBe(0);
-      }),
-    ).pipe(Effect.provide(NodeServices.layer)),
-  480_000,
-);
-
-// A terminated run's engine must neither resume after a restart nor stay loaded.
-it.live(
-  "released image keeps a terminated sleeping workflow run stopped across a restart",
-  () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const server = yield* workflowServer(`import { defineApp, workflow, object } from "apps";
-export default defineApp({ accounts: {} }, {
-  workflows: {
-    halted: workflow({ input: object({}) }, async (ctx) => {
-      await ctx.step.do("before", async () => Date.now());
-      await ctx.step.sleep("nap", "45 seconds");
-      return await ctx.step.do("after", async () => Date.now());
-    }),
-  },
-});`);
-        const started = yield* server.json(WorkflowRun, server.runs, {
-          workflow: "halted",
-          input: {},
-          key: randomUUID(),
-        });
-        yield* Effect.sleep("10 seconds");
-        const terminated = yield* server.json(
-          WorkflowRun,
-          `${server.runs}/${started.id}/terminate`,
-          {},
-        );
-        expect(terminated.status).toBe("terminated");
-        yield* server.restart;
-        // Past the sleep's deadline, when a resumed run would have completed.
-        yield* Effect.sleep("60 seconds");
-        expect((yield* server.json(WorkflowRun, `${server.runs}/${started.id}`)).status).toBe(
-          "terminated",
-        );
-        expect(yield* unloadedEngines(server), "the terminated run's engine is not loaded").toBe(0);
-      }),
-    ).pipe(Effect.provide(NodeServices.layer)),
-  480_000,
 );

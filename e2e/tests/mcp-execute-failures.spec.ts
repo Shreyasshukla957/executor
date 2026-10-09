@@ -1,7 +1,7 @@
 /** Failed and timed-out MCP executions report what happened instead of losing it. */
 import { expect, layer } from "@effect/vitest";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
-import { Clock, Effect, Layer, Redacted, Ref, Schema } from "effect";
+import { Clock, Effect, Layer, Ref, Schema } from "effect";
 import { HttpRouter, HttpServer, HttpServerRequest, HttpServerResponse } from "effect/http";
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
@@ -11,11 +11,10 @@ import { Actors } from "../support/actors.ts";
 import { Browser } from "../support/browser.ts";
 import { App } from "../support/contracts.ts";
 import { Evidence } from "../support/evidence.ts";
-import { HostedLive, TestLive, withCase, withHostedCase } from "../support/case.ts";
+import { HostedLive, withHostedCase } from "../support/case.ts";
 import { McpClient } from "../support/mcp-client.ts";
-import { Target } from "../support/platform.ts";
 import { requestGate } from "../support/request-gate.ts";
-import { appsManifest, withApps } from "../support/apps-release.ts";
+import { appsManifest, withApps, mcpSdkVersion } from "../support/apps-release.ts";
 
 // A refresh that runs until its 30 s background limit unless cancelled.
 const slowRefresh = `const slowRefresh = (signal) => new Promise((resolve) => {
@@ -187,7 +186,9 @@ const refusingMcpServer = Effect.gen(function* () {
 const mcpAppFiles = (url: string) => [
   {
     path: "package.json",
-    content: JSON.stringify({ dependencies: withApps({ "@modelcontextprotocol/sdk": "1.30.0" }) }),
+    content: JSON.stringify({
+      dependencies: withApps({ "@modelcontextprotocol/sdk": mcpSdkVersion }),
+    }),
   },
   {
     path: "index.ts",
@@ -426,36 +427,6 @@ const hostedAppFiles = (
       organization: actors.organization.id,
     });
     return { client, slug: app.slug, id: app.id, path: `${prefix}/apps/${app.id}` };
-  });
-
-/** Deploy an app on local and connect an MCP client with the local API key. */
-const localApp = (name: string, source: string) =>
-  Effect.gen(function* () {
-    const api = yield* Api,
-      target = yield* Target,
-      mcp = yield* McpClient,
-      session = yield* api.session();
-    const headers = { authorization: `Bearer ${Redacted.value(target.apiKey)}` };
-    const deployed = yield* session.send(
-      "POST",
-      "/v1/apps/deploy",
-      {
-        owner: "local",
-        name: `${name} ${randomUUID().slice(0, 8)}`,
-        files: [{ path: "index.ts", content: source }, appsManifest],
-      },
-      headers,
-    );
-    expect(deployed.status).toBe(200);
-    const { app } = yield* body(
-      Schema.Struct({ app: Schema.Struct({ id: Schema.String, slug: Schema.String }) }),
-      deployed,
-    );
-    yield* Effect.addFinalizer(() =>
-      session.send("DELETE", `/v1/apps/${app.id}`, undefined, headers).pipe(Effect.orDie),
-    );
-    const client = yield* mcp.connect(target.apiKey, name.toLowerCase().replaceAll(" ", "-"));
-    return { client, slug: app.slug };
   });
 
 layer(HostedLive, { excludeTestServices: true })("Hosted MCP execute failures", (it) => {
@@ -858,7 +829,7 @@ return messages;`,
             {
               path: "package.json",
               content: JSON.stringify({
-                dependencies: withApps({ "@modelcontextprotocol/sdk": "1.30.0" }),
+                dependencies: withApps({ "@modelcontextprotocol/sdk": mcpSdkVersion }),
               }),
             },
             {
@@ -1000,28 +971,6 @@ export default defineApp({ accounts: {} }, async () => ({ tools: await mcpRouter
         expect(sessionRefused).toContain("refused the request while connecting (HTTP 400)");
         expect(sessionRefused).toContain(refused);
         expect(sessionRefused).not.toContain("The app threw");
-      }).pipe(Effect.provide(McpClient.layer)),
-    ),
-  );
-});
-
-layer(TestLive, { excludeTestServices: true })("Local MCP execute failures", (it) => {
-  it.effect(scenarios.localMcpExecuteApprovalAfterRefresh.title, (context) =>
-    withCase(
-      context,
-      Effect.gen(function* () {
-        const { client, slug } = yield* localApp("Approval after refresh", slowAppSource);
-        yield* checkApprovalAfterRefresh(client, slug);
-      }).pipe(Effect.provide(McpClient.layer)),
-    ),
-  );
-
-  it.effect(scenarios.localMcpExecuteRefreshNotAwaited.title, (context) =>
-    withCase(
-      context,
-      Effect.gen(function* () {
-        const { client, slug } = yield* localApp("Background refresh", refreshAppSource);
-        yield* checkRefreshNotAwaited(client, slug);
       }).pipe(Effect.provide(McpClient.layer)),
     ),
   );

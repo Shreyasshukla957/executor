@@ -209,7 +209,14 @@ const verify = Command.make("verify", { number }, ({ number }) =>
     yield* Console.log(
       `Verified preview health, login, assets, session and social sign-in redirects: ${deployment}`,
     );
-  }).pipe(Effect.timeout("2 minutes")),
+  }).pipe(
+    // The message names the request's method and public preview URL, such as a TLS handshake
+    // that failed on a role host.
+    Effect.catchTag("HttpClientError", (error) =>
+      Effect.fail(new TestStageFailed({ message: `Preview request failed: ${error.message}` })),
+    ),
+    Effect.timeout("2 minutes"),
+  ),
 );
 
 /** Called from workflows with step-scoped GitHub and staging credentials. */

@@ -65,7 +65,7 @@ layer(HostedLive, { excludeTestServices: true })("Deployment links", (it) => {
           yield* browser.use("Read desktop dashboard Docs destination", (page) =>
             page.getByRole("link", { name: "Docs", exact: true }).getAttribute("href"),
           ),
-        ).toBe("/docs/");
+        ).toBe(`${site}/docs/`);
         yield* browser.use("Open token creation help", (page) =>
           page.getByRole("button", { name: "Create token", exact: true }).click(),
         );
@@ -73,7 +73,7 @@ layer(HostedLive, { excludeTestServices: true })("Deployment links", (it) => {
           yield* browser.use("Read token documentation destination", (page) =>
             page.locator('a[href*="api-keys/#personal-access-tokens"]').getAttribute("href"),
           ),
-        ).toBe("/docs/api-keys/#personal-access-tokens");
+        ).toBe(`${site}/docs/api-keys/#personal-access-tokens`);
         yield* browser.use("Close token creation", (page) => page.keyboard.press("Escape"));
         yield* browser.use("Use a mobile viewport", (page) =>
           page.setViewportSize({ width: 390, height: 844 }),
@@ -88,7 +88,7 @@ layer(HostedLive, { excludeTestServices: true })("Deployment links", (it) => {
               .getByRole("link", { name: "Docs", exact: true })
               .getAttribute("href"),
           ),
-        ).toBe("/docs/");
+        ).toBe(`${site}/docs/`);
       }),
     ),
   );

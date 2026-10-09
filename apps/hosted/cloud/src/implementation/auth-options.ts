@@ -1,9 +1,4 @@
 /** Cloud sign-in policy; self-hosted deployments do not need these OAuth credentials. */
-import {
-  heroCookieName,
-  heroPreviewCookie,
-  heroVisitorCookie,
-} from "@executor-js/marketing/experiments";
 import type { BetterAuthOptions } from "better-auth";
 import { APIError } from "better-auth/api";
 import { authOptions } from "@executor-js/hosted-server";
@@ -28,6 +23,7 @@ import { passkeyEnrollmentCookie } from "../contracts/passkey-enrollment.ts";
 import { cloudEmulators } from "../infrastructure/emulators.ts";
 import { emulatedSocialProviders } from "./emulated-auth.ts";
 import { cloudSso, ssoVerifiedEmail } from "./sso.ts";
+import { chatGptSettings, chatGptSignIn } from "./chatgpt-sign-in.ts";
 import { cloudMemberLimit } from "./member-limit.ts";
 
 /** The better-auth endpoint that creates accounts from a verified email code. */
@@ -181,6 +177,7 @@ export const cloudAuthSettings = Effect.gen(function* () {
     trustedOrigins,
     emulators,
     ...social,
+    chatGpt: yield* chatGptSettings,
   };
 });
 
@@ -202,8 +199,9 @@ export const cloudAuthOptions = (
   onLogin?: (userId: string) => Promise<void>,
   onOperation?: (usage: NativeAuthUsage) => Promise<void>,
   allowsOrganization?: (userId: string) => Promise<boolean>,
+  onRefreshFamilyRevoked?: () => void,
 ) => {
-  const base = authOptions(settings, ipAddressHeaders);
+  const base = authOptions(settings, ipAddressHeaders, onRefreshFamilyRevoked);
   // A test stage that signs in through production's proxy uses production's callback, which the
   // proxy sets. Every other deployment names its own social callback origin explicitly.
   const proxiedElsewhere = Option.exists(
@@ -235,6 +233,17 @@ export const cloudAuthOptions = (
       validateUserInfo: ({ user, source }, context) =>
         Effect.runPromise(
           Effect.gen(function* () {
+            if (
+              source.method === "oauth" &&
+              source.oauth?.providerId === "openai" &&
+              source.action === "link-account"
+            )
+              return yield* Effect.fail(
+                new APIError("FORBIDDEN", {
+                  code: "account_not_linked",
+                  message: "Sign in with your existing method before linking ChatGPT.",
+                }),
+              );
             const { id, image } = user;
             if (source.method !== "oauth" || source.action === "create-user") return;
             if (typeof id !== "string" || typeof image !== "string" || image.length === 0) return;
@@ -244,14 +253,30 @@ export const cloudAuthOptions = (
             yield* Effect.tryPromise(() => adapter.updateUser(id, { image }));
           }).pipe(
             Effect.catch((error) =>
-              Effect.sync(() =>
-                context.context.logger.warn("Unable to refresh the provider photo", error),
-              ),
+              error instanceof APIError
+                ? Effect.fail(error)
+                : Effect.sync(() =>
+                    context.context.logger.warn("Unable to refresh the provider photo", error),
+                  ),
             ),
           ),
         ),
     } satisfies BetterAuthOptions["user"],
     databaseHooks: {
+      account: {
+        create: {
+          before: async (account) =>
+            account.providerId === "openai"
+              ? { data: { ...account, idToken: null, accessToken: null, refreshToken: null } }
+              : undefined,
+        },
+        update: {
+          before: async (account, context) =>
+            context?.params?.id === "openai" || context?.body?.provider === "openai"
+              ? { data: { ...account, idToken: null, accessToken: null, refreshToken: null } }
+              : undefined,
+        },
+      },
       user: {
         create: {
           before: async (user, context) =>
@@ -277,22 +302,8 @@ export const cloudAuthOptions = (
       },
       session: {
         create: {
-          // Consume anonymous attribution on every successful sign-in, including
-          // returning users. It must never be linked to a second account later.
-          after: async (session, context) => {
+          after: async (session) => {
             if (onLogin !== undefined) await onLogin(session.userId);
-            if (!context) return;
-            for (const name of [heroVisitorCookie, heroCookieName, heroPreviewCookie])
-              context.setCookie(name, "", {
-                path: "/",
-                maxAge: 0,
-                sameSite: "lax",
-                secure: new URL(settings.url).protocol === "https:",
-                ...Option.match(settings.hosts.sharedCookieDomain, {
-                  onNone: () => ({}),
-                  onSome: (domain) => ({ domain }),
-                }),
-              });
           },
           before: async (session, context) => {
             if (!context) throw new APIError("UNAUTHORIZED");
@@ -335,6 +346,10 @@ export const cloudAuthOptions = (
         ),
     },
     plugins: [
+      ...Option.match(settings.chatGpt, {
+        onSome: (configuration) => [chatGptSignIn(configuration, settings.callbackOrigin)],
+        onNone: () => [],
+      }),
       ...(onOperation === undefined ? [] : [nativeAuthAnalytics(onOperation)]),
       ...Option.match(settings.emulators, {
         onSome: (services) => [emulatedSocialProviders(services, redirectURI)],

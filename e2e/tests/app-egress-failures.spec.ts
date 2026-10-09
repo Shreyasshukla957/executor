@@ -4,7 +4,8 @@
  * network never presents its own failure as a status the service could have sent, a service's
  * real answer still reaches the app unchanged, and Cloud reports only failures on Executor's
  * side, with a fixed category. The failure names no host: the app knows which request it sent,
- * and nothing Executor records about it, in Sentry or in traces, names the destination.
+ * and nothing Executor records about it, in Sentry or in traces, names the destination. On Cloud,
+ * the outbound request's span records no part of the app's path.
  */
 import { expect, layer } from "@effect/vitest";
 import { Effect, Schedule, Schema } from "effect";
@@ -370,6 +371,19 @@ layer(HostedLive, { excludeTestServices: true })("App egress failures", (it) => 
         });
         expect(tracedNaming).toEqual([]);
         if (!cloud) return;
+        // On Cloud each app request reaches Executor's outbound as a request of its own. The path is
+        // the app's, so that request's span records only its route's template.
+        const served = traced.flatMap((result) =>
+          result.data
+            .map(({ span }) => span)
+            .filter((span) => span.operationName.startsWith("http.server")),
+        );
+        const outbound = served.filter((span) => span.tags["http.route"] === "/:upstream");
+        expect(outbound.length).toBeGreaterThan(0);
+        expect(new Set(outbound.map((span) => span.tags["url.path"]))).toEqual(
+          new Set(["/:upstream"]),
+        );
+        expect(served.filter((span) => span.tags["url.path"] === "/ping")).toEqual([]);
         const SentryRecord = Schema.fromJsonString(
           Schema.Struct({
             exception: SentryEvent.fields.exception,

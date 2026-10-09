@@ -1,11 +1,8 @@
 ---
 import RailLayout from "../../layouts/RailLayout.astro";
 import { tagline, introduction } from "../../content/site-copy";
-import { heroVariants, type HeroVariant } from "../../content/hero-experiment";
 import DocBody from "./doc-body.astro";
 
-interface Props { variant?: HeroVariant }
-const { variant = heroVariants[0] } = Astro.props;
 const GH = "https://github.com/UsefulSoftwareCo/executor";
 ---
 
@@ -13,7 +10,7 @@ const GH = "https://github.com/UsefulSoftwareCo/executor";
   title={`Executor — ${tagline}`}
   description={introduction}
 >
-  <DocBody gh={GH} variant={variant} />
+  <DocBody gh={GH} />
 </RailLayout>
 
 <script>

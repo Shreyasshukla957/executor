@@ -4,6 +4,7 @@ import { AlchemyContext } from "alchemy/AlchemyContext";
 import { Random } from "alchemy";
 import { Cause, Effect, Redacted, Schema } from "effect";
 import { HttpServerRequest, HttpServerResponse } from "effect/http";
+import { recordRoute } from "@executor-js/telemetry";
 import type { Fetcher } from "@cloudflare/workers-types";
 import {
   credentialFetch,
@@ -102,6 +103,8 @@ export const appCredentialOutbound = Effect.gen(function* () {
         const execution = yield* Cloudflare.WorkerExecutionContext;
         const props = Schema.decodeUnknownOption(OutboundProps)(execution.raw.props);
         if (props._tag === "None") return yield* handler;
+        // The path is the app's request to its upstream, so its span records none of it.
+        yield* recordRoute("/:upstream");
         const request = yield* HttpServerRequest.HttpServerRequest;
         const source = request.source;
         if (!(source instanceof Request)) return yield* Effect.die("App request is not a Request");

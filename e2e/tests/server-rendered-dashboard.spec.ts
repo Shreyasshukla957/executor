@@ -156,7 +156,8 @@ layer(HostedLive, { excludeTestServices: true })("Server-rendered dashboard", (i
         if (executor === undefined) throw new Error("The Executor app is not installed");
         const appPage = yield* tracedReads(
           `/org/${actors.organization.slug}/apps/${executor.id}`,
-          new RegExp(`^/api/organizations/[^/]+/apps/${executor.id}$`),
+          // The app's read records its route's template, not the app's ID.
+          /^\/api\/organizations\/:organization\/apps\/:app$/,
         );
         expect(appPage).toMatch(/>Executor</);
 

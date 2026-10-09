@@ -90,7 +90,6 @@ import { cloudEntryApi, cloudEntryDocument, resolveCloudEntry } from "./implemen
 import { browserReturnTo } from "@executor-js/hosted-server/browser/contracts";
 import { HttpServerRequest } from "effect/http";
 import { homepage, staticDocument } from "./implementation/homepage.ts";
-import { experimentHomepage } from "./implementation/hero-experiment.ts";
 import { sitePageRoutes } from "./contracts/site-paths.ts";
 import { withNotFoundDocument, notFoundDocument } from "./implementation/not-found.ts";
 import { openAiAppsChallenge } from "./implementation/openai-apps-challenge.ts";
@@ -290,6 +289,8 @@ export default Api.make(
         );
       });
     const dataSteps = (yield* cloudDataSteps(auth.agentGrants)).pipe(
+      // A step's redeploys wake profile setup once, after the job's request answers.
+      Effect.provide(schedules.layer),
       Effect.provide(executor),
       reportErrors,
       Effect.scoped,
@@ -527,7 +528,7 @@ export default Api.make(
       siteRoutes,
       siteTelemetryRoutes,
       browserTelemetry.pipe(HttpRouter.provideRequest(auth.identity)),
-      HttpRouter.add("GET", "/", homepage(auth.cookiePrefix, analytics.hero, dashboard(null))),
+      HttpRouter.add("GET", "/", homepage(auth.cookiePrefix, dashboard(null))),
       HttpRouter.add("GET", "/org/:organizationSlug", organizationRoot),
       ...dashboardPageRoutes.map((route) =>
         route === "/app-auth"
@@ -609,15 +610,7 @@ export default Api.make(
       ),
       withGitAccess(gitRoutes),
       // The public site. Nobody is signed in to v2 on the edge, so `/` is always the site's.
-      HttpRouter.add(
-        "GET",
-        "/",
-        experimentHomepage(
-          staticDocument,
-          analytics.hero,
-          Option.getOrUndefined(auth.hosts.sharedCookieDomain),
-        ).pipe(Effect.map(HttpServerResponse.setHeader("cache-control", "private, no-store"))),
-      ),
+      HttpRouter.add("GET", "/", staticDocument("/index.html")),
       siteRoutes,
       siteTelemetryRoutes,
       publishedSkillRoutes(authoring),

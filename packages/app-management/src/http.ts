@@ -13,7 +13,7 @@ export {
 } from "./implementation/framework.ts";
 /** Product-authorized app authoring, release discovery, and ordinary Git access. */
 import { Context, Effect, Layer, Schema } from "effect";
-import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
+import { HttpMiddleware, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 import {
   HttpApi,
   HttpApiBuilder,
@@ -388,19 +388,25 @@ export const registryRoutes = (() => {
   const publicRegistry = Effect.flatten(AppManagementHost).pipe(
     Effect.mapError(() => new RegistryError({ reason: "storage" })),
   );
-  return HttpApiBuilder.layer(api).pipe(
-    Layer.provide(
-      HttpApiBuilder.group(api, "registry", (h) =>
-        h
-          .handle("list", ({ query }) =>
-            Effect.flatMap(publicRegistry, (host) => host.executor.registry.list(query)),
-          )
-          .handle("snapshot", ({ query }) =>
-            Effect.flatMap(publicRegistry, (host) => host.executor.registry.snapshot(query)),
-          ),
+  // Public sites read the catalog from another origin (`executor.sh` reads `api.executor.sh`).
+  // The reads carry no credentials, so any origin may read them; a preflight gets the same answer.
+  const anyOrigin = HttpRouter.middleware(HttpMiddleware.cors({ allowedMethods: ["GET"] })).layer;
+  return Layer.mergeAll(
+    HttpApiBuilder.layer(api).pipe(
+      Layer.provide(
+        HttpApiBuilder.group(api, "registry", (h) =>
+          h
+            .handle("list", ({ query }) =>
+              Effect.flatMap(publicRegistry, (host) => host.executor.registry.list(query)),
+            )
+            .handle("snapshot", ({ query }) =>
+              Effect.flatMap(publicRegistry, (host) => host.executor.registry.snapshot(query)),
+            ),
+        ),
       ),
     ),
-  );
+    HttpRouter.add("OPTIONS", "/api/registry/*", HttpServerResponse.empty({ status: 204 })),
+  ).pipe(Layer.provide(anyOrigin));
 })();
 
 /** Resolve readable app slugs inside the authenticated owner's inventory before opening Git source. */

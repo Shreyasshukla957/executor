@@ -317,6 +317,9 @@ export const droppedAppAttributeKeys: ReadonlySet<string> = new Set([
   "executor.tool.name",
   "mcp.tool.name",
   "server.address",
+  // A request's path and route in an app's isolate are the app's.
+  "url.path",
+  "http.route",
 ]);
 
 /** The framework's own log messages. Any other log body is the app's text. */

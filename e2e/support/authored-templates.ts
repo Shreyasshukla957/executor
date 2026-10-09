@@ -2,7 +2,7 @@
  * App source written the way the app-authoring skill tells an agent to write it. The product
  * deploys and runs it through the ordinary deployment API; nothing here imports product code.
  */
-import { withApps } from "./apps-release.ts";
+import { withApps, mcpSdkVersion } from "./apps-release.ts";
 
 export type AuthoredKind = "openapi" | "mcp" | "graphql";
 
@@ -128,7 +128,7 @@ export default defineApp({ accounts: ${accountsDeclaration} }, async ({ accounts
     ...(authenticated ? [{ path: "provider.ts", content: provider(name) }] : []),
     packageFile(
       kind === "mcp"
-        ? { "@modelcontextprotocol/sdk": "1.30.0" }
+        ? { "@modelcontextprotocol/sdk": mcpSdkVersion }
         : kind === "graphql"
           ? { graphql: "16.11.0" }
           : {},
@@ -169,5 +169,5 @@ export const provider = defineProvider({
 });
 `,
   },
-  packageFile({ "@modelcontextprotocol/sdk": "1.30.0" }),
+  packageFile({ "@modelcontextprotocol/sdk": mcpSdkVersion }),
 ];

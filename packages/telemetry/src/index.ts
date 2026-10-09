@@ -34,5 +34,7 @@ export { recordWorkerMeasurements } from "./measurements.ts";
 export {
   allowlistedSpans,
   httpSpanAttributeAllowlist,
+  recordRoute,
+  routeTemplates,
   spanAttributeAllowed,
 } from "./span-attributes.ts";

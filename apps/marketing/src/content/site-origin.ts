@@ -40,5 +40,16 @@ export const appOrigin = parseSiteOrigin(
   siteOrigin,
 );
 
+/**
+ * Where the site's browser code reads the public app registry (`https://api.executor.sh` in
+ * production). `/api/*` on the site's own origin belongs to v1's edge there, so these reads cross
+ * origins; the registry's public GETs allow any origin.
+ */
+export const apiOrigin = parseSiteOrigin(
+  process.env.EXECUTOR_API_ORIGIN,
+  "EXECUTOR_API_ORIGIN",
+  siteOrigin,
+);
+
 /** An absolute URL for a path on the product's browser origin, such as `/login`. */
 export const appHref = (path: `/${string}`) => new URL(path, appOrigin).href;

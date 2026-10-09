@@ -22,17 +22,21 @@ import {
   OrganizationForbidden,
   RequireOrganization,
 } from "./organization.ts";
-import { Forbidden } from "./auth.ts";
+import { BrowserSessionOnly, Forbidden } from "./auth.ts";
 
 /** Each host supplies current membership/account checks and any execution admission policy. */
 export class ScheduledAuthority extends Context.Service<
   ScheduledAuthority,
   (target: ScheduleAuthority) => Effect.Effect<void, Error>
 >()("hosted/ScheduledAuthority") {}
-/** Hosts wake pending setup after writes; periodic polling remains the recovery path. */
-export const ScheduleWakeup = Context.Reference<Effect.Effect<void>>("hosted/ScheduleWakeup", {
-  defaultValue: () => Effect.void,
-});
+/**
+ * Wakes pending setup after a write that leaves it to do, such as a deploy or a profile change.
+ * Periodic polling remains the recovery path. There is no default: every route and background job
+ * that writes supplies its host's wake, or `Effect.void` where the next poll is the intended path.
+ */
+export class ScheduleWakeup extends Context.Service<ScheduleWakeup, Effect.Effect<void>>()(
+  "hosted/ScheduleWakeup",
+) {}
 const organization = { organization: OrganizationReference };
 const app = { ...organization, app: AppId };
 const prefix = "/api/organizations/:organization";
@@ -92,7 +96,7 @@ export const HostedSchedules = HttpApiGroup.make("schedules")
       params: { ...organization, run: ScheduledRunId },
       success: BrowserApprovalView,
       error: errors,
-    }),
+    }).annotate(BrowserSessionOnly, true),
   )
   .add(
     HttpApiEndpoint.post("answer", `${prefix}/scheduled-runs/:run/approval`, {
@@ -100,6 +104,6 @@ export const HostedSchedules = HttpApiGroup.make("schedules")
       payload: BrowserApprovalAnswer,
       success: BrowserApprovalAcknowledgement,
       error: errors,
-    }),
+    }).annotate(BrowserSessionOnly, true),
   )
   .middleware(RequireOrganization);

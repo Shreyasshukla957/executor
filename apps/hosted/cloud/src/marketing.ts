@@ -4,14 +4,11 @@ import { Effect, Option, Schema } from "effect";
 import { HttpServerRequest, HttpServerResponse } from "effect/http";
 import { requestTiming } from "@executor-js/telemetry/http";
 import { siteFiles, sitePages, matchesSitePattern } from "./contracts/site-paths.ts";
-import { experimentHomepage } from "./implementation/hero-experiment.ts";
 import { staticDocument } from "./implementation/homepage.ts";
-import { cloudHeroFlag } from "./implementation/product-analytics.ts";
 import { Api } from "./infrastructure/api-worker.ts";
 import { Marketing } from "./infrastructure/marketing-worker.ts";
-import { postHogBindings } from "./infrastructure/posthog.ts";
 import { cloudSite } from "./infrastructure/site.ts";
-import { cloudHosts, productionStage, stageName } from "./infrastructure/stage.ts";
+import { productionStage, stageName } from "./infrastructure/stage.ts";
 import { cloudObservability } from "./infrastructure/telemetry.ts";
 import { workerBuild } from "./infrastructure/worker-build.ts";
 
@@ -27,7 +24,6 @@ export default Marketing.make(
   Effect.gen(function* () {
     if (globalThis.__ALCHEMY_RUNTIME__) return { main: import.meta.url };
     const site = yield* cloudSite;
-    const hosts = yield* cloudHosts.pipe(Effect.orDie);
     return {
       main: import.meta.url,
       ...(Option.getOrUndefined(yield* stageName) === productionStage
@@ -37,10 +33,6 @@ export default Marketing.make(
       build: workerBuild("marketing"),
       ...(yield* cloudObservability),
       compatibility: { date: "2026-09-08", flags: ["nodejs_compat"] },
-      env: {
-        ...(yield* postHogBindings).env,
-        EXECUTOR_SITE_COOKIE_DOMAIN: Option.getOrElse(hosts.sharedCookieDomain, () => ""),
-      },
       // Only explicitly public paths below can read this binding. Dashboard files stay private.
       assets: {
         directory: site.outdir,
@@ -53,28 +45,16 @@ export default Marketing.make(
   }),
   Effect.gen(function* () {
     yield* Cloudflare.Workers.bindWorker(Api);
-    const evaluate = yield* cloudHeroFlag;
     return {
       fetch: Effect.gen(function* () {
         const environment = yield* Cloudflare.WorkerEnvironment;
         const api = yield* Schema.decodeUnknownEffect(Binding)(environment[Api.LogicalId]).pipe(
           Effect.orDie,
         );
-        const domain = yield* Schema.decodeUnknownEffect(Schema.String)(
-          environment.EXECUTOR_SITE_COOKIE_DOMAIN,
-        ).pipe(Effect.orDie);
         const request = yield* HttpServerRequest.HttpServerRequest;
         const path = new URL(request.originalUrl).pathname;
         const read = request.method === "GET" || request.method === "HEAD";
-        if (read && path === "/")
-          return yield* experimentHomepage(
-            staticDocument,
-            evaluate,
-            domain === "" ? undefined : domain,
-          ).pipe(
-            Effect.map(HttpServerResponse.setHeader("cache-control", "private, no-store")),
-            requestTiming,
-          );
+        if (read && path === "/") return yield* staticDocument("/index.html").pipe(requestTiming);
         if (
           read &&
           [...sitePages, ...siteFiles].some((pattern) => matchesSitePattern(pattern, path))
