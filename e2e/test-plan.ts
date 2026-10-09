@@ -326,6 +326,39 @@ export const scenarios = plan({
       local: na("Hosted authorization policy"),
     },
   },
+  hostedToolRunnerApprovals: {
+    fixtures: "actors",
+    file: "tool-runner-approvals.spec.ts",
+    title:
+      "Hosted dashboard runs of approval-gated tools show the saved call and run it only after the person approves",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("Local covers the same review in its tool runner scenario."),
+    },
+  },
+  hostedToolRunnerApprovalOrigins: {
+    fixtures: "actors",
+    file: "tool-runner-approvals.spec.ts",
+    title:
+      "Hosted dashboard approval routes refuse MCP and scheduled approvals, which still complete in their own flow",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("Local covers approvals from the SDK in its tool runner scenario."),
+    },
+  },
+  hostedToolRunnerApprovalMembers: {
+    fixtures: "actors",
+    file: "tool-runner-approvals.spec.ts",
+    title:
+      "Hosted dashboard approvals without a profile are read and answered only by the member who started the run",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("Local does not have organization memberships."),
+    },
+  },
   activeDeploymentResume: {
     fixtures: "actors",
     file: "active-deployment-tools.spec.ts",
@@ -1229,6 +1262,26 @@ export const scenarios = plan({
       local: scheduled,
       "self-host": na("Hosted tool runs are covered by its organization scenarios."),
       cloud: na("Hosted tool runs are covered by its organization scenarios."),
+    },
+  },
+  localToolRunnerForgedApproval: {
+    file: "local-tool-runner.spec.ts",
+    title:
+      "A tool that writes and then reports it needs approval is declined without the runner claiming it did not run",
+    targets: {
+      local: scheduled,
+      "self-host": na("The runner's completion copy is shared; local exercises it."),
+      cloud: na("The runner's completion copy is shared; local exercises it."),
+    },
+  },
+  localToolRunnerRefusal: {
+    file: "local-tool-runner.spec.ts",
+    title:
+      "A request the Tools tab may not review shows why and how to start a new run instead of a retry",
+    targets: {
+      local: scheduled,
+      "self-host": na("Hosted refusals are covered by its dashboard approval member scenario."),
+      cloud: na("Hosted refusals are covered by its dashboard approval member scenario."),
     },
   },
   appBrowser: {
