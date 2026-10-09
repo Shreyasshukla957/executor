@@ -25,6 +25,19 @@ const jobs = [
   "cloud-rollback",
   "cloud-oauth-proxy-preview",
 ];
+/** The outputs that start the E2E runners: each sharded job's parts and the Cloud runners. */
+const runnerOutputs = ["local-shards", "self-host-shards", "cloud-runners"];
+const cloudJobs = jobs.filter((job) => job.startsWith("cloud"));
+
+/** A sharded job's matrix entries: each part's name, such as 2/3, and its pattern. */
+const shards = (outputs: Readonly<Record<string, string>>, job: string) =>
+  JSON.parse(outputs[`${job}-shards`]!) as ReadonlyArray<{ shard: string; pattern: string }>;
+
+/** The Cloud runners' matrix entries: a name and every Cloud job's pattern, empty when not its own. */
+const cloudRunners = (outputs: Readonly<Record<string, string>>) =>
+  outputs["cloud-runners"] === ""
+    ? []
+    : (JSON.parse(outputs["cloud-runners"]!) as ReadonlyArray<Readonly<Record<string, string>>>);
 
 const block = (...lines: ReadonlyArray<string>) =>
   ["Description.", "", "```e2e", ...lines, "```", ""].join("\n");
@@ -151,10 +164,14 @@ const fixture = (files: Readonly<Record<string, string>> = {}) =>
     return root;
   });
 
-/** A saved run's report: each listed scenario on a target, with how it ended. */
+/**
+ * A saved run's report: each scenario on a target, with how it ended. `files` keeps only some spec
+ * files, as one part of a sharded job saves.
+ */
 interface SavedRun {
   readonly target: "local" | "self-host" | "cloud";
   readonly status?: (title: string) => string;
+  readonly files?: (file: string) => boolean;
 }
 
 /**
@@ -170,7 +187,10 @@ const verify = (suite: string, saved: ReadonlyArray<SavedRun>) =>
     for (const [index, run] of saved.entries()) {
       const files = new Map<string, Array<{ title: string; status: string }>>();
       for (const scenario of Object.values(scenarios))
-        if (scenario.targets[run.target].status === "scheduled")
+        if (
+          scenario.targets[run.target].status === "scheduled" &&
+          (run.files?.(scenario.file) ?? true)
+        )
           files.set(scenario.file, [
             ...(files.get(scenario.file) ?? []),
             { title: scenario.title, status: run.status?.(scenario.title) ?? "passed" },
@@ -207,6 +227,72 @@ const verify = (suite: string, saved: ReadonlyArray<SavedRun>) =>
     return { exitCode, log };
   }).pipe(Effect.scoped);
 
+/**
+ * A job of .github/workflows/checks.yml, read from its text: its `if`, its `needs` and its first
+ * step's `run` script. The workflow is plain block YAML, so a job is the lines indented under it.
+ */
+const workflowJob = (name: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const lines = (yield* fs.readFileString(".github/workflows/checks.yml")).split("\n");
+    const start = lines.indexOf(`  ${name}:`);
+    expect(start, name).toBeGreaterThan(-1);
+    const end = lines.findIndex((line, index) => index > start && /^ {0,2}\S/.test(line));
+    const body = lines.slice(start + 1, end === -1 ? undefined : end);
+    const field = (key: string) =>
+      body.find((line) => line.startsWith(`    ${key}: `))?.slice(`    ${key}: `.length);
+    const run = body.findIndex((line) => line === "        run: |");
+    const script = body
+      .slice(run + 1)
+      .filter((line, index, rest) => rest.slice(0, index + 1).every((l) => /^ {10}|^$/.test(l)))
+      .map((line) => line.slice(10))
+      .join("\n");
+    return { if: field("if"), needs: field("needs"), script: run === -1 ? undefined : script };
+  });
+
+/** The select outputs that start each E2E job, as its `if` in checks.yml reads them. */
+const startedBy = {
+  "e2e-local": ["local-shards"],
+  "e2e-self-host": ["self-host-shards"],
+  "e2e-self-host-scale": ["self-host-inventory", "self-host-catalog"],
+  "e2e-cloud": ["cloud-runners"],
+} as const;
+type E2eJob = keyof typeof startedBy;
+const e2eJobs = Object.keys(startedBy) as ReadonlyArray<E2eJob>;
+
+/** Whether select's outputs start an E2E job. */
+const chosen = (outputs: Readonly<Record<string, string>>, job: E2eJob) =>
+  startedBy[job].some((name) => (outputs[name] ?? "") !== "");
+
+/**
+ * The `e2e` check's script, run as its step runs it, with `needs` as GitHub gives it: each job's
+ * result, and select's outputs. `results` says how each E2E job ended.
+ */
+const gate = (
+  select: { readonly result: string; readonly outputs: Readonly<Record<string, string>> },
+  results: Readonly<Record<E2eJob, string>>,
+) =>
+  Effect.gen(function* () {
+    const processes = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const { script } = yield* workflowJob("e2e");
+    expect(script).toBeDefined();
+    const needs = {
+      select,
+      ...Object.fromEntries(e2eJobs.map((job) => [job, { result: results[job], outputs: {} }])),
+    };
+    const child = yield* processes.spawn(
+      ChildProcess.make("bash", ["-e", "-c", script!], {
+        env: { NEEDS: JSON.stringify(needs) },
+        extendEnv: true,
+      }),
+    );
+    const [log, exitCode] = yield* Effect.all(
+      [child.all.pipe(Stream.decodeText(), Stream.mkString), child.exitCode],
+      { concurrency: "unbounded" },
+    );
+    return { exitCode, log };
+  }).pipe(Effect.scoped);
+
 /** This suite's own config, rewritten only in a fixture tree. */
 const ownConfig = "e2e/ci-selection.config.ts";
 
@@ -215,10 +301,91 @@ layer(NodeServices.layer)("CI E2E selection", (it) => {
     Effect.gen(function* () {
       const run = yield* select({});
       expect(run.exitCode).toBe(0);
-      expect(Object.keys(run.outputs).sort()).toEqual([...jobs].sort());
-      for (const job of jobs) expect(run.outputs[job], job).not.toBe("");
+      expect(Object.keys(run.outputs).sort()).toEqual([...jobs, ...runnerOutputs].sort());
+      for (const job of [...jobs, ...runnerOutputs]) expect(run.outputs[job], job).not.toBe("");
       expect(run.summary).toContain("Full suite: this run is not for a pull request.");
     }),
+  );
+
+  it.effect(
+    "a full run splits local and self-host by spec file and spreads Cloud over three runners",
+    () =>
+      Effect.gen(function* () {
+        const [main, all, named] = yield* Effect.all(
+          [
+            select({}),
+            select({ body: block("all: changes the lockfile") }),
+            select({
+              body: block("groups.spec.ts", "cloud-onboarding.spec.ts", "auth-cleanup.spec.ts"),
+            }),
+          ],
+          { concurrency: "unbounded" },
+        );
+        for (const run of [main, all]) {
+          expect(run.exitCode, run.log).toBe(0);
+          for (const [job, target, names] of [
+            ["local", "local", ["1/2", "2/2"]],
+            ["self-host", "self-host", ["1/3", "2/3", "3/3"]],
+          ] as const) {
+            const parts = shards(run.outputs, job);
+            expect(parts.map(({ shard }) => shard)).toEqual(names);
+            // The parts run every scenario the job's full pattern runs, each once, and keep each
+            // spec file's scenarios together.
+            const full = new RegExp(run.outputs[job]!);
+            const partOf = new Map<string, number>();
+            let count = 0;
+            for (const scenario of Object.values(scenarios)) {
+              if (scenario.targets[target].status !== "scheduled") continue;
+              const matched = parts.flatMap(({ pattern }, index) =>
+                new RegExp(pattern).test(scenario.title) ? [index] : [],
+              );
+              expect(matched.length, scenario.title).toBe(full.test(scenario.title) ? 1 : 0);
+              if (matched.length === 0) continue;
+              count++;
+              expect(partOf.get(scenario.file) ?? matched[0], scenario.file).toBe(matched[0]);
+              partOf.set(scenario.file, matched[0]!);
+            }
+            expect(run.summary).toContain(
+              `| ${job} | ${count} | ${names.length}, split by spec file |`,
+            );
+          }
+          const runners = cloudRunners(run.outputs);
+          expect(runners.map(({ name }) => name)).toEqual([
+            "cloud, cloud-isolate",
+            "cloud-workers, cloud-locks, cloud-rollback",
+            "cloud-product, cloud-domains, cloud-rate-limit, cloud-oauth-proxy-preview",
+          ]);
+          // Each Cloud job's pattern is on exactly one runner, unchanged, and empty on the others.
+          for (const job of cloudJobs) {
+            const values = runners.map((runner) => runner[job]);
+            expect(
+              values.filter((value) => value === run.outputs[job]),
+              job,
+            ).toHaveLength(1);
+            expect(
+              values.filter((value) => value === ""),
+              job,
+            ).toHaveLength(runners.length - 1);
+          }
+        }
+        expect(main.summary).toMatch(
+          /\| cloud-locks \| \d+ \| e2e-cloud \(cloud-workers, cloud-locks, cloud-rollback\) \|/,
+        );
+
+        // A selection runs each job on one runner, and starts only the Cloud runners it needs.
+        expect(named.exitCode, named.log).toBe(0);
+        expect(shards(named.outputs, "self-host")).toEqual([
+          { shard: "1/1", pattern: named.outputs["self-host"] },
+        ]);
+        const runners = cloudRunners(named.outputs);
+        expect(runners.map(({ name }) => name)).toEqual(["cloud", "cloud-locks"]);
+        expect(runners[0]!.cloud).toBe(named.outputs.cloud);
+        expect(runners[1]!["cloud-locks"]).toBe(named.outputs["cloud-locks"]);
+        for (const job of cloudJobs.filter((job) => job !== "cloud" && job !== "cloud-locks")) {
+          expect(named.outputs[job], job).toBe("");
+          for (const runner of runners) expect(runner[job], job).toBe("");
+        }
+      }),
   );
 
   it.effect("a named spec file selects its scenarios, with or without the e2e/tests/ prefix", () =>
@@ -233,6 +400,10 @@ layer(NodeServices.layer)("CI E2E selection", (it) => {
       expect(bare.exitCode).toBe(0);
       expect(bare.outputs["self-host"]).toMatch(/^\^\(\?:/);
       expect(bare.outputs.cloud).toBe("");
+      expect(shards(bare.outputs, "self-host")).toEqual([
+        { shard: "1/1", pattern: bare.outputs["self-host"] },
+      ]);
+      expect(bare.outputs["cloud-runners"]).toBe("");
       expect(prefixed.outputs).toEqual(bare.outputs);
     }),
   );
@@ -666,9 +837,9 @@ layer(NodeServices.layer)("CI E2E selection", (it) => {
         { concurrency: 4 },
       );
       expect(none.exitCode).toBe(0);
-      for (const job of jobs) expect(none.outputs[job], job).toBe("");
+      for (const job of [...jobs, ...runnerOutputs]) expect(none.outputs[job], job).toBe("");
       expect(all.exitCode).toBe(0);
-      for (const job of jobs) expect(all.outputs[job], job).not.toBe("");
+      for (const job of [...jobs, ...runnerOutputs]) expect(all.outputs[job], job).not.toBe("");
       expect(all.summary).toContain("Full suite: changes the lockfile");
       expect(bareAll.exitCode).toBe(1);
       expect(skip.exitCode).toBe(0);
@@ -784,6 +955,32 @@ layer(NodeServices.layer)("CI E2E selection", (it) => {
     }),
   );
 
+  it.effect("a sharded job's parts count together, and a missing part fails the full run", () =>
+    Effect.gen(function* () {
+      // Three parts by spec file, as e2e-self-host's runners save them.
+      const part = (index: number) => (file: string) =>
+        [...file].reduce((sum, character) => sum + character.charCodeAt(0), 0) % 3 === index;
+      const parts = [0, 1, 2].map((index) => ({
+        target: "self-host" as const,
+        files: part(index),
+      }));
+      const [complete, missing] = yield* Effect.all(
+        [
+          verify("ci", [{ target: "local" }, ...parts, { target: "cloud" }]),
+          verify("ci", [{ target: "local" }, ...parts.slice(0, 2), { target: "cloud" }]),
+        ],
+        { concurrency: "unbounded" },
+      );
+      expect(complete.exitCode, complete.log).toBe(0);
+      expect(missing.exitCode, missing.log).toBe(1);
+      expect(missing.log).toMatch(
+        /- the self-host job on self-host: \d+ of \d+ scenarios did not run/,
+      );
+      expect(missing.log).not.toContain("- the local job");
+      expect(missing.log).not.toMatch(/- the cloud[\w-]* job/);
+    }),
+  );
+
   it.effect("a job, step or deployed run that saved no result fails the full run", () =>
     Effect.gen(function* () {
       const rateLimit =
@@ -857,5 +1054,80 @@ layer(NodeServices.layer)("CI E2E selection", (it) => {
       expect(exitCode).toBe(1);
       expect(log).toContain("is not in a run directory named for its target");
     }).pipe(Effect.scoped),
+  );
+
+  it.effect("the e2e check runs after a cancellation and skips only for a skipped layer", () =>
+    Effect.gen(function* () {
+      // A check its condition skips counts as passed, so a condition that a cancellation can
+      // make false, such as !cancelled(), would pass a cancelled run.
+      const check = yield* workflowJob("e2e");
+      expect(check.if).toBe("${{ always() && needs.select.outputs.skip != 'true' }}");
+      expect(check.needs).toBe(`[select, ${e2eJobs.join(", ")}]`);
+      for (const job of e2eJobs)
+        expect((yield* workflowJob(job)).if, job).toBe(
+          startedBy[job].map((name) => `needs.select.outputs.${name} != ''`).join(" || "),
+        );
+    }),
+  );
+
+  it.effect(
+    "the e2e check passes only when select succeeded, each chosen job passed and the rest skipped",
+    () =>
+      Effect.gen(function* () {
+        const [main, named] = yield* Effect.all(
+          [select({}), select({ body: block("groups.spec.ts") })],
+          { concurrency: "unbounded" },
+        );
+        expect(named.exitCode, named.log).toBe(0);
+        const skippedJobs = e2eJobs.filter((job) => !chosen(named.outputs, job));
+        const namedJobs = e2eJobs.filter((job) => chosen(named.outputs, job));
+        expect(skippedJobs.length, named.log).toBeGreaterThan(0);
+        expect(namedJobs.length, named.log).toBeGreaterThan(0);
+        const ended = (
+          outputs: Readonly<Record<string, string>>,
+          change: Partial<Record<E2eJob, string>> = {},
+        ) =>
+          ({
+            ...Object.fromEntries(
+              e2eJobs.map((job) => [job, chosen(outputs, job) ? "success" : "skipped"]),
+            ),
+            ...change,
+          }) as Record<E2eJob, string>;
+        const succeeded = (outputs: Readonly<Record<string, string>>) => ({
+          result: "success",
+          outputs,
+        });
+
+        for (const run of [main, named]) {
+          const passed = yield* gate(succeeded(run.outputs), ended(run.outputs));
+          expect(passed.exitCode, passed.log).toBe(0);
+        }
+
+        const [job] = namedJobs;
+        const failing = yield* Effect.all(
+          [
+            // A chosen job that a failed or cancelled select left unstarted is skipped.
+            gate(succeeded(named.outputs), ended(named.outputs, { [job!]: "skipped" })),
+            gate(succeeded(named.outputs), ended(named.outputs, { [job!]: "cancelled" })),
+            gate(succeeded(named.outputs), ended(named.outputs, { [job!]: "failure" })),
+            gate(succeeded(main.outputs), ended(main.outputs, { "e2e-cloud": "cancelled" })),
+            // A cancelled or failed select gives no outputs, so every E2E job is skipped.
+            gate({ result: "cancelled", outputs: {} }, ended({})),
+            gate({ result: "failure", outputs: {} }, ended({})),
+          ],
+          { concurrency: "unbounded" },
+        );
+        for (const run of failing) expect(run.exitCode, run.log).toBe(1);
+        expect(failing[0]!.log).toContain(`::error::${job}: selected, but skipped`);
+        expect(failing[1]!.log).toContain(`::error::${job}: selected, but cancelled`);
+        expect(failing[2]!.log).toContain(`::error::${job}: selected, but failure`);
+        expect(failing[3]!.log).toContain("::error::e2e-cloud: selected, but cancelled");
+        expect(failing[4]!.log).toContain(
+          "::error::select: cancelled, so the E2E jobs did not run its selection",
+        );
+        expect(failing[5]!.log).toContain(
+          "::error::select: failure, so the E2E jobs did not run its selection",
+        );
+      }),
   );
 });

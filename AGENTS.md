@@ -224,7 +224,7 @@ the same SDK and CLI on demand.
 Every push to `main` deploys production directly, without a deployed-test gate.
 The deployed suite remains available for manual dispatch with Neon or PlanetScale.
 
-Blacksmith Linux runners run five check jobs. Local, self-host and Cloud E2E jobs use
+Blacksmith Linux runners run every check job. Local, self-host and Cloud E2E jobs use
 `blacksmith-16vcpu-ubuntu-2404`. The load job also uses 16 vCPUs: on 4 vCPUs the
 product server, PGlite and the test driver contend. Its inventory case has a 120-second
 test limit because its body takes 40-48s on CI. Static checks use 4 vCPUs.
@@ -246,7 +246,10 @@ scenarios on Linux instead of moving them to a Mac.
   Its job patterns hold the exclusions and splits below.
 - `e2e-local` and `e2e-self-host` run `bun run e2e:prepare`, then `e2e:local`
   and `e2e:self-host` under `xvfb-run`. The self-host run excludes the Claude
-  Code MCP scenario, which needs a model API key that CI does not hold.
+  Code MCP scenario, which needs a model API key that CI does not hold. A full run
+  splits them by spec file over runners (two for local, three for self-host; `shards` in
+  `e2e/ci-selection.ts`), each with the usual number of workers, so each part finishes in
+  about four minutes instead of six and ten. A selection runs on one runner.
 - `e2e-self-host-scale` runs the 1,000-account workload and then the 7,000-tool MCP
   catalog scenario and the slow and stalled tool listing scenarios on its own runner,
   in parallel with the functional jobs. This preserves the four concurrent writers,
@@ -265,8 +268,13 @@ scenarios on Linux instead of moving them to a Mac.
   Every scenario's request comes from one address, so these local Clouds turn Better Auth's
   per-address limit off, as deployed test stages do; the scenario that proves the limit gets
   its own local Cloud with it on (`e2e:cloud --auth-rate-limit`).
-  The job builds the apps package and Motel once before its runs; runs only serve that Motel
-  bundle, because every target in a run shares it.
+  Each of these local Clouds is a Cloud job in `e2e/ci-selection.ts`, and its `runner`
+  there puts it on one of three `e2e-cloud` runners that run at once, about four minutes each
+  on a full run. Each runner builds the apps package and Motel once before its runs; runs only
+  serve that Motel bundle, because every target in a run shares it.
+- `e2e` passes when `select` succeeded, every E2E job it chose passed and every other one was
+  skipped; it runs even after a cancellation, which fails it. The matrix runners' check
+  names change with the selection, so this is the one E2E check to require.
 
 Cloud scenarios verify
 API/MCP outcomes, workflow correlation, browser failures, app traces and analytics.

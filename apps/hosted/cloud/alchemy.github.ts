@@ -72,17 +72,13 @@ const productionVariables = [
 
 /**
  * Required status checks on `main`. These are the contexts reported by `ci.yml` calling
- * `checks.yml` (PR #246). `CI_RULESET_ENFORCEMENT` defaults to `active`, so an apply that
+ * `checks.yml` (PR #246). The E2E jobs run as matrix runners whose names change with the
+ * selection, so `checks / e2e` stands for all of them. `CI_RULESET_ENFORCEMENT` defaults to `active`, so an apply that
  * cannot create the ruleset fails loudly rather than leaving `main` silently unprotected.
  * Rulesets need GitHub Pro on a private repository, which is the blocker today; `.env.ci.op`
  * sets `disabled` until the plan allows them. `evaluate` is log only and blocks nothing.
  */
-const requiredStatusChecks = [
-  "checks / check",
-  "checks / e2e-local",
-  "checks / e2e-self-host",
-  "checks / e2e-cloud",
-] as const;
+const requiredStatusChecks = ["checks / check", "checks / e2e"] as const;
 
 export default Alchemy.Stack(
   "executor-next-ci",
