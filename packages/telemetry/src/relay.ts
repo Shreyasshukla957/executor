@@ -17,8 +17,8 @@ export const makeTelemetryForwarder = Effect.gen(function* () {
   const fibers = yield* FiberSet.make();
   const pending = yield* Semaphore.make(16);
   const sender = yield* Semaphore.make(1);
-  const failed = (reason: string) =>
-    recordExportFailure("app").pipe(Effect.annotateLogs({ "executor.telemetry.failure": reason }));
+  const failed = (reason: "capacity" | "timeout" | "relay" | "shutdown") =>
+    recordExportFailure("app", reason);
   yield* Effect.addFinalizer(() =>
     FiberSet.awaitEmpty(fibers).pipe(
       Effect.timeoutOption("3 seconds"),
@@ -30,7 +30,10 @@ export const makeTelemetryForwarder = Effect.gen(function* () {
       fibers,
       sender
         .withPermits(1)(
-          forwardTelemetry(batch, traceId, source).pipe(Effect.catch(() => failed("relay"))),
+          forwardTelemetry(batch, traceId, source).pipe(
+            Effect.catchTag("TimeoutError", () => failed("timeout")),
+            Effect.catch(() => failed("relay")),
+          ),
         )
         .pipe(
           pending.withPermitsIfAvailable(1),
