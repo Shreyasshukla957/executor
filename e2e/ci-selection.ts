@@ -499,6 +499,7 @@ const suiteConfigs: Record<string, () => Promise<unknown>> = {
   "local-bootstrap.config.ts": () => import("./local-bootstrap.config.ts"),
   "pglite.config.ts": () => import("./pglite.config.ts"),
   "prepare-cache.config.ts": () => import("./prepare-cache.config.ts"),
+  "release-archives.config.ts": () => import("./release-archives.config.ts"),
   "typecheck-runner.config.ts": () => import("./typecheck-runner.config.ts"),
   "welcome-email.config.ts": () => import("./welcome-email.config.ts"),
 };

@@ -1,5 +1,5 @@
 import { _electron, type ElectronApplication } from "playwright";
-import { Config, Effect, FileSystem, Option, Path, Schedule, Schema } from "effect";
+import { Config, Console, Effect, Exit, FileSystem, Option, Path, Schedule, Schema } from "effect";
 import { driver } from "./platform.ts";
 
 /** Request a browser link across Electron's real session boundary, without an API key. */
@@ -47,7 +47,7 @@ export const launchDesktop = (options: {
         args: [desktop, "--disable-gpu"],
       };
     }
-    return yield* Effect.acquireRelease(
+    const electron = yield* Effect.acquireRelease(
       driver("launch desktop", () =>
         _electron.launch({
           executablePath: launch.executablePath,
@@ -58,7 +58,60 @@ export const launchDesktop = (options: {
       ),
       (electron) => driver("close desktop", () => electron.close()).pipe(Effect.orDie),
     );
+    // A failed or timed-out scenario prints the desktop's own record of its backend starts, exits
+    // and restarts before the window closes, which shows the step it stopped at.
+    const data = options.env.EXECUTOR_DESKTOP_DATA_DIR;
+    if (data !== undefined)
+      yield* Effect.addFinalizer((exit) =>
+        Exit.isSuccess(exit)
+          ? Effect.void
+          : desktopEvents(data).pipe(
+              Effect.flatMap((events) => Console.error(lifecycleLog(events))),
+              Effect.ignore,
+            ),
+      );
+    return electron;
   });
+
+/** Messages the desktop writes itself as it starts, stops and restarts its backend. */
+const lifecycleMessages = new Set([
+  "Starting Executor desktop",
+  "Desktop backend started",
+  "Desktop backend could not start",
+  "Desktop backend ready",
+  "Desktop backend exited",
+  "Desktop backend stopped",
+  "Restarting the desktop backend",
+  "Executor desktop ready",
+  "Showing desktop recovery",
+  "Resetting Executor data",
+  "Moved Executor data to a backup",
+  "Executor data reset failed",
+  "Desktop stopped",
+]);
+
+/**
+ * The lifecycle events as the desktop's structured fields only. A backend's stderr and the other
+ * events' messages, such as the renderer's console, may hold anything a process printed, so they
+ * are counted rather than shown.
+ */
+const lifecycleLog = (events: ReadonlyArray<DesktopEvent>) => {
+  const lifecycle = events.filter((event) => lifecycleMessages.has(event.message));
+  const lines = lifecycle.map(({ annotations: { stderr, ...annotations }, ...event }) =>
+    JSON.stringify({
+      ...event,
+      annotations: {
+        ...annotations,
+        ...(stderr === undefined ? {} : { stderrCharacters: stderr.length }),
+      },
+    }),
+  );
+  return [
+    "Desktop lifecycle at the end of the scenario:",
+    ...lines,
+    `Other desktop log events not shown: ${events.length - lifecycle.length}.`,
+  ].join("\n");
+};
 
 // A failed assertion prints the whole event, so keep what tells runs apart: when it was logged,
 // which backend run it describes and how that run ended.
